@@ -127,3 +127,24 @@ CMake 配置阶段应检查：
 - 能检查 libcurl protocol list 中包含 `ftp` 和 `sftp`。
 
 通过后再进入 FilePanel 和 TransferManager 实现。
+
+## 当前本机验证记录
+
+已创建最小 CMake 验证工程：
+
+- Qt Kit：`D:/QT/6.8.0/mingw_64`
+- MinGW：`D:/QT/Tools/mingw1310_64`
+- libcurl：`third_party/curl/curl-8.20.0_5-win64-mingw`
+- CMake preset：`windows-mingw-debug`
+
+验证命令：
+
+```powershell
+cmake --preset windows-mingw-debug
+cmake --build --preset windows-mingw-debug
+$env:PATH='D:\QT\6.8.0\mingw_64\bin;D:\QT\Tools\mingw1310_64\bin;' + $env:PATH
+.\build\windows-mingw-debug\XFolder.exe --check-curl
+.\build\windows-mingw-debug\XFolder.exe --smoke-test
+```
+
+`--check-curl` 已确认当前 libcurl 支持 `ftp` 和 `sftp`。

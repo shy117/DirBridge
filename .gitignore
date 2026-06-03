@@ -1,0 +1,21 @@
+# Build outputs
+build/
+out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# Local third-party binary dependencies
+third_party/
+
+# Qt Creator / IDE files
+*.user
+*.user.*
+.vscode/
+
+# Windows runtime noise
+*.log
+*.tmp
+Thumbs.db
+Desktop.ini
