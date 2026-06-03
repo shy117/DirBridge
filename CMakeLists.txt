@@ -35,6 +35,8 @@ add_executable(XFolder
     src/app/main.cpp
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
+    src/ui/FilePanel.cpp
+    src/ui/FilePanel.h
     src/core/CurlProtocolCheck.cpp
     src/core/CurlProtocolCheck.h
 )
