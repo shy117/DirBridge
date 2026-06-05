@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(XFolder
+project(DirBridge
     VERSION 0.1.0
     LANGUAGES CXX
 )
@@ -18,7 +18,7 @@ include(cmake/ThirdParty.cmake)
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
 
-add_library(XFolderCore STATIC
+add_library(DirBridgeCore STATIC
     src/config/SiteProfile.cpp
     src/config/SiteProfile.h
     src/config/SiteStore.cpp
@@ -31,25 +31,25 @@ add_library(XFolderCore STATIC
     src/logging/AppLogger.h
 )
 
-set_target_properties(XFolderCore PROPERTIES
+set_target_properties(DirBridgeCore PROPERTIES
     AUTOMOC OFF
     AUTOUIC OFF
     AUTORCC OFF
 )
 
-target_link_libraries(XFolderCore
+target_link_libraries(DirBridgeCore
     PUBLIC
         CURL::libcurl
         nlohmann_json::nlohmann_json
         spdlog::spdlog_header_only
 )
 
-target_include_directories(XFolderCore
+target_include_directories(DirBridgeCore
     PUBLIC
         src
 )
 
-add_executable(XFolder
+add_executable(DirBridge
     src/app/main.cpp
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
@@ -57,30 +57,30 @@ add_executable(XFolder
     src/ui/FilePanel.h
 )
 
-target_link_libraries(XFolder
+target_link_libraries(DirBridge
     PRIVATE
         Qt${QT_VERSION_MAJOR}::Widgets
-        XFolderCore
+        DirBridgeCore
 )
 
-target_compile_definitions(XFolder
+target_compile_definitions(DirBridge
     PRIVATE
         QT_NO_KEYWORDS
 )
 
-target_include_directories(XFolder
+target_include_directories(DirBridge
     PRIVATE
         src
 )
 
-if(WIN32 AND EXISTS "${XFOLDER_CURL_ROOT}/bin/libcurl-x64.dll")
-    add_custom_command(TARGET XFolder POST_BUILD
+if(WIN32 AND EXISTS "${DIRBRIDGE_CURL_ROOT}/bin/libcurl-x64.dll")
+    add_custom_command(TARGET DirBridge POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${XFOLDER_CURL_ROOT}/bin/libcurl-x64.dll"
-            "$<TARGET_FILE_DIR:XFolder>/libcurl-x64.dll"
+            "${DIRBRIDGE_CURL_ROOT}/bin/libcurl-x64.dll"
+            "$<TARGET_FILE_DIR:DirBridge>/libcurl-x64.dll"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${XFOLDER_CURL_ROOT}/bin/curl-ca-bundle.crt"
-            "$<TARGET_FILE_DIR:XFolder>/curl-ca-bundle.crt"
+            "${DIRBRIDGE_CURL_ROOT}/bin/curl-ca-bundle.crt"
+            "$<TARGET_FILE_DIR:DirBridge>/curl-ca-bundle.crt"
         COMMENT "Copying libcurl runtime files"
     )
 endif()

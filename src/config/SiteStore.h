@@ -1,5 +1,5 @@
-#ifndef XFOLDER_CONFIG_SITESTORE_H
-#define XFOLDER_CONFIG_SITESTORE_H
+#ifndef DIRBRIDGE_CONFIG_SITESTORE_H
+#define DIRBRIDGE_CONFIG_SITESTORE_H
 
 #include <filesystem>
 #include <string>
@@ -21,4 +21,4 @@ private:
     std::filesystem::path m_path;
 };
 
-#endif // XFOLDER_CONFIG_SITESTORE_H
+#endif // DIRBRIDGE_CONFIG_SITESTORE_H

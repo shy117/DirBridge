@@ -23,7 +23,7 @@
 MainWindow::MainWindow(const DependencyCheckResult &dependencyCheck, QWidget *parent)
     : QMainWindow(parent)
 {
-    setWindowTitle("XFolder - Remote Folder Manager");
+    setWindowTitle("DirBridge - Remote Folder Manager");
     resize(1380, 820);
 
     setupMenuBar();
@@ -62,7 +62,7 @@ void MainWindow::setupMenuBar()
 
     menuBar()->addMenu("工具(&T)")->addAction("选项");
     menuBar()->addMenu("窗口(&W)")->addAction("关闭当前标签");
-    menuBar()->addMenu("帮助(&H)")->addAction("关于 XFolder");
+    menuBar()->addMenu("帮助(&H)")->addAction("关于 DirBridge");
 }
 
 void MainWindow::setupToolBar()

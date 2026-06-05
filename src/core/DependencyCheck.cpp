@@ -22,14 +22,14 @@ DependencyCheckResult checkDependencies(const std::string &configDirectory, cons
     try
     {
         nlohmann::json settings = {
-            {"app", "XFolder"},
+            {"app", "DirBridge"},
             {"configVersion", 1},
             {"features", {"ftp", "sftp", "logging"}}
         };
 
         result.serializedSettings = settings.dump();
         const nlohmann::json parsed = nlohmann::json::parse(result.serializedSettings);
-        result.jsonReady = parsed.value("app", "") == "XFolder";
+        result.jsonReady = parsed.value("app", "") == "DirBridge";
         if (!result.jsonReady)
         {
             result.errors.push_back("nlohmann/json round trip failed");
@@ -43,7 +43,7 @@ DependencyCheckResult checkDependencies(const std::string &configDirectory, cons
     try
     {
         auto logger = AppLogger::initialize(logDirectory);
-        logger->info("XFolder dependency check: curl={}, json_ready={}", result.curl.version, result.jsonReady);
+        logger->info("DirBridge dependency check: curl={}, json_ready={}", result.curl.version, result.jsonReady);
         logger->flush();
         result.logPath = AppLogger::logFilePath().string();
         result.loggingReady = std::filesystem::exists(AppLogger::logFilePath());

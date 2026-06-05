@@ -1,5 +1,5 @@
-#ifndef XFOLDER_UI_FILEPANEL_H
-#define XFOLDER_UI_FILEPANEL_H
+#ifndef DIRBRIDGE_UI_FILEPANEL_H
+#define DIRBRIDGE_UI_FILEPANEL_H
 
 #include <QFileIconProvider>
 #include <QWidget>
@@ -56,4 +56,4 @@ private:
     QTableWidget *m_table = nullptr;
 };
 
-#endif // XFOLDER_UI_FILEPANEL_H
+#endif // DIRBRIDGE_UI_FILEPANEL_H

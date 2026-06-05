@@ -1,5 +1,5 @@
-#ifndef XFOLDER_CORE_CURLPROTOCOLCHECK_H
-#define XFOLDER_CORE_CURLPROTOCOLCHECK_H
+#ifndef DIRBRIDGE_CORE_CURLPROTOCOLCHECK_H
+#define DIRBRIDGE_CORE_CURLPROTOCOLCHECK_H
 
 #include <string>
 #include <vector>
@@ -15,4 +15,4 @@ struct CurlProtocolCheckResult
 CurlProtocolCheckResult checkCurlProtocols();
 std::string formatCurlProtocolCheck(const CurlProtocolCheckResult &result);
 
-#endif // XFOLDER_CORE_CURLPROTOCOLCHECK_H
+#endif // DIRBRIDGE_CORE_CURLPROTOCOLCHECK_H

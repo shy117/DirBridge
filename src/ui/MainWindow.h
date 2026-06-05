@@ -1,5 +1,5 @@
-#ifndef XFOLDER_UI_MAINWINDOW_H
-#define XFOLDER_UI_MAINWINDOW_H
+#ifndef DIRBRIDGE_UI_MAINWINDOW_H
+#define DIRBRIDGE_UI_MAINWINDOW_H
 
 #include <QMainWindow>
 
@@ -24,4 +24,4 @@ private:
     QTreeWidget *createSessionManager();
 };
 
-#endif // XFOLDER_UI_MAINWINDOW_H
+#endif // DIRBRIDGE_UI_MAINWINDOW_H

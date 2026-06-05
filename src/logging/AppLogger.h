@@ -1,5 +1,5 @@
-#ifndef XFOLDER_LOGGING_APPLOGGER_H
-#define XFOLDER_LOGGING_APPLOGGER_H
+#ifndef DIRBRIDGE_LOGGING_APPLOGGER_H
+#define DIRBRIDGE_LOGGING_APPLOGGER_H
 
 #include <filesystem>
 #include <memory>
@@ -19,4 +19,4 @@ public:
     static void shutdown();
 };
 
-#endif // XFOLDER_LOGGING_APPLOGGER_H
+#endif // DIRBRIDGE_LOGGING_APPLOGGER_H

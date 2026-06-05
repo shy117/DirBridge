@@ -1,5 +1,5 @@
-#ifndef XFOLDER_CORE_DEPENDENCYCHECK_H
-#define XFOLDER_CORE_DEPENDENCYCHECK_H
+#ifndef DIRBRIDGE_CORE_DEPENDENCYCHECK_H
+#define DIRBRIDGE_CORE_DEPENDENCYCHECK_H
 
 #include <string>
 #include <vector>
@@ -22,4 +22,4 @@ DependencyCheckResult checkDependencies(const std::string &configDirectory, cons
 std::string formatDependencyCheck(const DependencyCheckResult &result);
 bool dependenciesReady(const DependencyCheckResult &result);
 
-#endif // XFOLDER_CORE_DEPENDENCYCHECK_H
+#endif // DIRBRIDGE_CORE_DEPENDENCYCHECK_H

@@ -12,12 +12,12 @@ std::filesystem::path g_logFilePath;
 std::shared_ptr<spdlog::logger> AppLogger::initialize(const std::filesystem::path &logDirectory)
 {
     std::filesystem::create_directories(logDirectory);
-    g_logFilePath = logDirectory / "xfolder.log";
-    g_logger = spdlog::basic_logger_mt("xfolder", g_logFilePath.string(), true);
+    g_logFilePath = logDirectory / "dirbridge.log";
+    g_logger = spdlog::basic_logger_mt("dirbridge", g_logFilePath.string(), true);
     g_logger->set_level(spdlog::level::info);
     g_logger->flush_on(spdlog::level::info);
     spdlog::set_default_logger(g_logger);
-    g_logger->info("XFolder logger initialized");
+    g_logger->info("DirBridge logger initialized");
     return g_logger;
 }
 
@@ -40,9 +40,9 @@ void AppLogger::shutdown()
 {
     if (g_logger)
     {
-        g_logger->info("XFolder logger shutdown");
+        g_logger->info("DirBridge logger shutdown");
         g_logger->flush();
     }
-    spdlog::drop("xfolder");
+    spdlog::drop("dirbridge");
     g_logger.reset();
 }

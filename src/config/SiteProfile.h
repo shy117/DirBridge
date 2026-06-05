@@ -1,5 +1,5 @@
-#ifndef XFOLDER_CONFIG_SITEPROFILE_H
-#define XFOLDER_CONFIG_SITEPROFILE_H
+#ifndef DIRBRIDGE_CONFIG_SITEPROFILE_H
+#define DIRBRIDGE_CONFIG_SITEPROFILE_H
 
 #include <cstdint>
 #include <string>
@@ -34,4 +34,4 @@ std::uint16_t defaultPortForProtocol(RemoteProtocol protocol);
 void to_json(nlohmann::json &json, const SiteProfile &profile);
 void from_json(const nlohmann::json &json, SiteProfile &profile);
 
-#endif // XFOLDER_CONFIG_SITEPROFILE_H
+#endif // DIRBRIDGE_CONFIG_SITEPROFILE_H

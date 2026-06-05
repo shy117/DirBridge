@@ -1,10 +1,10 @@
-# CMake依赖方案
+﻿# CMake依赖方案
 
-关联：[[XFolder]]、[[技术选型-远程传输库]]
+关联：[[DirBridge]]、[[技术选型-远程传输库]]
 
 ## 目标
 
-XFolder 使用 CMake 作为唯一构建系统，不再使用 qmake。
+DirBridge 使用 CMake 作为唯一构建系统，不再使用 qmake。
 
 第一阶段依赖：
 
@@ -23,7 +23,7 @@ XFolder 使用 CMake 作为唯一构建系统，不再使用 qmake。
 ## 推荐目录
 
 ```text
-XFolder
+DirBridge
 ├── CMakeLists.txt
 ├── CMakePresets.json
 ├── docs
@@ -114,7 +114,7 @@ CMake 只引用 `third_party/installed`，不直接引用 `_downloads` 或 `_sou
 
 Windows Release 包需要包含：
 
-- XFolder.exe
+- DirBridge.exe
 - Qt 运行库
 - Qt platforms 插件
 - libcurl DLL
@@ -164,9 +164,9 @@ CMake 配置阶段应检查：
 cmake --preset windows-mingw-debug
 cmake --build --preset windows-mingw-debug
 $env:PATH='D:\QT\6.8.0\mingw_64\bin;D:\QT\Tools\mingw1310_64\bin;' + $env:PATH
-.\build\windows-mingw-debug\XFolder.exe --check-curl
-.\build\windows-mingw-debug\XFolder.exe --check-deps
-.\build\windows-mingw-debug\XFolder.exe --smoke-test
+.\build\windows-mingw-debug\DirBridge.exe --check-curl
+.\build\windows-mingw-debug\DirBridge.exe --check-deps
+.\build\windows-mingw-debug\DirBridge.exe --smoke-test
 ```
 
 直接运行 Debug 构建目录下的 exe 时，需要先把 Qt 和 MinGW 运行库加入当前终端 `PATH`：

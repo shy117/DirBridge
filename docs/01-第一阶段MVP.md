@@ -1,4 +1,4 @@
-# 01-第一阶段MVP
+﻿# 01-第一阶段MVP
 
 关联：[[00-总体技术方案]]、[[02-架构与分层]]
 
@@ -79,7 +79,7 @@ config/sites.json
 当前日志文件：
 
 ```text
-logs/xfolder.log
+logs/dirbridge.log
 ```
 
 ## 第一阶段后半段

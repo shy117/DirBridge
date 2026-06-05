@@ -1,4 +1,6 @@
-# XFolder 文档入口
+# DirBridge 文档入口
+
+项目曾用名为 XFolder。后续实现、文档和发布产物统一使用 DirBridge；历史归档中保留旧名用于追溯。
 
 ## 权威文档
 
