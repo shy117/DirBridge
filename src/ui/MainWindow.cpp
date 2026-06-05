@@ -1,6 +1,7 @@
 #include "ui/MainWindow.h"
 
 #include "logging/AppLogger.h"
+#include "protocol/CurlRemoteFileSystem.h"
 #include "ui/FilePanel.h"
 
 #include <algorithm>
@@ -60,7 +61,7 @@ int findProtocolIndex(QComboBox *combo, RemoteProtocol protocol)
 MainWindow::MainWindow(const DependencyCheckResult &dependencyCheck, QWidget *parent)
     : QMainWindow(parent)
     , m_siteStore(dependencyCheck.siteConfigPath.empty() ? std::filesystem::path("config") / "sites.json" : dependencyCheck.siteConfigPath)
-    , m_remoteFileSystem(std::make_unique<FakeRemoteFileSystem>())
+    , m_remoteFileSystem(std::make_unique<CurlRemoteFileSystem>())
 {
     setWindowTitle("DirBridge - Remote Folder Manager");
     resize(1380, 820);
@@ -259,7 +260,15 @@ QTreeWidget *MainWindow::createSessionManager()
         fillQuickConnectFromItem(item);
         if (item != nullptr && item->data(0, Qt::UserRole).isValid())
         {
-            showRemoteProfile(m_sites.at(item->data(0, Qt::UserRole).toInt()));
+            try
+            {
+                showRemoteProfile(m_sites.at(item->data(0, Qt::UserRole).toInt()));
+            }
+            catch (const std::exception &error)
+            {
+                appendLog("ERROR", QString("打开站点失败：%1").arg(error.what()));
+                QMessageBox::critical(this, "打开站点失败", error.what());
+            }
         }
     });
     return m_sessionTree;
@@ -402,7 +411,7 @@ void MainWindow::showRemoteProfile(const SiteProfile &profile)
     m_remotePanel->setRemoteItems(
         QString::fromStdString(profile.defaultRemotePath),
         items,
-        QString("mock 远程会话已连接：%1，%2 个项目")
+        QString("远程会话已连接：%1，%2 个项目")
             .arg(siteDisplayName(profile))
             .arg(items.size()));
     appendLog("INFO", QString("远程目录已加载：%1").arg(QString::fromStdString(profile.defaultRemotePath)));

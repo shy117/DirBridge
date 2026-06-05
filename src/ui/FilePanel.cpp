@@ -19,6 +19,23 @@
 
 namespace
 {
+QString fileItemTypeText(FileItemType type)
+{
+    switch (type)
+    {
+    case FileItemType::File:
+        return "文件";
+    case FileItemType::Directory:
+        return "文件夹";
+    case FileItemType::Symlink:
+        return "符号链接";
+    case FileItemType::Other:
+        return "未知";
+    }
+
+    return "未知";
+}
+
 QString formatFileSize(qint64 size)
 {
     if (size < 0)
@@ -346,7 +363,7 @@ void FilePanel::populateRemoteItems(const QString &path, const std::vector<FileI
 
         m_table->setItem(row, 0, nameItem);
         m_table->setItem(row, 1, createItem(isDirectory ? "" : formatFileSize(entry.size)));
-        m_table->setItem(row, 2, createItem(isDirectory ? "文件夹" : "文件"));
+        m_table->setItem(row, 2, createItem(fileItemTypeText(entry.type)));
         m_table->setItem(row, 3, createItem(QString::fromStdString(entry.modifiedTime)));
         m_table->setItem(row, 4, createItem(QString::fromStdString(entry.permissions)));
         m_table->setItem(row, 5, createItem(QString::fromStdString(entry.owner)));

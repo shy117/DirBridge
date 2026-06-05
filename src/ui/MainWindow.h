@@ -9,7 +9,7 @@
 #include "config/SiteProfile.h"
 #include "config/SiteStore.h"
 #include "core/DependencyCheck.h"
-#include "core/FakeRemoteFileSystem.h"
+#include "core/RemoteFileSystem.h"
 
 class QComboBox;
 class QLineEdit;
@@ -44,7 +44,7 @@ private:
 private:
     SiteStore m_siteStore;
     std::vector<SiteProfile> m_sites;
-    std::unique_ptr<FakeRemoteFileSystem> m_remoteFileSystem;
+    std::unique_ptr<RemoteFileSystem> m_remoteFileSystem;
 
     QComboBox *m_protocolCombo = nullptr;
     QLineEdit *m_hostEdit = nullptr;

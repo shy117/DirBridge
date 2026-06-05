@@ -34,6 +34,8 @@ add_library(DirBridgeCore STATIC
     src/core/RemoteFileSystem.h
     src/logging/AppLogger.cpp
     src/logging/AppLogger.h
+    src/protocol/CurlRemoteFileSystem.cpp
+    src/protocol/CurlRemoteFileSystem.h
 )
 
 set_target_properties(DirBridgeCore PROPERTIES
