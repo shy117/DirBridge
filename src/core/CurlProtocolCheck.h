@@ -1,18 +1,18 @@
 #ifndef XFOLDER_CORE_CURLPROTOCOLCHECK_H
 #define XFOLDER_CORE_CURLPROTOCOLCHECK_H
 
-#include <QString>
-#include <QStringList>
+#include <string>
+#include <vector>
 
 struct CurlProtocolCheckResult
 {
-    QString version;
-    QStringList protocols;
+    std::string version;
+    std::vector<std::string> protocols;
     bool hasFtp = false;
     bool hasSftp = false;
 };
 
 CurlProtocolCheckResult checkCurlProtocols();
-QString formatCurlProtocolCheck(const CurlProtocolCheckResult &result);
+std::string formatCurlProtocolCheck(const CurlProtocolCheckResult &result);
 
 #endif // XFOLDER_CORE_CURLPROTOCOLCHECK_H

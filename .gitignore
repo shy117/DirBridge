@@ -17,5 +17,6 @@ third_party/
 # Windows runtime noise
 *.log
 *.tmp
+logs/
 Thumbs.db
 Desktop.ini

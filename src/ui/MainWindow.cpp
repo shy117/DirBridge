@@ -20,7 +20,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
-MainWindow::MainWindow(const CurlProtocolCheckResult &curlCheck, QWidget *parent)
+MainWindow::MainWindow(const DependencyCheckResult &dependencyCheck, QWidget *parent)
     : QMainWindow(parent)
 {
     setWindowTitle("XFolder - Remote Folder Manager");
@@ -29,13 +29,13 @@ MainWindow::MainWindow(const CurlProtocolCheckResult &curlCheck, QWidget *parent
     setupMenuBar();
     setupToolBar();
     setupQuickConnectBar();
-    setupCentralWorkspace(curlCheck);
+    setupCentralWorkspace(dependencyCheck);
 
     statusBar()->showMessage(
-        QString("libcurl %1 ready: FTP=%2, SFTP=%3")
-            .arg(curlCheck.version)
-            .arg(curlCheck.hasFtp ? "yes" : "no")
-            .arg(curlCheck.hasSftp ? "yes" : "no"));
+        QString("libcurl ready=%1, JSON ready=%2, logging ready=%3")
+            .arg(dependencyCheck.curl.hasFtp && dependencyCheck.curl.hasSftp ? "yes" : "no")
+            .arg(dependencyCheck.jsonReady ? "yes" : "no")
+            .arg(dependencyCheck.loggingReady ? "yes" : "no"));
 }
 
 void MainWindow::setupMenuBar()
@@ -107,7 +107,7 @@ void MainWindow::setupQuickConnectBar()
     quickBar->addWidget(connectButton);
 }
 
-void MainWindow::setupCentralWorkspace(const CurlProtocolCheckResult &curlCheck)
+void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCheck)
 {
     auto *sessionDock = new QDockWidget("Session Manager", this);
     sessionDock->setObjectName("SessionManagerDock");
@@ -123,7 +123,10 @@ void MainWindow::setupCentralWorkspace(const CurlProtocolCheckResult &curlCheck)
 
     auto *remoteTabs = new QTabWidget(fileSplitter);
     auto *remotePanel = new FilePanel(FilePanel::Mode::RemotePlaceholder, remoteTabs);
-    remotePanel->setRemoteSummary(curlCheck.version, curlCheck.hasFtp, curlCheck.hasSftp);
+    remotePanel->setRemoteSummary(
+        QString::fromStdString(dependencyCheck.curl.version),
+        dependencyCheck.curl.hasFtp,
+        dependencyCheck.curl.hasSftp);
     remoteTabs->addTab(remotePanel, "远程：未连接");
 
     fileSplitter->addWidget(localTabs);

@@ -13,23 +13,35 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-set(XFOLDER_CURL_ROOT
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/curl/curl-8.20.0_5-win64-mingw"
-    CACHE PATH
-    "Root directory of the local libcurl package"
-)
-
-if(EXISTS "${XFOLDER_CURL_ROOT}/include/curl/curl.h")
-    set(CURL_INCLUDE_DIR "${XFOLDER_CURL_ROOT}/include" CACHE PATH "libcurl include directory")
-endif()
-
-if(WIN32 AND EXISTS "${XFOLDER_CURL_ROOT}/lib/libcurl.dll.a")
-    set(CURL_LIBRARY "${XFOLDER_CURL_ROOT}/lib/libcurl.dll.a" CACHE FILEPATH "libcurl import library")
-endif()
+include(cmake/ThirdParty.cmake)
 
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
-find_package(CURL REQUIRED)
+
+add_library(XFolderCore STATIC
+    src/core/CurlProtocolCheck.cpp
+    src/core/CurlProtocolCheck.h
+    src/core/DependencyCheck.cpp
+    src/core/DependencyCheck.h
+)
+
+set_target_properties(XFolderCore PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+
+target_link_libraries(XFolderCore
+    PUBLIC
+        CURL::libcurl
+        nlohmann_json::nlohmann_json
+        spdlog::spdlog_header_only
+)
+
+target_include_directories(XFolderCore
+    PUBLIC
+        src
+)
 
 add_executable(XFolder
     src/app/main.cpp
@@ -37,14 +49,12 @@ add_executable(XFolder
     src/ui/MainWindow.h
     src/ui/FilePanel.cpp
     src/ui/FilePanel.h
-    src/core/CurlProtocolCheck.cpp
-    src/core/CurlProtocolCheck.h
 )
 
 target_link_libraries(XFolder
     PRIVATE
         Qt${QT_VERSION_MAJOR}::Widgets
-        CURL::libcurl
+        XFolderCore
 )
 
 target_compile_definitions(XFolder

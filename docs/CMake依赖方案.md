@@ -10,6 +10,8 @@ XFolder 使用 CMake 作为唯一构建系统，不再使用 qmake。
 
 - Qt Widgets
 - libcurl
+- nlohmann/json
+- spdlog
 
 后续可能增加：
 
@@ -49,20 +51,34 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
 
 第一版使用 Qt Widgets，不引入 QML。
 
-## libcurl
+## 三方依赖
 
-CMake 集成推荐：
+三方库通过 `deps.lock.json` 锁定版本，并使用脚本准备到：
 
-```cmake
-find_package(CURL REQUIRED COMPONENTS FTP SFTP)
-target_link_libraries(XFolder PRIVATE CURL::libcurl)
+```text
+third_party/installed
 ```
+
+初始化命令：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup_third_party.ps1
+```
+
+CMake 只引用 `third_party/installed`，不直接引用 `_downloads` 或 `_source`。
+
+当前 CMake 暴露目标：
+
+- `CURL::libcurl`
+- `nlohmann_json::nlohmann_json`
+- `spdlog::spdlog_header_only`
 
 注意事项：
 
 - `FindCURL` 对协议和特性组件的支持依赖 CMake 版本。
 - 如果本机 CMake 版本较旧，可能只能检查 `CURL_FOUND` 和链接目标，协议检测需要运行期或自定义检测。
 - Windows 上不同 libcurl 包可能启用不同协议。必须确认当前构建支持 FTP 和 SFTP。
+- nlohmann/json 和 spdlog 第一阶段都使用 header-only 方式。
 
 ## Windows 依赖来源
 
@@ -114,6 +130,8 @@ CMake 配置阶段应检查：
 - libcurl 可链接。
 - libcurl 支持 FTP。
 - libcurl 支持 SFTP。
+- nlohmann/json 可编译并完成序列化验证。
+- spdlog 可写入日志文件。
 - 目标平台是 64 位。
 
 如果 FTP 或 SFTP 不可用，配置应失败，并提示用户更换 libcurl 构建。
@@ -125,6 +143,7 @@ CMake 配置阶段应检查：
 - 能启动一个空 Qt Widgets 主窗口。
 - 能打印 libcurl 版本。
 - 能检查 libcurl protocol list 中包含 `ftp` 和 `sftp`。
+- 能通过 `--check-deps` 检查 libcurl、JSON 和日志。
 
 通过后再进入 FilePanel 和 TransferManager 实现。
 
@@ -134,7 +153,9 @@ CMake 配置阶段应检查：
 
 - Qt Kit：`D:/QT/6.8.0/mingw_64`
 - MinGW：`D:/QT/Tools/mingw1310_64`
-- libcurl：`third_party/curl/curl-8.20.0_5-win64-mingw`
+- libcurl：`third_party/installed/curl`
+- nlohmann/json：`third_party/installed/nlohmann_json`
+- spdlog：`third_party/installed/spdlog`
 - CMake preset：`windows-mingw-debug`
 
 验证命令：
@@ -144,7 +165,14 @@ cmake --preset windows-mingw-debug
 cmake --build --preset windows-mingw-debug
 $env:PATH='D:\QT\6.8.0\mingw_64\bin;D:\QT\Tools\mingw1310_64\bin;' + $env:PATH
 .\build\windows-mingw-debug\XFolder.exe --check-curl
+.\build\windows-mingw-debug\XFolder.exe --check-deps
 .\build\windows-mingw-debug\XFolder.exe --smoke-test
 ```
 
-`--check-curl` 已确认当前 libcurl 支持 `ftp` 和 `sftp`。
+直接运行 Debug 构建目录下的 exe 时，需要先把 Qt 和 MinGW 运行库加入当前终端 `PATH`：
+
+```powershell
+$env:PATH='D:\QT\6.8.0\mingw_64\bin;D:\QT\Tools\mingw1310_64\bin;' + $env:PATH
+```
+
+`--check-curl` 已确认当前 libcurl 支持 `ftp` 和 `sftp`。`--check-deps` 已确认 JSON 和 spdlog 可用。

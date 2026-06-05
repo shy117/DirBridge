@@ -12,7 +12,10 @@
         "CMAKE_MAKE_PROGRAM": "D:/QT/Tools/mingw1310_64/bin/mingw32-make.exe",
         "CMAKE_C_COMPILER": "D:/QT/Tools/mingw1310_64/bin/gcc.exe",
         "CMAKE_CXX_COMPILER": "D:/QT/Tools/mingw1310_64/bin/g++.exe",
-        "XFOLDER_CURL_ROOT": "${sourceDir}/third_party/curl/curl-8.20.0_5-win64-mingw"
+        "XFOLDER_THIRD_PARTY_ROOT": "${sourceDir}/third_party/installed",
+        "XFOLDER_CURL_ROOT": "${sourceDir}/third_party/installed/curl",
+        "XFOLDER_JSON_ROOT": "${sourceDir}/third_party/installed/nlohmann_json",
+        "XFOLDER_SPDLOG_ROOT": "${sourceDir}/third_party/installed/spdlog"
       },
       "environment": {
         "PATH": "D:/QT/Tools/mingw1310_64/bin;$penv{PATH}",

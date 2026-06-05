@@ -1,0 +1,25 @@
+{
+  "dependencies": {
+    "curl": {
+      "version": "8.20.0_5",
+      "package": "curl-8.20.0_5-win64-mingw.zip",
+      "url": "https://curl.se/windows/dl-8.20.0_5/curl-8.20.0_5-win64-mingw.zip",
+      "sourceDir": "curl-8.20.0_5-win64-mingw",
+      "installDir": "curl"
+    },
+    "nlohmann_json": {
+      "version": "3.12.0",
+      "package": "json-3.12.0.zip",
+      "url": "https://github.com/nlohmann/json/archive/refs/tags/v3.12.0.zip",
+      "sourceDir": "json-3.12.0",
+      "installDir": "nlohmann_json"
+    },
+    "spdlog": {
+      "version": "1.17.0",
+      "package": "spdlog-1.17.0.zip",
+      "url": "https://github.com/gabime/spdlog/archive/refs/tags/v1.17.0.zip",
+      "sourceDir": "spdlog-1.17.0",
+      "installDir": "spdlog"
+    }
+  }
+}

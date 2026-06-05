@@ -1,6 +1,8 @@
 #include "core/CurlProtocolCheck.h"
 
 #include <algorithm>
+#include <cctype>
+#include <sstream>
 
 #include <curl/curl.h>
 
@@ -14,23 +16,34 @@ CurlProtocolCheckResult checkCurlProtocols()
         return result;
     }
 
-    result.version = QString::fromLatin1(info->version);
+    result.version = info->version;
 
     for (const char *const *protocol = info->protocols; protocol != nullptr && *protocol != nullptr; ++protocol)
     {
-        const QString protocolName = QString::fromLatin1(*protocol).toLower();
-        result.protocols.append(protocolName);
+        std::string protocolName = *protocol;
+        std::transform(protocolName.begin(), protocolName.end(), protocolName.begin(), [](unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        });
+        result.protocols.push_back(protocolName);
     }
 
-    result.hasFtp = result.protocols.contains("ftp");
-    result.hasSftp = result.protocols.contains("sftp");
+    result.hasFtp = std::find(result.protocols.begin(), result.protocols.end(), "ftp") != result.protocols.end();
+    result.hasSftp = std::find(result.protocols.begin(), result.protocols.end(), "sftp") != result.protocols.end();
 
     return result;
 }
 
-QString formatCurlProtocolCheck(const CurlProtocolCheckResult &result)
+std::string formatCurlProtocolCheck(const CurlProtocolCheckResult &result)
 {
-    return QString("libcurl %1 protocols: %2")
-        .arg(result.version.isEmpty() ? "unknown" : result.version)
-        .arg(result.protocols.join(", "));
+    std::ostringstream stream;
+    stream << "libcurl " << (result.version.empty() ? "unknown" : result.version) << " protocols: ";
+    for (std::size_t index = 0; index < result.protocols.size(); ++index)
+    {
+        if (index > 0)
+        {
+            stream << ", ";
+        }
+        stream << result.protocols.at(index);
+    }
+    return stream.str();
 }

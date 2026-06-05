@@ -3,7 +3,7 @@
 
 #include <QMainWindow>
 
-#include "core/CurlProtocolCheck.h"
+#include "core/DependencyCheck.h"
 
 class QComboBox;
 class QLineEdit;
@@ -14,13 +14,13 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
-    explicit MainWindow(const CurlProtocolCheckResult &curlCheck, QWidget *parent = nullptr);
+    explicit MainWindow(const DependencyCheckResult &dependencyCheck, QWidget *parent = nullptr);
 
 private:
     void setupMenuBar();
     void setupToolBar();
     void setupQuickConnectBar();
-    void setupCentralWorkspace(const CurlProtocolCheckResult &curlCheck);
+    void setupCentralWorkspace(const DependencyCheckResult &dependencyCheck);
     QTreeWidget *createSessionManager();
 };
 
