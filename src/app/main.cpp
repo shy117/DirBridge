@@ -6,6 +6,7 @@
 
 #include "core/CurlProtocolCheck.h"
 #include "core/DependencyCheck.h"
+#include "logging/AppLogger.h"
 #include "ui/MainWindow.h"
 
 int main(int argc, char *argv[])
@@ -42,7 +43,7 @@ int main(int argc, char *argv[])
         return 0;
     }
 
-    const DependencyCheckResult dependencyCheck = checkDependencies("logs");
+    const DependencyCheckResult dependencyCheck = checkDependencies("config", "logs");
 
     if (parser.isSet(checkDepsOption))
     {
@@ -58,5 +59,7 @@ int main(int argc, char *argv[])
         QTimer::singleShot(1200, &app, &QCoreApplication::quit);
     }
 
-    return app.exec();
+    const int exitCode = app.exec();
+    AppLogger::shutdown();
+    return exitCode;
 }

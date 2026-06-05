@@ -51,10 +51,36 @@ MVP 目标是先做出 Xftp 风格的可用主流程，而不是一次性塞满�
 - 使用 JSON 保存用户设置。
 - 第一阶段可先明文保存密码，文档和 UI 必须标注风险。
 
+当前站点配置文件：
+
+```text
+config/sites.json
+```
+
+当前字段：
+
+- `id`
+- `name`
+- `protocol`
+- `host`
+- `port`
+- `username`
+- `password`
+- `defaultRemotePath`
+- `encoding`
+
+`passwordStorage` 当前为 `plain-text`，只用于本地开发验证。
+
 ### Logging
 
 - 使用 spdlog 写入本地日志文件。
 - 日志至少包含启动、依赖检查、连接、传输、错误信息。
+
+当前日志文件：
+
+```text
+logs/xfolder.log
+```
 
 ## 第一阶段后半段
 
@@ -84,4 +110,3 @@ MVP 目标是先做出 Xftp 风格的可用主流程，而不是一次性塞满�
 4. 用户从本地拖文件到远程，生成上传任务并完成。
 5. 用户从远程拖文件到本地，生成下载任务并完成。
 6. 连接失败或传输失败时，UI 和日志都能显示可理解的错误。
-

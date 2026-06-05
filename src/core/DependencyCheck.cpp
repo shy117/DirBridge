@@ -1,13 +1,15 @@
 #include "core/DependencyCheck.h"
 
+#include "config/SiteStore.h"
+#include "logging/AppLogger.h"
+
 #include <filesystem>
 #include <sstream>
 
 #include <nlohmann/json.hpp>
-#include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/spdlog.h>
 
-DependencyCheckResult checkDependencies(const std::string &logDirectory)
+DependencyCheckResult checkDependencies(const std::string &configDirectory, const std::string &logDirectory)
 {
     DependencyCheckResult result;
     result.curl = checkCurlProtocols();
@@ -40,15 +42,11 @@ DependencyCheckResult checkDependencies(const std::string &logDirectory)
 
     try
     {
-        std::filesystem::create_directories(logDirectory);
-        const std::filesystem::path logPath = std::filesystem::path(logDirectory) / "xfolder.log";
-        auto logger = spdlog::basic_logger_mt("xfolder_dependency_check", logPath.string(), true);
-        logger->set_level(spdlog::level::info);
+        auto logger = AppLogger::initialize(logDirectory);
         logger->info("XFolder dependency check: curl={}, json_ready={}", result.curl.version, result.jsonReady);
         logger->flush();
-        spdlog::drop("xfolder_dependency_check");
-        result.logPath = logPath.string();
-        result.loggingReady = std::filesystem::exists(logPath);
+        result.logPath = AppLogger::logFilePath().string();
+        result.loggingReady = std::filesystem::exists(AppLogger::logFilePath());
         if (!result.loggingReady)
         {
             result.errors.push_back("spdlog did not create the log file");
@@ -57,6 +55,29 @@ DependencyCheckResult checkDependencies(const std::string &logDirectory)
     catch (const std::exception &error)
     {
         result.errors.push_back(std::string("spdlog error: ") + error.what());
+    }
+
+    try
+    {
+        SiteStore store(std::filesystem::path(configDirectory) / "sites.json");
+        std::vector<SiteProfile> sites = store.load();
+        if (sites.empty())
+        {
+            sites.push_back(store.createDefaultSite());
+            store.save(sites);
+        }
+
+        const std::vector<SiteProfile> reloaded = store.load();
+        result.siteConfigPath = store.path().string();
+        result.siteStoreReady = !reloaded.empty() && reloaded.front().protocol == RemoteProtocol::Sftp;
+        if (!result.siteStoreReady)
+        {
+            result.errors.push_back("site config round trip failed");
+        }
+    }
+    catch (const std::exception &error)
+    {
+        result.errors.push_back(std::string("site config error: ") + error.what());
     }
 
     return result;
@@ -71,6 +92,12 @@ std::string formatDependencyCheck(const DependencyCheckResult &result)
     if (!result.logPath.empty())
     {
         stream << " (" << result.logPath << ")";
+    }
+    stream << '\n';
+    stream << "site config: " << (result.siteStoreReady ? "ready" : "failed");
+    if (!result.siteConfigPath.empty())
+    {
+        stream << " (" << result.siteConfigPath << ")";
     }
     stream << '\n';
     stream << "serialized settings: " << result.serializedSettings;
@@ -89,5 +116,10 @@ std::string formatDependencyCheck(const DependencyCheckResult &result)
 
 bool dependenciesReady(const DependencyCheckResult &result)
 {
-    return result.curl.hasFtp && result.curl.hasSftp && result.jsonReady && result.loggingReady && result.errors.empty();
+    return result.curl.hasFtp
+        && result.curl.hasSftp
+        && result.jsonReady
+        && result.loggingReady
+        && result.siteStoreReady
+        && result.errors.empty();
 }

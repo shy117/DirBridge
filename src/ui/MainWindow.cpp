@@ -35,7 +35,7 @@ MainWindow::MainWindow(const DependencyCheckResult &dependencyCheck, QWidget *pa
         QString("libcurl ready=%1, JSON ready=%2, logging ready=%3")
             .arg(dependencyCheck.curl.hasFtp && dependencyCheck.curl.hasSftp ? "yes" : "no")
             .arg(dependencyCheck.jsonReady ? "yes" : "no")
-            .arg(dependencyCheck.loggingReady ? "yes" : "no"));
+            .arg(dependencyCheck.loggingReady && dependencyCheck.siteStoreReady ? "yes" : "no"));
 }
 
 void MainWindow::setupMenuBar()

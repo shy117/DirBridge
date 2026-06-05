@@ -19,10 +19,16 @@ find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
 
 add_library(XFolderCore STATIC
+    src/config/SiteProfile.cpp
+    src/config/SiteProfile.h
+    src/config/SiteStore.cpp
+    src/config/SiteStore.h
     src/core/CurlProtocolCheck.cpp
     src/core/CurlProtocolCheck.h
     src/core/DependencyCheck.cpp
     src/core/DependencyCheck.h
+    src/logging/AppLogger.cpp
+    src/logging/AppLogger.h
 )
 
 set_target_properties(XFolderCore PROPERTIES
