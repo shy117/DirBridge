@@ -1,5 +1,6 @@
 #include "ui/FilePanel.h"
 
+#include <QAbstractItemView>
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
@@ -10,9 +11,9 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QStandardPaths>
+#include <QStyle>
 #include <QTableWidget>
 #include <QTableWidgetItem>
-#include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -45,12 +46,7 @@ QString formatFileSize(qint64 size)
 QString desktopPath()
 {
     const QString desktop = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
-    if (!desktop.isEmpty())
-    {
-        return desktop;
-    }
-
-    return QDir::homePath();
+    return desktop.isEmpty() ? QDir::homePath() : desktop;
 }
 }
 
@@ -74,6 +70,16 @@ void FilePanel::setRemoteSummary(const QString &curlVersion, bool hasFtp, bool h
         .arg(curlVersion)
         .arg(hasFtp ? "可用" : "不可用")
         .arg(hasSftp ? "可用" : "不可用"));
+}
+
+void FilePanel::setRemoteItems(const QString &path, const std::vector<FileItem> &items, const QString &status)
+{
+    if (m_mode != Mode::RemotePlaceholder)
+    {
+        return;
+    }
+
+    populateRemoteItems(path, items, status);
 }
 
 void FilePanel::setupUi()
@@ -309,6 +315,45 @@ void FilePanel::populateRemotePlaceholder()
     m_table->setItem(row, 5, createItem(""));
     m_table->setSortingEnabled(true);
     m_stateLabel->setText("远程面板占位，后续接入 FTP/SFTP 会话。");
+}
+
+void FilePanel::populateRemoteItems(const QString &path, const std::vector<FileItem> &items, const QString &status)
+{
+    m_currentPath = path.isEmpty() ? "/" : path;
+    m_pathEdit->setText(m_currentPath);
+    m_pathEdit->setEnabled(false);
+    m_backButton->setEnabled(false);
+    m_forwardButton->setEnabled(false);
+    m_upButton->setEnabled(false);
+
+    m_table->setSortingEnabled(false);
+    m_table->setRowCount(0);
+
+    const QIcon directoryIcon = style()->standardIcon(QStyle::SP_DirIcon);
+    const QIcon fileIcon = style()->standardIcon(QStyle::SP_FileIcon);
+
+    for (const FileItem &entry : items)
+    {
+        const int row = m_table->rowCount();
+        m_table->insertRow(row);
+
+        const bool isDirectory = entry.type == FileItemType::Directory;
+        QTableWidgetItem *nameItem = createItem(
+            QString::fromStdString(entry.name),
+            isDirectory ? directoryIcon : fileIcon);
+        nameItem->setData(Qt::UserRole, QString::fromStdString(entry.path));
+        nameItem->setData(Qt::UserRole + 1, isDirectory);
+
+        m_table->setItem(row, 0, nameItem);
+        m_table->setItem(row, 1, createItem(isDirectory ? "" : formatFileSize(entry.size)));
+        m_table->setItem(row, 2, createItem(isDirectory ? "文件夹" : "文件"));
+        m_table->setItem(row, 3, createItem(QString::fromStdString(entry.modifiedTime)));
+        m_table->setItem(row, 4, createItem(QString::fromStdString(entry.permissions)));
+        m_table->setItem(row, 5, createItem(QString::fromStdString(entry.owner)));
+    }
+
+    m_table->setSortingEnabled(true);
+    m_stateLabel->setText(status.isEmpty() ? QString("%1 个远程项目").arg(items.size()) : status);
 }
 
 QTableWidgetItem *FilePanel::createItem(const QString &text, const QIcon &icon) const

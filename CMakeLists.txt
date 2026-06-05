@@ -27,6 +27,11 @@ add_library(DirBridgeCore STATIC
     src/core/CurlProtocolCheck.h
     src/core/DependencyCheck.cpp
     src/core/DependencyCheck.h
+    src/core/FakeRemoteFileSystem.cpp
+    src/core/FakeRemoteFileSystem.h
+    src/core/FileItem.cpp
+    src/core/FileItem.h
+    src/core/RemoteFileSystem.h
     src/logging/AppLogger.cpp
     src/logging/AppLogger.h
 )

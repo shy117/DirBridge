@@ -4,6 +4,10 @@
 #include <QFileIconProvider>
 #include <QWidget>
 
+#include <vector>
+
+#include "core/FileItem.h"
+
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -24,6 +28,7 @@ public:
     explicit FilePanel(Mode mode, QWidget *parent = nullptr);
 
     void setRemoteSummary(const QString &curlVersion, bool hasFtp, bool hasSftp);
+    void setRemoteItems(const QString &path, const std::vector<FileItem> &items, const QString &status);
 
 private:
     void setupUi();
@@ -37,6 +42,7 @@ private:
     void updateNavigationButtons();
     void populateLocalDirectory(const QString &path);
     void populateRemotePlaceholder();
+    void populateRemoteItems(const QString &path, const std::vector<FileItem> &items, const QString &status);
     QTableWidgetItem *createItem(const QString &text, const QIcon &icon = QIcon()) const;
     QString selectedEntryPath() const;
 
