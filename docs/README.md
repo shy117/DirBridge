@@ -9,6 +9,7 @@
 - [[02-架构与分层]]：UI、Core、Protocol、Config、Logging 的职责边界。
 - [[CMake依赖方案]]：本机 CMake、Qt、libcurl 与基础依赖配置说明。
 - [[运行环境说明]]：如何生成和验证 `build/run` 可运行目录。
+- [[版本规划]]：Git 分支、版本号、GitHub Release 和后续版本路线。
 
 ## 历史草稿
 
@@ -19,4 +20,3 @@ docs/archive/2026-06-initial-planning/
 ```
 
 历史草稿只用于追溯设计来源，不作为后续实现依据。后续开发默认以根目录下的权威文档为准。
-

@@ -23,10 +23,26 @@ public:
     virtual bool isConnected() const = 0;
     virtual std::vector<FileItem> listDirectory(const std::string &path) = 0;
 
+    /**
+     * @brief Creates a directory on the remote filesystem.
+     * @param path Absolute remote directory path to create.
+     * @return Operation result with success state and backend message.
+     */
     virtual RemoteOperationResult createDirectory(const std::string &path)
     {
         (void)path;
         return {false, "create directory is not implemented"};
+    }
+
+    /**
+     * @brief Creates an empty file on the remote filesystem.
+     * @param path Absolute remote file path to create.
+     * @return Operation result with success state and backend message.
+     */
+    virtual RemoteOperationResult createFile(const std::string &path)
+    {
+        (void)path;
+        return {false, "create file is not implemented"};
     }
 
     virtual RemoteOperationResult remove(const std::string &path)

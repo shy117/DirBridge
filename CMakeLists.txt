@@ -32,6 +32,12 @@ add_library(DirBridgeCore STATIC
     src/core/FileItem.cpp
     src/core/FileItem.h
     src/core/RemoteFileSystem.h
+    src/core/TransferJob.cpp
+    src/core/TransferJob.h
+    src/core/TransferManager.cpp
+    src/core/TransferManager.h
+    src/core/TransferQueue.cpp
+    src/core/TransferQueue.h
     src/logging/AppLogger.cpp
     src/logging/AppLogger.h
     src/protocol/CurlRemoteFileSystem.cpp
@@ -76,6 +82,34 @@ target_compile_definitions(DirBridge
 )
 
 target_include_directories(DirBridge
+    PRIVATE
+        src
+)
+
+add_executable(DirBridgeCoreChecks
+    tests/core/CoreChecks.cpp
+)
+
+target_link_libraries(DirBridgeCoreChecks
+    PRIVATE
+        DirBridgeCore
+)
+
+target_include_directories(DirBridgeCoreChecks
+    PRIVATE
+        src
+)
+
+add_executable(DirBridgeRemoteCheck
+    tests/integration/RemoteCheck.cpp
+)
+
+target_link_libraries(DirBridgeRemoteCheck
+    PRIVATE
+        DirBridgeCore
+)
+
+target_include_directories(DirBridgeRemoteCheck
     PRIVATE
         src
 )
