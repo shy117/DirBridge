@@ -15,6 +15,7 @@
 
 class QComboBox;
 class QDockWidget;
+class QFileInfo;
 class QLineEdit;
 class QPushButton;
 class QAction;
@@ -166,6 +167,17 @@ private:
     void uploadLocalPath(RemoteSession &session, const QString &localPath);
     bool enqueueLocalDirectoryUpload(RemoteSession &session, const QString &localDirectoryPath, const QString &remoteDirectoryPath, QString *errorMessage = nullptr);
     bool ensureRemoteDirectory(RemoteSession &session, const QString &remoteDirectoryPath, QString *errorMessage = nullptr);
+    enum class UploadConflictAction
+    {
+        Overwrite,
+        Skip,
+        ContinueUpload,
+        Rename,
+        Cancel
+    };
+    bool remotePathExists(RemoteSession &session, const QString &remotePath, FileItem *item = nullptr);
+    UploadConflictAction chooseUploadConflictAction(const QFileInfo &localInfo, const QString &remotePath, const FileItem &remoteItem) const;
+    QString renamedRemotePathForUpload(const QString &remotePath, const QFileInfo &localInfo) const;
     void downloadRemoteFile(RemoteSession &session, const QString &remotePath);
     void downloadRemoteFile(const QString &remotePath);
     void downloadRemotePath(RemoteSession &session, const QString &remotePath);

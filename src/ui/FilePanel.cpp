@@ -417,6 +417,8 @@ void FilePanel::setupUi()
     m_table->setAlternatingRowColors(true);
     m_table->setAcceptDrops(true);
     m_table->setDragEnabled(true);
+    m_table->setDragDropMode(QAbstractItemView::DragDrop);
+    m_table->setDefaultDropAction(Qt::CopyAction);
     m_table->setDropIndicatorShown(true);
     m_table->setSortingEnabled(false);
     m_table->verticalHeader()->setVisible(false);
