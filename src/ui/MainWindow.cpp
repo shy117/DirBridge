@@ -1402,13 +1402,8 @@ bool MainWindow::enqueueLocalDirectoryUpload(RemoteSession &session, const QStri
         return false;
     }
 
-    RemoteOperationResult result = session.fileSystem->createDirectory(remoteDirectoryPath.toStdString());
-    if (!result.success && result.message.find("already exists") == std::string::npos)
+    if (!ensureRemoteDirectory(session, remoteDirectoryPath, errorMessage))
     {
-        if (errorMessage != nullptr)
-        {
-            *errorMessage = QString("远程目录创建失败：%1").arg(QString::fromStdString(result.message));
-        }
         return false;
     }
 
@@ -1425,13 +1420,8 @@ bool MainWindow::enqueueLocalDirectoryUpload(RemoteSession &session, const QStri
         const QString remotePath = joinRemotePath(remoteDirectoryPath, relativePath);
         if (info.isDir())
         {
-            result = session.fileSystem->createDirectory(remotePath.toStdString());
-            if (!result.success && result.message.find("already exists") == std::string::npos)
+            if (!ensureRemoteDirectory(session, remotePath, errorMessage))
             {
-                if (errorMessage != nullptr)
-                {
-                    *errorMessage = QString("远程子目录创建失败：%1").arg(QString::fromStdString(result.message));
-                }
                 return false;
             }
             continue;
@@ -1457,6 +1447,30 @@ bool MainWindow::enqueueLocalDirectoryUpload(RemoteSession &session, const QStri
     }
 
     return true;
+}
+
+bool MainWindow::ensureRemoteDirectory(RemoteSession &session, const QString &remoteDirectoryPath, QString *errorMessage)
+{
+    const RemoteOperationResult result = session.fileSystem->createDirectory(remoteDirectoryPath.toStdString());
+    if (result.success)
+    {
+        return true;
+    }
+
+    try
+    {
+        session.fileSystem->listDirectory(remoteDirectoryPath.toStdString());
+        return true;
+    }
+    catch (const std::exception &error)
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage = QString("远程目录创建失败：%1；确认目录失败：%2")
+                .arg(QString::fromStdString(result.message), QString::fromUtf8(error.what()));
+        }
+        return false;
+    }
 }
 
 void MainWindow::downloadRemoteFile(RemoteSession &session, const QString &remotePath)

@@ -558,16 +558,24 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
     const std::filesystem::path downloadRoot = tempRoot / "download-target";
     const std::filesystem::path localDirectory = uploadRoot / "dirbridge-folder";
     const std::filesystem::path nestedDirectory = localDirectory / "nested";
+    const std::filesystem::path deepDirectory = nestedDirectory / "level2" / "level3";
     const std::filesystem::path nestedFile = nestedDirectory / "inside.txt";
+    const std::filesystem::path deepFile = deepDirectory / "deep.txt";
     std::filesystem::remove_all(tempRoot);
-    std::filesystem::create_directories(nestedDirectory);
+    std::filesystem::create_directories(deepDirectory);
     {
         std::ofstream output(nestedFile, std::ios::binary | std::ios::trunc);
         output << "DirBridge directory smoke\n";
     }
+    {
+        std::ofstream output(deepFile, std::ios::binary | std::ios::trunc);
+        output << "DirBridge deep directory smoke\n";
+    }
     std::filesystem::create_directories(downloadRoot);
     window.setLocalPathForTesting(QString::fromStdString(downloadRoot.u8string()));
 
+    window.uploadLocalPathForTesting(QString::fromStdString(localDirectory.u8string()));
+    QApplication::processEvents();
     window.uploadLocalPathForTesting(QString::fromStdString(localDirectory.u8string()));
     QApplication::processEvents();
 
@@ -582,6 +590,12 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
     if (!std::filesystem::is_regular_file(downloadedFile))
     {
         QTextStream(stderr) << "Downloaded remote directory does not contain nested file" << Qt::endl;
+        return false;
+    }
+    const std::filesystem::path downloadedDeepFile = downloadRoot / "dirbridge-folder" / "nested" / "level2" / "level3" / "deep.txt";
+    if (!std::filesystem::is_regular_file(downloadedDeepFile))
+    {
+        QTextStream(stderr) << "Downloaded remote directory does not contain deep nested file" << Qt::endl;
         return false;
     }
 
