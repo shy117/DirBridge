@@ -6,6 +6,7 @@
 #include "ui/FilePanel.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <iomanip>
 #include <sstream>
@@ -16,6 +17,7 @@
 #include <QDateTime>
 #include <QDockWidget>
 #include <QDir>
+#include <QDirIterator>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFrame>
@@ -71,11 +73,38 @@ QString joinRemotePath(const QString &directory, const QString &name)
     return path + name;
 }
 
+QString remoteBaseName(const QString &path)
+{
+    QString normalized = path;
+    while (normalized.size() > 1 && normalized.endsWith('/'))
+    {
+        normalized.chop(1);
+    }
+
+    const int slashIndex = normalized.lastIndexOf('/');
+    return slashIndex < 0 ? normalized : normalized.mid(slashIndex + 1);
+}
+
+bool isSameOrDescendantRemotePath(QString parent, QString candidate)
+{
+    while (parent.size() > 1 && parent.endsWith('/'))
+    {
+        parent.chop(1);
+    }
+    while (candidate.size() > 1 && candidate.endsWith('/'))
+    {
+        candidate.chop(1);
+    }
+
+    return candidate == parent || candidate.startsWith(parent + '/');
+}
+
 std::string makeTransferJobId(const QString &prefix)
 {
+    static std::atomic_uint counter = 0;
     const auto now = std::chrono::system_clock::now().time_since_epoch();
     const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
-    return prefix.toStdString() + "-" + std::to_string(millis);
+    return prefix.toStdString() + "-" + std::to_string(millis) + "-" + std::to_string(++counter);
 }
 
 QString transferDirectionText(TransferDirection direction)
@@ -166,14 +195,41 @@ void MainWindow::uploadLocalFileForTesting(const QString &localPath)
     uploadLocalFile(localPath);
 }
 
+void MainWindow::uploadLocalPathForTesting(const QString &localPath)
+{
+    RemoteSession *session = currentRemoteSession();
+    if (session != nullptr)
+    {
+        uploadLocalPath(*session, localPath);
+    }
+}
+
 void MainWindow::downloadRemoteFileForTesting(const QString &remotePath)
 {
     downloadRemoteFile(remotePath);
 }
 
+void MainWindow::downloadRemotePathForTesting(const QString &remotePath)
+{
+    RemoteSession *session = currentRemoteSession();
+    if (session != nullptr)
+    {
+        downloadRemotePath(*session, remotePath);
+    }
+}
+
 void MainWindow::removeRemotePathForTesting(const QString &path)
 {
     removeRemotePath(path);
+}
+
+void MainWindow::moveRemotePathsForTesting(const QStringList &sourcePaths, const QString &targetDirectory)
+{
+    RemoteSession *session = currentRemoteSession();
+    if (session != nullptr)
+    {
+        moveRemotePaths(*session, sourcePaths, targetDirectory);
+    }
 }
 
 void MainWindow::setDialogsSuppressedForTesting(bool suppressed)
@@ -386,7 +442,11 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     m_localPanel->setRemoteFilesDroppedOnLocalHandler([this](const QStringList &remotePaths) {
         for (const QString &remotePath : remotePaths)
         {
-            downloadRemoteFile(remotePath);
+            RemoteSession *session = currentRemoteSession();
+            if (session != nullptr)
+            {
+                downloadRemotePath(*session, remotePath);
+            }
         }
     });
     localTabs->addTab(m_localPanel, "本地：桌面");
@@ -523,13 +583,16 @@ MainWindow::RemoteSession *MainWindow::createRemoteSession(const SiteProfile &pr
         renameRemotePath(*sessionPtr, sourcePath, targetPath);
     });
     sessionPtr->panel->setRemoteDownloadRequestedHandler([this, sessionPtr](const QString &remotePath) {
-        downloadRemoteFile(*sessionPtr, remotePath);
+        downloadRemotePath(*sessionPtr, remotePath);
     });
     sessionPtr->panel->setLocalFilesDroppedOnRemoteHandler([this, sessionPtr](const QStringList &localPaths) {
         for (const QString &localPath : localPaths)
         {
-            uploadLocalFile(*sessionPtr, localPath);
+            uploadLocalPath(*sessionPtr, localPath);
         }
+    });
+    sessionPtr->panel->setRemoteFilesDroppedOnRemoteHandler([this, sessionPtr](const QStringList &remotePaths, const QString &targetDirectory) {
+        moveRemotePaths(*sessionPtr, remotePaths, targetDirectory);
     });
 
     const int tabIndex = reusePlaceholderPanel
@@ -923,10 +986,10 @@ void MainWindow::removeRemotePath(RemoteSession &session, const QString &path)
         return;
     }
 
-    const RemoteOperationResult result = session.fileSystem->remove(path.toStdString());
-    if (!result.success)
+    QString errorMessage;
+    if (!removeRemotePathRecursive(session, path, &errorMessage))
     {
-        const QString message = QString("远程删除失败：%1").arg(QString::fromStdString(result.message));
+        const QString message = QString("远程删除失败：%1").arg(errorMessage);
         appendLog("ERROR", message);
         session.panel->setRemoteError(message);
         showWarningMessage("远程删除失败", message);
@@ -966,6 +1029,95 @@ void MainWindow::renameRemotePath(RemoteSession &session, const QString &sourceP
 
     appendLog("INFO", QString("远程项目已重命名：%1 -> %2").arg(sourcePath, targetPath));
     loadRemotePath(session, session.currentPath, false);
+}
+
+bool MainWindow::removeRemotePathRecursive(RemoteSession &session, const QString &path, QString *errorMessage)
+{
+    if (path.trimmed().isEmpty() || path == "/")
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage = "不允许删除远程根目录。";
+        }
+        return false;
+    }
+
+    try
+    {
+        const std::vector<FileItem> children = session.fileSystem->listDirectory(path.toStdString());
+        for (const FileItem &child : children)
+        {
+            if (!removeRemotePathRecursive(session, QString::fromStdString(child.path), errorMessage))
+            {
+                return false;
+            }
+        }
+    }
+    catch (const std::exception &)
+    {
+        // Listing fails for regular files on the current backends; delete it below.
+    }
+
+    const RemoteOperationResult result = session.fileSystem->remove(path.toStdString());
+    if (!result.success)
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage = QString::fromStdString(result.message);
+        }
+        return false;
+    }
+
+    return true;
+}
+
+void MainWindow::moveRemotePaths(RemoteSession &session, const QStringList &sourcePaths, const QString &targetDirectory)
+{
+    if (!session.connected)
+    {
+        session.panel->setRemoteError("远程会话未连接，无法移动。");
+        return;
+    }
+
+    QStringList movedPaths;
+    for (const QString &sourcePath : sourcePaths)
+    {
+        if (sourcePath.isEmpty() || targetDirectory.isEmpty())
+        {
+            continue;
+        }
+
+        if (isSameOrDescendantRemotePath(sourcePath, targetDirectory))
+        {
+            const QString message = QString("不能把远程项目移动到自身或子目录：%1").arg(sourcePath);
+            appendLog("WARN", message);
+            showWarningMessage("远程移动失败", message);
+            continue;
+        }
+
+        const QString targetPath = joinRemotePath(targetDirectory, remoteBaseName(sourcePath));
+        if (sourcePath == targetPath)
+        {
+            continue;
+        }
+
+        const RemoteOperationResult result = session.fileSystem->rename(sourcePath.toStdString(), targetPath.toStdString());
+        if (!result.success)
+        {
+            const QString message = QString("远程移动失败：%1").arg(QString::fromStdString(result.message));
+            appendLog("ERROR", message);
+            session.panel->setRemoteError(message);
+            showWarningMessage("远程移动失败", message);
+            continue;
+        }
+        movedPaths.append(QString("%1 -> %2").arg(sourcePath, targetPath));
+    }
+
+    if (!movedPaths.isEmpty())
+    {
+        appendLog("INFO", QString("远程项目已移动：%1").arg(movedPaths.join("; ")));
+        loadRemotePath(session, session.currentPath, false);
+    }
 }
 
 void MainWindow::setRemoteConnectionState(RemoteSession &session, bool connected, const QString &message)
@@ -1202,6 +1354,111 @@ void MainWindow::uploadLocalFile(const QString &localPath)
     }
 }
 
+void MainWindow::uploadLocalPath(RemoteSession &session, const QString &localPath)
+{
+    const QFileInfo localInfo(localPath);
+    if (localInfo.isFile())
+    {
+        uploadLocalFile(session, localPath);
+        return;
+    }
+
+    if (!localInfo.isDir())
+    {
+        showWarningMessage("上传失败", QString("本地项目不可用：%1").arg(localPath));
+        return;
+    }
+
+    const QString remoteDirectoryPath = joinRemotePath(session.currentPath, localInfo.fileName());
+    QString errorMessage;
+    if (!enqueueLocalDirectoryUpload(session, localPath, remoteDirectoryPath, &errorMessage))
+    {
+        showWarningMessage("上传文件夹失败", errorMessage);
+        return;
+    }
+
+    processTransferQueue();
+    loadRemotePath(session, session.currentPath, false);
+}
+
+bool MainWindow::enqueueLocalDirectoryUpload(RemoteSession &session, const QString &localDirectoryPath, const QString &remoteDirectoryPath, QString *errorMessage)
+{
+    if (!session.connected)
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage = "请先连接远程会话。";
+        }
+        return false;
+    }
+
+    const QFileInfo rootInfo(localDirectoryPath);
+    if (!rootInfo.isDir())
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage = QString("本地目录不存在：%1").arg(localDirectoryPath);
+        }
+        return false;
+    }
+
+    RemoteOperationResult result = session.fileSystem->createDirectory(remoteDirectoryPath.toStdString());
+    if (!result.success && result.message.find("already exists") == std::string::npos)
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage = QString("远程目录创建失败：%1").arg(QString::fromStdString(result.message));
+        }
+        return false;
+    }
+
+    QDirIterator iterator(
+        localDirectoryPath,
+        QDir::AllEntries | QDir::NoDotAndDotDot,
+        QDirIterator::Subdirectories);
+    const QDir rootDir(localDirectoryPath);
+    while (iterator.hasNext())
+    {
+        const QString localPath = iterator.next();
+        const QFileInfo info(localPath);
+        const QString relativePath = rootDir.relativeFilePath(localPath);
+        const QString remotePath = joinRemotePath(remoteDirectoryPath, relativePath);
+        if (info.isDir())
+        {
+            result = session.fileSystem->createDirectory(remotePath.toStdString());
+            if (!result.success && result.message.find("already exists") == std::string::npos)
+            {
+                if (errorMessage != nullptr)
+                {
+                    *errorMessage = QString("远程子目录创建失败：%1").arg(QString::fromStdString(result.message));
+                }
+                return false;
+            }
+            continue;
+        }
+
+        if (!info.isFile())
+        {
+            continue;
+        }
+
+        TransferJob job;
+        job.id = makeTransferJobId("upload");
+        job.name = info.fileName().toStdString();
+        job.direction = TransferDirection::Upload;
+        job.status = TransferStatus::Pending;
+        job.localPath = localPath.toStdString();
+        job.remotePath = remotePath.toStdString();
+        job.sessionId = session.id.toStdString();
+        job.sessionName = session.displayName.toStdString();
+        job.totalBytes = info.size();
+        job.transferredBytes = 0;
+        enqueueTransferJob(job);
+    }
+
+    return true;
+}
+
 void MainWindow::downloadRemoteFile(RemoteSession &session, const QString &remotePath)
 {
     if (!session.connected)
@@ -1263,6 +1520,94 @@ void MainWindow::downloadRemoteFile(const QString &remotePath)
     {
         showWarningMessage("下载失败", "请先连接远程会话。");
     }
+}
+
+void MainWindow::downloadRemotePath(RemoteSession &session, const QString &remotePath)
+{
+    if (m_localPanel == nullptr || m_localPanel->currentPath().isEmpty())
+    {
+        showWarningMessage("下载失败", "本地目录不可用。");
+        return;
+    }
+
+    const QString localPath = QDir(m_localPanel->currentPath()).filePath(remoteBaseName(remotePath));
+    QString errorMessage;
+    if (enqueueRemoteDirectoryDownload(session, remotePath, localPath, &errorMessage))
+    {
+        processTransferQueue();
+        m_localPanel->refresh();
+        return;
+    }
+
+    downloadRemoteFile(session, remotePath);
+}
+
+bool MainWindow::enqueueRemoteDirectoryDownload(RemoteSession &session, const QString &remoteDirectoryPath, const QString &localDirectoryPath, QString *errorMessage)
+{
+    if (!session.connected)
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage = "请先连接远程会话。";
+        }
+        return false;
+    }
+
+    std::vector<FileItem> children;
+    try
+    {
+        children = session.fileSystem->listDirectory(remoteDirectoryPath.toStdString());
+    }
+    catch (const std::exception &error)
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage = QString::fromUtf8(error.what());
+        }
+        return false;
+    }
+
+    if (!QDir().mkpath(localDirectoryPath))
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage = QString("无法创建本地目录：%1").arg(localDirectoryPath);
+        }
+        return false;
+    }
+
+    for (const FileItem &child : children)
+    {
+        const QString childRemotePath = QString::fromStdString(child.path);
+        const QString childLocalPath = QDir(localDirectoryPath).filePath(QString::fromStdString(child.name));
+        if (child.type == FileItemType::Directory)
+        {
+            if (!enqueueRemoteDirectoryDownload(session, childRemotePath, childLocalPath, errorMessage))
+            {
+                return false;
+            }
+            continue;
+        }
+
+        if (child.type != FileItemType::File && child.type != FileItemType::Other)
+        {
+            continue;
+        }
+
+        TransferJob job;
+        job.id = makeTransferJobId("download");
+        job.name = QString::fromStdString(child.name).toStdString();
+        job.direction = TransferDirection::Download;
+        job.status = TransferStatus::Pending;
+        job.localPath = childLocalPath.toStdString();
+        job.remotePath = childRemotePath.toStdString();
+        job.sessionId = session.id.toStdString();
+        job.sessionName = session.displayName.toStdString();
+        job.totalBytes = child.size;
+        enqueueTransferJob(job);
+    }
+
+    return true;
 }
 
 void MainWindow::fillQuickConnectFromItem(QTreeWidgetItem *item)

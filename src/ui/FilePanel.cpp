@@ -267,6 +267,11 @@ void FilePanel::setRemoteFilesDroppedOnLocalHandler(std::function<void(const QSt
     m_remoteFilesDroppedOnLocal = std::move(handler);
 }
 
+void FilePanel::setRemoteFilesDroppedOnRemoteHandler(std::function<void(const QStringList &, const QString &)> handler)
+{
+    m_remoteFilesDroppedOnRemote = std::move(handler);
+}
+
 QString FilePanel::currentPath() const
 {
     return m_currentPath;
@@ -571,7 +576,7 @@ bool FilePanel::eventFilter(QObject *watched, QEvent *event)
         auto *dropEvent = static_cast<QDropEvent *>(event);
         if (canAcceptTransferDrop(dropEvent->mimeData()))
         {
-            handleTransferDrop(dropEvent->mimeData());
+            handleTransferDrop(dropEvent->mimeData(), dropEvent->position().toPoint());
             dropEvent->acceptProposedAction();
             return true;
         }
@@ -1206,7 +1211,8 @@ bool FilePanel::canAcceptTransferDrop(const QMimeData *mimeData) const
 
     if (m_mode == Mode::RemotePlaceholder)
     {
-        return m_localFilesDroppedOnRemote != nullptr && mimeData->hasUrls();
+        return (m_localFilesDroppedOnRemote != nullptr && mimeData->hasUrls())
+            || (m_remoteFilesDroppedOnRemote != nullptr && mimeData->hasFormat(RemotePathMimeType));
     }
 
     if (m_mode == Mode::Local)
@@ -1217,7 +1223,7 @@ bool FilePanel::canAcceptTransferDrop(const QMimeData *mimeData) const
     return false;
 }
 
-void FilePanel::handleTransferDrop(const QMimeData *mimeData)
+void FilePanel::handleTransferDrop(const QMimeData *mimeData, const QPoint &position)
 {
     if (!canAcceptTransferDrop(mimeData))
     {
@@ -1226,6 +1232,17 @@ void FilePanel::handleTransferDrop(const QMimeData *mimeData)
 
     if (m_mode == Mode::RemotePlaceholder)
     {
+        if (mimeData->hasFormat(RemotePathMimeType) && m_remoteFilesDroppedOnRemote)
+        {
+            QStringList remotePaths = QString::fromUtf8(mimeData->data(RemotePathMimeType)).split('\n', Qt::SkipEmptyParts);
+            remotePaths.removeDuplicates();
+            if (!remotePaths.isEmpty())
+            {
+                m_remoteFilesDroppedOnRemote(remotePaths, remoteDropTargetDirectory(position));
+            }
+            return;
+        }
+
         QStringList localPaths;
         for (const QUrl &url : mimeData->urls())
         {
@@ -1234,7 +1251,7 @@ void FilePanel::handleTransferDrop(const QMimeData *mimeData)
                 continue;
             }
             const QString path = url.toLocalFile();
-            if (QFileInfo(path).isFile())
+            if (QFileInfo::exists(path))
             {
                 localPaths.append(path);
             }
@@ -1280,23 +1297,33 @@ QStringList FilePanel::selectedFileTransferPaths() const
             continue;
         }
 
-        if (m_mode == Mode::Local)
-        {
-            if (QFileInfo(path).isFile())
-            {
-                paths.append(path);
-            }
-            continue;
-        }
-
-        const bool isDirectory = nameItem->data(Qt::UserRole + 1).toBool();
-        if (!isDirectory)
-        {
-            paths.append(path);
-        }
+        paths.append(path);
     }
 
     return paths;
+}
+
+QString FilePanel::remoteDropTargetDirectory(const QPoint &position) const
+{
+    if (m_mode != Mode::RemotePlaceholder)
+    {
+        return {};
+    }
+
+    QTableWidgetItem *item = m_table->itemAt(position);
+    if (item == nullptr)
+    {
+        return m_currentPath.isEmpty() ? "/" : m_currentPath;
+    }
+
+    QTableWidgetItem *nameItem = m_table->item(item->row(), 0);
+    if (nameItem == nullptr)
+    {
+        return m_currentPath.isEmpty() ? "/" : m_currentPath;
+    }
+
+    const bool isDirectory = nameItem->data(Qt::UserRole + 1).toBool();
+    return isDirectory ? nameItem->data(Qt::UserRole).toString() : m_currentPath;
 }
 
 QString FilePanel::remoteChildPath(const QString &name) const

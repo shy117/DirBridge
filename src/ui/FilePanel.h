@@ -57,6 +57,11 @@ public:
      * @param handler Callback receiving remote file paths to download.
      */
     void setRemoteFilesDroppedOnLocalHandler(std::function<void(const QStringList &)> handler);
+    /**
+     * @brief Sets the callback used when remote items are dropped onto a remote directory.
+     * @param handler Callback receiving source remote paths and target remote directory.
+     */
+    void setRemoteFilesDroppedOnRemoteHandler(std::function<void(const QStringList &, const QString &)> handler);
     QString currentPath() const;
     void setRemoteSummary(const QString &curlVersion, bool hasFtp, bool hasSftp);
     void setRemoteItems(const QString &path, const std::vector<FileItem> &items, const QString &status, bool addToHistory = true);
@@ -107,7 +112,8 @@ private:
     void showLocalProperties(const QString &path) const;
     void startDragFromSelection();
     bool canAcceptTransferDrop(const QMimeData *mimeData) const;
-    void handleTransferDrop(const QMimeData *mimeData);
+    void handleTransferDrop(const QMimeData *mimeData, const QPoint &position);
+    QString remoteDropTargetDirectory(const QPoint &position) const;
     QStringList selectedFileTransferPaths() const;
     QString remoteChildPath(const QString &name) const;
     QString remoteSiblingPath(const QString &sourcePath, const QString &newName) const;
@@ -140,6 +146,7 @@ private:
     std::function<void(const QString &)> m_remoteDownloadRequested;
     std::function<void(const QStringList &)> m_localFilesDroppedOnRemote;
     std::function<void(const QStringList &)> m_remoteFilesDroppedOnLocal;
+    std::function<void(const QStringList &, const QString &)> m_remoteFilesDroppedOnRemote;
 
     QPushButton *m_backButton = nullptr;
     QPushButton *m_forwardButton = nullptr;

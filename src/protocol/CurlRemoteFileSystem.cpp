@@ -729,11 +729,6 @@ RemoteOperationResult CurlRemoteFileSystem::rename(const std::string &sourcePath
         return performQuote(m_profile, {"rename " + normalizedSourcePath + " " + normalizedTargetPath});
     }
 
-    if (remoteParentPath(normalizedSourcePath) != remoteParentPath(normalizedTargetPath))
-    {
-        return {false, "ftp rename only supports items in the same parent directory"};
-    }
-
     return performQuoteAtUrl(
         m_profile,
         rootUrl(m_profile),

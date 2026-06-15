@@ -541,6 +541,74 @@ bool checkRemoteMultiSessionWorkflow(MainWindow &window)
 }
 
 /**
+ * @brief Verifies directory upload/download, remote move, and recursive remote delete with the fake backend.
+ * @param window Main window under test.
+ * @return true when directory operations complete through normal MainWindow workflows.
+ */
+bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
+{
+    const QString remotePath = "/home/testuser/remote_test";
+    if (!connectFakeRemoteSession(window, remotePath))
+    {
+        return false;
+    }
+
+    const std::filesystem::path tempRoot = std::filesystem::temp_directory_path() / "dirbridge-ui-directory-smoke";
+    const std::filesystem::path uploadRoot = tempRoot / "upload-src";
+    const std::filesystem::path downloadRoot = tempRoot / "download-target";
+    const std::filesystem::path localDirectory = uploadRoot / "dirbridge-folder";
+    const std::filesystem::path nestedDirectory = localDirectory / "nested";
+    const std::filesystem::path nestedFile = nestedDirectory / "inside.txt";
+    std::filesystem::remove_all(tempRoot);
+    std::filesystem::create_directories(nestedDirectory);
+    {
+        std::ofstream output(nestedFile, std::ios::binary | std::ios::trunc);
+        output << "DirBridge directory smoke\n";
+    }
+    std::filesystem::create_directories(downloadRoot);
+    window.setLocalPathForTesting(QString::fromStdString(downloadRoot.u8string()));
+
+    window.uploadLocalPathForTesting(QString::fromStdString(localDirectory.u8string()));
+    QApplication::processEvents();
+
+    const QString uploadedDirectory = "/home/testuser/remote_test/dirbridge-folder";
+    const QString movedDirectory = "/home/testuser/remote_test/upload/dirbridge-folder";
+    window.moveRemotePathsForTesting({uploadedDirectory}, "/home/testuser/remote_test/upload");
+    QApplication::processEvents();
+
+    window.downloadRemotePathForTesting(movedDirectory);
+    QApplication::processEvents();
+    const std::filesystem::path downloadedFile = downloadRoot / "dirbridge-folder" / "nested" / "inside.txt";
+    if (!std::filesystem::is_regular_file(downloadedFile))
+    {
+        QTextStream(stderr) << "Downloaded remote directory does not contain nested file" << Qt::endl;
+        return false;
+    }
+
+    window.removeRemotePathForTesting(movedDirectory);
+    QApplication::processEvents();
+
+    QLineEdit *remotePathEdit = window.findChild<QLineEdit *>("remotePathEdit");
+    QTableWidget *remoteTable = window.findChild<QTableWidget *>("remoteFileTable");
+    if (remotePathEdit == nullptr || remoteTable == nullptr)
+    {
+        QTextStream(stderr) << "Directory operation smoke UI objects are missing" << Qt::endl;
+        return false;
+    }
+
+    remotePathEdit->setText("/home/testuser/remote_test/upload");
+    QMetaObject::invokeMethod(remotePathEdit, "returnPressed", Qt::DirectConnection);
+    QApplication::processEvents();
+    if (findTableRowByName(remoteTable, "dirbridge-folder") >= 0)
+    {
+        QTextStream(stderr) << "Recursive remote delete did not remove moved directory" << Qt::endl;
+        return false;
+    }
+
+    return true;
+}
+
+/**
  * @brief Runs the remote UI workflow smoke test against the in-memory fake backend.
  * @param window Main window under test.
  * @return true when the fake workflow passes.
@@ -557,7 +625,9 @@ bool checkRemoteUiWorkflow(MainWindow &window)
         "/home/testuser/remote_test",
         {"download", "upload", "edit", "readme.txt"},
         true);
-    return baseWorkflowOk && checkRemoteMultiSessionWorkflow(window);
+    return baseWorkflowOk
+        && checkRemoteMultiSessionWorkflow(window)
+        && checkRemoteDirectoryOperationWorkflow(window);
 }
 
 /**

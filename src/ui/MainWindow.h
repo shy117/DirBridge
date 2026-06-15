@@ -46,16 +46,35 @@ public:
     void uploadLocalFileForTesting(const QString &localPath);
 
     /**
+     * @brief Invokes the normal file-or-directory upload workflow for automated UI tests.
+     * @param localPath Local file or directory path to upload into the current remote directory.
+     */
+    void uploadLocalPathForTesting(const QString &localPath);
+
+    /**
      * @brief Invokes the normal single-file download workflow for automated UI tests.
      * @param remotePath Remote file path to download into the current local directory.
      */
     void downloadRemoteFileForTesting(const QString &remotePath);
 
     /**
+     * @brief Invokes the normal file-or-directory download workflow for automated UI tests.
+     * @param remotePath Remote file or directory path to download into the current local directory.
+     */
+    void downloadRemotePathForTesting(const QString &remotePath);
+
+    /**
      * @brief Invokes the normal remote remove workflow for automated UI cleanup.
      * @param path Remote file or empty directory path to remove.
      */
     void removeRemotePathForTesting(const QString &path);
+
+    /**
+     * @brief Invokes the normal remote move workflow for automated UI tests.
+     * @param sourcePaths Source remote paths to move.
+     * @param targetDirectory Target remote directory.
+     */
+    void moveRemotePathsForTesting(const QStringList &sourcePaths, const QString &targetDirectory);
 
     /**
      * @brief Enables or disables modal message boxes during automated tests.
@@ -124,6 +143,8 @@ private:
     void removeRemotePath(RemoteSession &session, const QString &path);
     void removeRemotePath(const QString &path);
     void renameRemotePath(RemoteSession &session, const QString &sourcePath, const QString &targetPath);
+    bool removeRemotePathRecursive(RemoteSession &session, const QString &path, QString *errorMessage = nullptr);
+    void moveRemotePaths(RemoteSession &session, const QStringList &sourcePaths, const QString &targetDirectory);
     void setRemoteConnectionState(RemoteSession &session, bool connected, const QString &message);
     /**
      * @brief Adds a transfer job to the queue and refreshes the transfer table.
@@ -142,8 +163,12 @@ private:
     void clearFinishedTransferJobs();
     void uploadLocalFile(RemoteSession &session, const QString &localPath);
     void uploadLocalFile(const QString &localPath);
+    void uploadLocalPath(RemoteSession &session, const QString &localPath);
+    bool enqueueLocalDirectoryUpload(RemoteSession &session, const QString &localDirectoryPath, const QString &remoteDirectoryPath, QString *errorMessage = nullptr);
     void downloadRemoteFile(RemoteSession &session, const QString &remotePath);
     void downloadRemoteFile(const QString &remotePath);
+    void downloadRemotePath(RemoteSession &session, const QString &remotePath);
+    bool enqueueRemoteDirectoryDownload(RemoteSession &session, const QString &remoteDirectoryPath, const QString &localDirectoryPath, QString *errorMessage = nullptr);
     void fillQuickConnectFromItem(QTreeWidgetItem *item);
     QString siteDisplayName(const SiteProfile &profile) const;
 

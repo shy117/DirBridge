@@ -236,16 +236,39 @@ RemoteOperationResult FakeRemoteFileSystem::rename(const std::string &sourcePath
     {
         return {false, "remote target item already exists"};
     }
-    if (parentPath(normalizedSource) != parentPath(normalizedTarget))
+    const auto targetParent = m_items.find(parentPath(normalizedTarget));
+    if (targetParent == m_items.end() || targetParent->second.type != FileItemType::Directory)
     {
-        return {false, "cross-directory rename is not supported by fake backend"};
+        return {false, "remote target parent directory does not exist"};
     }
 
     FileItem renamed = sourceItem->second;
     renamed.name = baseName(normalizedTarget);
     renamed.path = normalizedTarget;
+    const bool sourceIsDirectory = sourceItem->second.type == FileItemType::Directory;
     m_items.erase(sourceItem);
     m_items.emplace(normalizedTarget, renamed);
+
+    if (sourceIsDirectory)
+    {
+        std::vector<std::pair<std::string, FileItem>> descendants;
+        for (const auto &[candidatePath, item] : m_items)
+        {
+            if (candidatePath.rfind(normalizedSource + "/", 0) == 0)
+            {
+                FileItem moved = item;
+                moved.path = normalizedTarget + candidatePath.substr(normalizedSource.size());
+                descendants.emplace_back(candidatePath, std::move(moved));
+            }
+        }
+
+        for (const auto &[oldPath, moved] : descendants)
+        {
+            m_items.erase(oldPath);
+            m_items.emplace(moved.path, moved);
+        }
+    }
+
     return {true, "remote item renamed"};
 }
 

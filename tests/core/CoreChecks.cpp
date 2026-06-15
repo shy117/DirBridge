@@ -98,14 +98,27 @@ void checkFakeRemoteFileSystem()
     result = remote.rename("/home/testuser/remote_test/renamed_folder", "/home/testuser/remote_test/upload");
     require(!result.success, "rename over existing target should fail");
 
+    result = remote.createFile("/home/testuser/remote_test/renamed_folder/nested.txt");
+    require(result.success, "create file under renamed directory should succeed");
+
     result = remote.rename("/home/testuser/remote_test/renamed_folder", "/home/testuser/renamed_folder");
-    require(!result.success, "cross-directory rename should fail in fake backend");
+    require(result.success, "cross-directory rename should succeed in fake backend");
+    items = remote.listDirectory("/home/testuser");
+    require(containsPath(items, "/home/testuser/renamed_folder", FileItemType::Directory), "moved directory not listed under target parent");
+    items = remote.listDirectory("/home/testuser/renamed_folder");
+    require(containsPath(items, "/home/testuser/renamed_folder/nested.txt", FileItemType::File), "moved directory child path not updated");
+
+    result = remote.rename("/home/testuser/renamed_folder", "/home/testuser/remote_test/renamed_folder");
+    require(result.success, "move directory back into remote test should succeed");
 
     result = remote.createDirectory("/home/testuser/remote_test/upload/nested");
     require(result.success, "create nested directory should succeed");
 
     result = remote.remove("/home/testuser/remote_test/upload");
     require(!result.success, "remove non-empty directory should fail");
+
+    result = remote.remove("/home/testuser/remote_test/renamed_folder/nested.txt");
+    require(result.success, "remove nested file before empty directory delete should succeed");
 
     result = remote.remove("/home/testuser/remote_test/renamed_folder");
     require(result.success, "remove empty directory should succeed");
