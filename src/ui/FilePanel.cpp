@@ -85,14 +85,19 @@ QString desktopPath()
     return desktop.isEmpty() ? QDir::homePath() : desktop;
 }
 
-QIcon iconForFileItem(QWidget *widget, FileItemType type)
+QIcon iconForFileItem(QWidget *widget, const QFileIconProvider &iconProvider, const QString &name, FileItemType type)
 {
     switch (type)
     {
     case FileItemType::Directory:
         return widget->style()->standardIcon(QStyle::SP_DirIcon);
     case FileItemType::Symlink:
+        return widget->style()->standardIcon(QStyle::SP_FileIcon);
     case FileItemType::File:
+    {
+        const QIcon icon = iconProvider.icon(QFileInfo(name));
+        return icon.isNull() ? widget->style()->standardIcon(QStyle::SP_FileIcon) : icon;
+    }
     case FileItemType::Other:
         return widget->style()->standardIcon(QStyle::SP_FileIcon);
     }
@@ -764,6 +769,11 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
     QAction *newFileAction = nullptr;
     QAction *fileTreeAction = nullptr;
 
+    QMenu *viewMenu = menu.addMenu("查看");
+    fileTreeAction = viewMenu->addAction("文件树");
+    fileTreeAction->setCheckable(true);
+    fileTreeAction->setChecked(isFileTreeVisible());
+
     if (hasSelection)
     {
         if (isLocal)
@@ -788,23 +798,19 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
         removeAction = menu.addAction("删除");
         menu.addSeparator();
         copyPathAction = menu.addAction("复制路径");
-        propertiesAction = menu.addAction("属性");
+        copyFolderPathAction = menu.addAction("复制文件夹路径");
     }
     else
     {
-        QMenu *viewMenu = menu.addMenu("查看");
-        fileTreeAction = viewMenu->addAction("文件树");
-        fileTreeAction->setCheckable(true);
-        fileTreeAction->setChecked(isFileTreeVisible());
-
         copyFolderPathAction = menu.addAction("复制文件夹路径");
-
-        QMenu *newMenu = menu.addMenu("新建");
-        newDirectoryAction = newMenu->addAction("新建文件夹");
-        newFileAction = newMenu->addAction("新建文件");
-
-        propertiesAction = menu.addAction("属性");
     }
+
+    menu.addSeparator();
+    QMenu *newMenu = menu.addMenu("新建");
+    newDirectoryAction = newMenu->addAction("新建文件夹");
+    newFileAction = newMenu->addAction("新建文件");
+
+    propertiesAction = menu.addAction("属性");
 
     QAction *selectedAction = menu.exec(m_table->viewport()->mapToGlobal(position));
     if (selectedAction == nullptr)
@@ -840,13 +846,13 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
 
     if (selectedAction == copyFolderPathAction)
     {
-        QApplication::clipboard()->setText(m_currentPath);
+        QApplication::clipboard()->setText(isLocal ? QDir::toNativeSeparators(m_currentPath) : m_currentPath);
         return;
     }
 
     if (selectedAction == copyPathAction)
     {
-        QApplication::clipboard()->setText(selectedPath);
+        QApplication::clipboard()->setText(isLocal ? QDir::toNativeSeparators(selectedPath) : selectedPath);
         return;
     }
 
@@ -1401,8 +1407,6 @@ void FilePanel::populateRemoteItems(const QString &path, const std::vector<FileI
     m_table->setSortingEnabled(false);
     m_table->setRowCount(0);
 
-    const QIcon directoryIcon = style()->standardIcon(QStyle::SP_DirIcon);
-    const QIcon fileIcon = style()->standardIcon(QStyle::SP_FileIcon);
     const std::vector<FileItem> displayItems = sortedRemoteItems(items, m_remoteSortColumn, m_remoteSortOrder);
 
     for (const FileItem &entry : displayItems)
@@ -1411,9 +1415,10 @@ void FilePanel::populateRemoteItems(const QString &path, const std::vector<FileI
         m_table->insertRow(row);
 
         const bool isDirectory = entry.type == FileItemType::Directory;
+        const QString name = QString::fromStdString(entry.name);
         QTableWidgetItem *nameItem = createItem(
-            QString::fromStdString(entry.name),
-            isDirectory ? directoryIcon : fileIcon);
+            name,
+            iconForFileItem(this, m_iconProvider, name, entry.type));
         nameItem->setData(Qt::UserRole, QString::fromStdString(entry.path));
         nameItem->setData(Qt::UserRole + 1, isDirectory);
 
@@ -1534,8 +1539,9 @@ void FilePanel::updateRemoteTree(const QString &path, const std::vector<FileItem
         const QString childPath = QString::fromStdString(entry.path).isEmpty()
             ? QString("%1/%2").arg(currentPath == "/" ? QString() : currentPath, QString::fromStdString(entry.name))
             : QString::fromStdString(entry.path);
-        auto *child = new QTreeWidgetItem(currentItem, {QString::fromStdString(entry.name)});
-        child->setIcon(0, iconForFileItem(this, entry.type));
+        const QString name = QString::fromStdString(entry.name);
+        auto *child = new QTreeWidgetItem(currentItem, {name});
+        child->setIcon(0, iconForFileItem(this, m_iconProvider, name, entry.type));
         child->setData(0, Qt::UserRole, childPath);
     }
 

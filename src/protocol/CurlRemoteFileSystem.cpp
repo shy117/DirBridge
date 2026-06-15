@@ -35,6 +35,19 @@ struct CurlHandleDeleter
 
 using CurlHandle = std::unique_ptr<CURL, CurlHandleDeleter>;
 
+struct CurlStringDeleter
+{
+    void operator()(char *value) const
+    {
+        if (value != nullptr)
+        {
+            curl_free(value);
+        }
+    }
+};
+
+using CurlString = std::unique_ptr<char, CurlStringDeleter>;
+
 struct CurlSlistDeleter
 {
     void operator()(curl_slist *list) const
@@ -214,11 +227,51 @@ std::string remoteBaseName(const std::string &path)
     return slashIndex == std::string::npos ? normalized : normalized.substr(slashIndex + 1);
 }
 
-std::string directoryUrl(const SiteProfile &profile, const std::string &path)
+std::string escapeUrlPath(CURL *handle, const std::string &path)
+{
+    const std::string normalized = normalizeRemotePath(path);
+    std::ostringstream stream;
+    std::string segment;
+    for (const char character : normalized)
+    {
+        if (character == '/')
+        {
+            if (!segment.empty())
+            {
+                CurlString escaped(curl_easy_escape(handle, segment.c_str(), static_cast<int>(segment.size())));
+                if (!escaped)
+                {
+                    throw std::runtime_error("failed to escape remote URL path");
+                }
+                stream << escaped.get();
+                segment.clear();
+            }
+            stream << '/';
+        }
+        else
+        {
+            segment.push_back(character);
+        }
+    }
+
+    if (!segment.empty())
+    {
+        CurlString escaped(curl_easy_escape(handle, segment.c_str(), static_cast<int>(segment.size())));
+        if (!escaped)
+        {
+            throw std::runtime_error("failed to escape remote URL path");
+        }
+        stream << escaped.get();
+    }
+
+    return stream.str();
+}
+
+std::string directoryUrl(CURL *handle, const SiteProfile &profile, const std::string &path)
 {
     std::ostringstream stream;
     stream << toString(profile.protocol) << "://" << profile.host << ':' << profile.port;
-    stream << normalizeRemotePath(path);
+    stream << escapeUrlPath(handle, path);
     if (stream.str().back() != '/')
     {
         stream << '/';
@@ -226,11 +279,11 @@ std::string directoryUrl(const SiteProfile &profile, const std::string &path)
     return stream.str();
 }
 
-std::string fileUrl(const SiteProfile &profile, const std::string &path)
+std::string fileUrl(CURL *handle, const SiteProfile &profile, const std::string &path)
 {
     std::ostringstream stream;
     stream << toString(profile.protocol) << "://" << profile.host << ':' << profile.port;
-    stream << normalizeRemotePath(path);
+    stream << escapeUrlPath(handle, path);
     return stream.str();
 }
 
@@ -528,7 +581,7 @@ std::vector<FileItem> CurlRemoteFileSystem::listDirectory(const std::string &pat
 
     std::string listing;
     char errorBuffer[CURL_ERROR_SIZE] = {};
-    const std::string url = directoryUrl(m_profile, path);
+    const std::string url = directoryUrl(handle.get(), m_profile, path);
 
     setCurlOption(handle.get(), CURLOPT_URL, url.c_str());
     applyProfileOptions(handle.get(), m_profile);
@@ -709,7 +762,7 @@ RemoteOperationResult CurlRemoteFileSystem::uploadFile(const std::string &localP
     }
 
     char errorBuffer[CURL_ERROR_SIZE] = {};
-    const std::string url = fileUrl(m_profile, remotePath);
+    const std::string url = fileUrl(handle.get(), m_profile, remotePath);
     try
     {
         setCurlOption(handle.get(), CURLOPT_URL, url.c_str());
@@ -771,7 +824,7 @@ RemoteOperationResult CurlRemoteFileSystem::downloadFile(const std::string &remo
     }
 
     char errorBuffer[CURL_ERROR_SIZE] = {};
-    const std::string url = fileUrl(m_profile, remotePath);
+    const std::string url = fileUrl(handle.get(), m_profile, remotePath);
     try
     {
         setCurlOption(handle.get(), CURLOPT_URL, url.c_str());
