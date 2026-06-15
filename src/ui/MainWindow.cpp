@@ -105,6 +105,8 @@ QString transferStatusText(TransferStatus status)
         return "失败";
     case TransferStatus::Canceled:
         return "已取消";
+    case TransferStatus::Canceling:
+        return "取消中";
     }
 
     return "等待中";
@@ -418,7 +420,27 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
 
     auto *bottomTabs = new QTabWidget(verticalSplitter);
     bottomTabs->setObjectName("bottomTabs");
-    m_transferTable = new QTreeWidget(bottomTabs);
+    auto *transferTab = new QWidget(bottomTabs);
+    auto *transferLayout = new QVBoxLayout(transferTab);
+    transferLayout->setContentsMargins(0, 0, 0, 0);
+    transferLayout->setSpacing(4);
+
+    auto *transferToolbar = new QWidget(transferTab);
+    auto *transferToolbarLayout = new QHBoxLayout(transferToolbar);
+    transferToolbarLayout->setContentsMargins(0, 0, 0, 0);
+    transferToolbarLayout->setSpacing(4);
+    m_cancelTransferButton = new QPushButton("取消", transferToolbar);
+    m_cancelTransferButton->setObjectName("transferCancelButton");
+    m_retryTransferButton = new QPushButton("重试", transferToolbar);
+    m_retryTransferButton->setObjectName("transferRetryButton");
+    m_clearFinishedTransfersButton = new QPushButton("清理", transferToolbar);
+    m_clearFinishedTransfersButton->setObjectName("transferClearFinishedButton");
+    transferToolbarLayout->addWidget(m_cancelTransferButton);
+    transferToolbarLayout->addWidget(m_retryTransferButton);
+    transferToolbarLayout->addWidget(m_clearFinishedTransfersButton);
+    transferToolbarLayout->addStretch(1);
+
+    m_transferTable = new QTreeWidget(transferTab);
     m_transferTable->setObjectName("transferTable");
     m_transferTable->setHeaderLabels({"名称", "会话", "方向", "状态", "进度", "大小", "本地路径", "<->", "远程路径", "消息"});
     m_transferTable->header()->setStretchLastSection(true);
@@ -426,6 +448,13 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     m_transferTable->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     m_transferTable->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     m_transferTable->header()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    transferLayout->addWidget(transferToolbar);
+    transferLayout->addWidget(m_transferTable, 1);
+
+    connect(m_transferTable, &QTreeWidget::itemSelectionChanged, this, &MainWindow::updateTransferActionButtons);
+    connect(m_cancelTransferButton, &QPushButton::clicked, this, &MainWindow::cancelSelectedTransferJob);
+    connect(m_retryTransferButton, &QPushButton::clicked, this, &MainWindow::retrySelectedTransferJob);
+    connect(m_clearFinishedTransfersButton, &QPushButton::clicked, this, &MainWindow::clearFinishedTransferJobs);
 
     m_logView = new QTreeWidget(bottomTabs);
     m_logView->setObjectName("logView");
@@ -434,7 +463,7 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     m_logView->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     m_logView->header()->setStretchLastSection(true);
 
-    bottomTabs->addTab(m_transferTable, "传输");
+    bottomTabs->addTab(transferTab, "传输");
     bottomTabs->addTab(m_logView, "日志");
 
     verticalSplitter->addWidget(fileSplitter);
@@ -991,6 +1020,7 @@ void MainWindow::processTransferQueue()
     manager.setQueueChangedCallback([this]() {
         refreshTransferTable();
     });
+    manager.setConcurrencyLimit(1);
     manager.processPending();
     refreshTransferTable();
 }
@@ -1020,6 +1050,98 @@ void MainWindow::refreshTransferTable()
         item->setData(0, Qt::UserRole, QString::fromStdString(job.id));
         m_transferTable->addTopLevelItem(item);
     }
+    updateTransferActionButtons();
+}
+
+void MainWindow::updateTransferActionButtons()
+{
+    const QString selectedId = selectedTransferJobId();
+    const TransferJob *selectedJob = selectedId.isEmpty() ? nullptr : m_transferQueue.find(selectedId.toStdString());
+
+    const bool canCancel = selectedJob != nullptr
+        && (selectedJob->status == TransferStatus::Pending || selectedJob->status == TransferStatus::Running);
+    const bool canRetry = selectedJob != nullptr
+        && (selectedJob->status == TransferStatus::Failed || selectedJob->status == TransferStatus::Canceled);
+    const bool hasFinishedJobs = std::any_of(m_transferQueue.jobs().begin(), m_transferQueue.jobs().end(), [](const TransferJob &job) {
+        return job.status == TransferStatus::Completed
+            || job.status == TransferStatus::Failed
+            || job.status == TransferStatus::Canceled;
+    });
+
+    if (m_cancelTransferButton != nullptr)
+    {
+        m_cancelTransferButton->setEnabled(canCancel);
+    }
+    if (m_retryTransferButton != nullptr)
+    {
+        m_retryTransferButton->setEnabled(canRetry);
+    }
+    if (m_clearFinishedTransfersButton != nullptr)
+    {
+        m_clearFinishedTransfersButton->setEnabled(hasFinishedJobs);
+    }
+}
+
+QString MainWindow::selectedTransferJobId() const
+{
+    if (m_transferTable == nullptr || m_transferTable->selectedItems().isEmpty())
+    {
+        return {};
+    }
+
+    QTreeWidgetItem *item = m_transferTable->currentItem();
+    if (item == nullptr)
+    {
+        item = m_transferTable->selectedItems().first();
+    }
+
+    return item == nullptr ? QString() : item->data(0, Qt::UserRole).toString();
+}
+
+void MainWindow::cancelSelectedTransferJob()
+{
+    const QString id = selectedTransferJobId();
+    if (id.isEmpty())
+    {
+        return;
+    }
+
+    if (m_transferQueue.cancel(id.toStdString(), "用户取消传输"))
+    {
+        appendLog("INFO", QString("传输任务已取消：%1").arg(id));
+        refreshTransferTable();
+    }
+}
+
+void MainWindow::retrySelectedTransferJob()
+{
+    const QString id = selectedTransferJobId();
+    if (id.isEmpty())
+    {
+        return;
+    }
+
+    const QString retryId = QString::fromStdString(makeTransferJobId("retry"));
+    if (m_transferQueue.retry(id.toStdString(), retryId.toStdString()) == nullptr)
+    {
+        return;
+    }
+
+    appendLog("INFO", QString("传输任务已重试：%1 -> %2").arg(id, retryId));
+    refreshTransferTable();
+    processTransferQueue();
+}
+
+void MainWindow::clearFinishedTransferJobs()
+{
+    const std::size_t removed = m_transferQueue.clearFinished();
+    if (removed == 0)
+    {
+        return;
+    }
+
+    appendLog("INFO", QString("已清理 %1 个传输历史任务").arg(removed));
+    refreshTransferTable();
 }
 
 void MainWindow::uploadLocalFile(RemoteSession &session, const QString &localPath)

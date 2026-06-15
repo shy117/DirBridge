@@ -207,6 +207,8 @@ void checkTransferJob()
     require(toString(download.status) == "failed", "failed status text mismatch");
     download.status = TransferStatus::Canceled;
     require(toString(download.status) == "canceled", "canceled status text mismatch");
+    download.status = TransferStatus::Canceling;
+    require(toString(download.status) == "canceling", "canceling status text mismatch");
 
     download.transferredBytes = -10;
     require(progressPercent(download) == 0, "negative transfer progress should clamp to 0");
@@ -242,6 +244,7 @@ void checkTransferQueueAndManager()
     queue.enqueue(canceled);
     require(queue.cancel(canceled.id, "user canceled"), "pending job should be cancelable");
     require(queue.find(canceled.id)->status == TransferStatus::Canceled, "canceled job status mismatch");
+    require(queue.find(canceled.id)->errorMessage == "user canceled", "canceled job should keep cancellation reason");
 
     TransferJob upload;
     upload.id = "queued-upload";
@@ -264,6 +267,7 @@ void checkTransferQueueAndManager()
 
     int notifications = 0;
     TransferManager manager(remote, queue);
+    manager.setConcurrencyLimit(0);
     manager.setQueueChangedCallback([&notifications]() {
         ++notifications;
     });
@@ -279,6 +283,62 @@ void checkTransferQueueAndManager()
     require(failedDownload->status == TransferStatus::Failed, "missing download should fail");
     require(!failedDownload->errorMessage.empty(), "failed download should keep error message");
     require(notifications >= 4, "manager should notify on running and terminal state changes");
+
+    const TransferJob *retryJob = queue.retry(downloadMissing.id, "retry-missing-download");
+    require(retryJob != nullptr, "failed job should be retryable");
+    require(retryJob->status == TransferStatus::Pending, "retry job should be pending");
+    require(retryJob->remotePath == downloadMissing.remotePath, "retry job should keep remote path");
+    require(retryJob->localPath == downloadMissing.localPath, "retry job should keep local path");
+    require(retryJob->sessionId == downloadMissing.sessionId, "retry job should keep session id");
+    require(queue.retry(upload.id, "retry-completed-upload") == nullptr, "completed job should not be retryable");
+
+    const std::size_t removed = queue.clearFinished();
+    require(removed >= 3, "clearFinished should remove completed, failed, and canceled jobs");
+    require(queue.find(upload.id) == nullptr, "clearFinished should remove completed upload");
+    require(queue.find(canceled.id) == nullptr, "clearFinished should remove canceled job");
+    require(queue.find(downloadMissing.id) == nullptr, "clearFinished should remove failed download");
+
+    TransferQueue cancelingQueue;
+    TransferJob cancelingUpload;
+    cancelingUpload.id = "cancel-running-upload";
+    cancelingUpload.name = "cancel-running-upload.txt";
+    cancelingUpload.direction = TransferDirection::Upload;
+    cancelingUpload.status = TransferStatus::Pending;
+    cancelingUpload.localPath = uploadSource.string();
+    cancelingUpload.remotePath = "/home/testuser/remote_test/cancel-running-upload.txt";
+    cancelingQueue.enqueue(cancelingUpload);
+
+    TransferManager cancelingManager(remote, cancelingQueue);
+    cancelingManager.setQueueChangedCallback([&cancelingQueue]() {
+        TransferJob *job = cancelingQueue.find("cancel-running-upload");
+        if (job != nullptr && job->status == TransferStatus::Running)
+        {
+            cancelingQueue.cancel(job->id, "cancel requested while running");
+        }
+    });
+    cancelingManager.processPending();
+    const TransferJob *canceledRunningJob = cancelingQueue.find(cancelingUpload.id);
+    require(canceledRunningJob != nullptr, "running-cancel job should remain in queue");
+    require(canceledRunningJob->status == TransferStatus::Canceled, "running cancel should finish as canceled");
+    require(canceledRunningJob->errorMessage == "cancel requested while running", "running cancel should keep cancellation reason");
+
+    TransferQueue missingSessionQueue;
+    TransferJob missingSessionJob;
+    missingSessionJob.id = "missing-session";
+    missingSessionJob.name = "missing-session.txt";
+    missingSessionJob.direction = TransferDirection::Download;
+    missingSessionJob.status = TransferStatus::Pending;
+    missingSessionJob.remotePath = "/home/testuser/remote_test/missing-session.txt";
+    missingSessionJob.localPath = (tempRoot / "missing-session.txt").string();
+    missingSessionQueue.enqueue(missingSessionJob);
+    TransferManager missingSessionManager([](const TransferJob &) -> RemoteFileSystem * {
+        return nullptr;
+    }, missingSessionQueue);
+    missingSessionManager.processPending();
+    const TransferJob *failedMissingSessionJob = missingSessionQueue.find(missingSessionJob.id);
+    require(failedMissingSessionJob != nullptr, "missing-session job should remain in queue");
+    require(failedMissingSessionJob->status == TransferStatus::Failed, "missing remote session should fail job");
+    require(failedMissingSessionJob->errorMessage == "remote session is not available", "missing session error message mismatch");
 }
 }
 

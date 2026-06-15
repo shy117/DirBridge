@@ -65,6 +65,25 @@ bool checkRemoteUiObjects(MainWindow &window)
     ok = requireChild<QTreeWidget>(window, "remoteFileTree") && ok;
     ok = requireChild<QTableWidget>(window, "remoteFileTable") && ok;
     ok = requireChild<QLabel>(window, "remoteStateLabel") && ok;
+    QPushButton *cancelTransferButton = window.findChild<QPushButton *>("transferCancelButton");
+    QPushButton *retryTransferButton = window.findChild<QPushButton *>("transferRetryButton");
+    QPushButton *clearFinishedButton = window.findChild<QPushButton *>("transferClearFinishedButton");
+    if (cancelTransferButton == nullptr)
+    {
+        QTextStream(stderr) << "Missing UI object: transferCancelButton" << Qt::endl;
+        ok = false;
+    }
+    if (retryTransferButton == nullptr)
+    {
+        QTextStream(stderr) << "Missing UI object: transferRetryButton" << Qt::endl;
+        ok = false;
+    }
+    if (clearFinishedButton == nullptr)
+    {
+        QTextStream(stderr) << "Missing UI object: transferClearFinishedButton" << Qt::endl;
+        ok = false;
+    }
+
     QTreeWidget *transferTable = window.findChild<QTreeWidget *>("transferTable");
     if (transferTable == nullptr)
     {
@@ -124,6 +143,23 @@ bool checkRemoteUiObjects(MainWindow &window)
             || firstItem->text(8).trimmed().isEmpty())
         {
             QTextStream(stderr) << "Transfer table initial row is incomplete" << Qt::endl;
+            ok = false;
+        }
+
+        transferTable->setCurrentItem(firstItem);
+        if (cancelTransferButton != nullptr && cancelTransferButton->isEnabled())
+        {
+            QTextStream(stderr) << "Cancel button should be disabled for canceled initial row" << Qt::endl;
+            ok = false;
+        }
+        if (retryTransferButton != nullptr && !retryTransferButton->isEnabled())
+        {
+            QTextStream(stderr) << "Retry button should be enabled for canceled initial row" << Qt::endl;
+            ok = false;
+        }
+        if (clearFinishedButton != nullptr && !clearFinishedButton->isEnabled())
+        {
+            QTextStream(stderr) << "Clear finished button should be enabled for canceled initial row" << Qt::endl;
             ok = false;
         }
     }

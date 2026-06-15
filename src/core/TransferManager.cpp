@@ -1,5 +1,6 @@
 #include "core/TransferManager.h"
 
+#include <algorithm>
 #include <utility>
 
 TransferManager::TransferManager(RemoteFileSystem &remoteFileSystem, TransferQueue &queue)
@@ -21,16 +22,35 @@ void TransferManager::setQueueChangedCallback(QueueChangedCallback callback)
     m_queueChangedCallback = std::move(callback);
 }
 
+void TransferManager::setConcurrencyLimit(std::size_t limit)
+{
+    m_concurrencyLimit = std::max<std::size_t>(1, limit);
+}
+
 void TransferManager::processPending()
 {
-    while (TransferJob *job = m_queue.nextPending())
+    while (m_queue.runningCount() < m_concurrencyLimit)
     {
+        TransferJob *job = m_queue.nextPending();
+        if (job == nullptr)
+        {
+            return;
+        }
+
         job->status = TransferStatus::Running;
         job->errorMessage.clear();
         notifyQueueChanged();
 
         const RemoteOperationResult result = runJob(*job);
-        if (result.success)
+        if (job->status == TransferStatus::Canceling)
+        {
+            job->status = TransferStatus::Canceled;
+            if (job->errorMessage.empty())
+            {
+                job->errorMessage = "transfer canceled";
+            }
+        }
+        else if (result.success)
         {
             job->status = TransferStatus::Completed;
             if (job->totalBytes >= 0)

@@ -135,6 +135,11 @@ private:
      */
     void processTransferQueue();
     void refreshTransferTable();
+    void updateTransferActionButtons();
+    QString selectedTransferJobId() const;
+    void cancelSelectedTransferJob();
+    void retrySelectedTransferJob();
+    void clearFinishedTransferJobs();
     void uploadLocalFile(RemoteSession &session, const QString &localPath);
     void uploadLocalFile(const QString &localPath);
     void downloadRemoteFile(RemoteSession &session, const QString &remotePath);
@@ -163,6 +168,9 @@ private:
     QTreeWidget *m_sessionTree = nullptr;
     QDockWidget *m_sessionDock = nullptr;
     QTreeWidget *m_transferTable = nullptr;
+    QPushButton *m_cancelTransferButton = nullptr;
+    QPushButton *m_retryTransferButton = nullptr;
+    QPushButton *m_clearFinishedTransfersButton = nullptr;
     QTreeWidget *m_logView = nullptr;
     FilePanel *m_localPanel = nullptr;
     QTabWidget *m_remoteTabs = nullptr;

@@ -3,6 +3,7 @@
 
 #include "core/TransferJob.h"
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,20 @@ public:
     bool cancel(const std::string &id, const std::string &message = {});
 
     /**
+     * @brief Enqueues a retry copy of a failed or canceled job.
+     * @param id Original job id to retry.
+     * @param retryId Unique id for the new retry job.
+     * @return Pointer to the new pending job, or nullptr when retry is not allowed.
+     */
+    const TransferJob *retry(const std::string &id, const std::string &retryId);
+
+    /**
+     * @brief Removes completed, failed, and canceled jobs from history.
+     * @return Number of jobs removed.
+     */
+    std::size_t clearFinished();
+
+    /**
      * @brief Finds a mutable job by id.
      * @param id Job id to search.
      * @return Pointer to the job, or nullptr when not found.
@@ -50,6 +65,12 @@ public:
      * @return Pointer to the next pending job, or nullptr when the queue is idle.
      */
     TransferJob *nextPending();
+
+    /**
+     * @brief Counts jobs currently in the running state.
+     * @return Number of running jobs.
+     */
+    std::size_t runningCount() const;
 
     /**
      * @brief Returns all jobs in display order.

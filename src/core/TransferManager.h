@@ -4,6 +4,7 @@
 #include "core/RemoteFileSystem.h"
 #include "core/TransferQueue.h"
 
+#include <cstddef>
 #include <functional>
 
 class TransferManager
@@ -33,10 +34,13 @@ public:
     void setQueueChangedCallback(QueueChangedCallback callback);
 
     /**
-     * @brief Runs all pending jobs sequentially.
-     *
-     * V1 uses a single-worker scheduler. Later versions can keep this API and
-     * add cancellation, retry, and concurrency limits behind the manager.
+     * @brief Sets the maximum number of jobs that may run at once.
+     * @param limit Positive concurrency limit. Values below 1 are treated as 1.
+     */
+    void setConcurrencyLimit(std::size_t limit);
+
+    /**
+     * @brief Runs pending jobs while respecting the configured concurrency limit.
      */
     void processPending();
 
@@ -48,6 +52,7 @@ private:
     RemoteResolver m_remoteResolver;
     TransferQueue &m_queue;
     QueueChangedCallback m_queueChangedCallback;
+    std::size_t m_concurrencyLimit = 1;
 };
 
 #endif // DIRBRIDGE_CORE_TRANSFERMANAGER_H

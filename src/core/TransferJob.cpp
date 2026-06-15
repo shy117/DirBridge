@@ -29,6 +29,8 @@ std::string toString(TransferStatus status)
         return "failed";
     case TransferStatus::Canceled:
         return "canceled";
+    case TransferStatus::Canceling:
+        return "canceling";
     }
 
     return "pending";

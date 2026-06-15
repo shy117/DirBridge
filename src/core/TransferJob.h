@@ -16,7 +16,8 @@ enum class TransferStatus
     Running,
     Completed,
     Failed,
-    Canceled
+    Canceled,
+    Canceling
 };
 
 struct TransferJob
