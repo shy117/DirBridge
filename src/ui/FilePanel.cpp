@@ -16,6 +16,7 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMap>
 #include <QMenu>
 #include <QMimeData>
 #include <QMessageBox>
@@ -150,13 +151,6 @@ int compareRemoteItemColumn(const FileItem &left, const FileItem &right, int col
     }
 }
 
-/**
- * @brief Returns a display-order copy that keeps directories before files.
- * @param items Remote items returned by the backend.
- * @param column Header column selected by the user.
- * @param order Sort order selected by repeated header clicks.
- * @return Sorted copy for table rendering.
- */
 std::vector<FileItem> sortedRemoteItems(const std::vector<FileItem> &items, int column, Qt::SortOrder order)
 {
     std::vector<FileItem> sorted = items;
@@ -165,7 +159,7 @@ std::vector<FileItem> sortedRemoteItems(const std::vector<FileItem> &items, int 
         const bool rightDirectory = right.type == FileItemType::Directory;
         if (leftDirectory != rightDirectory)
         {
-            return leftDirectory;
+            return order == Qt::AscendingOrder ? leftDirectory : rightDirectory;
         }
 
         int comparison = compareRemoteItemColumn(left, right, column);
@@ -288,6 +282,12 @@ void FilePanel::setRemoteSummary(const QString &curlVersion, bool hasFtp, bool h
         .arg(curlVersion)
         .arg(hasFtp ? "可用" : "不可用")
         .arg(hasSftp ? "可用" : "不可用"));
+}
+
+void FilePanel::setRemoteKnownDirectories(const QStringList &directories)
+{
+    m_remoteKnownDirectories = directories;
+    m_remoteKnownDirectories.removeDuplicates();
 }
 
 void FilePanel::setRemoteItems(const QString &path, const std::vector<FileItem> &items, const QString &status, bool addToHistory)
@@ -1545,33 +1545,55 @@ void FilePanel::updateRemoteTree(const QString &path, const std::vector<FileItem
     root->setIcon(0, rootIcon);
     root->setData(0, Qt::UserRole, "/");
 
-    QTreeWidgetItem *currentItem = root;
-    QString accumulatedPath;
-    const QStringList pathParts = currentPath.split('/', Qt::SkipEmptyParts);
-    for (const QString &part : pathParts)
-    {
-        accumulatedPath += "/" + part;
-        auto *partItem = new QTreeWidgetItem(currentItem, {part});
-        partItem->setIcon(0, directoryIcon);
-        partItem->setData(0, Qt::UserRole, accumulatedPath);
-        currentItem->setExpanded(true);
-        currentItem = partItem;
-    }
+    QMap<QString, QTreeWidgetItem *> treeItems;
+    treeItems.insert("/", root);
 
+    QStringList directories = m_remoteKnownDirectories;
+    directories.append(currentPath);
     for (const FileItem &entry : items)
     {
-        if (entry.type == FileItemType::File)
+        if (entry.type == FileItemType::Directory)
+        {
+            directories.append(QString::fromStdString(entry.path));
+        }
+    }
+    directories.removeDuplicates();
+    directories.sort(Qt::CaseInsensitive);
+
+    QTreeWidgetItem *currentItem = root;
+    for (QString directoryPath : directories)
+    {
+        if (directoryPath.isEmpty())
+        {
+            continue;
+        }
+        if (!directoryPath.startsWith('/'))
+        {
+            directoryPath.prepend('/');
+        }
+        while (directoryPath.size() > 1 && directoryPath.endsWith('/'))
+        {
+            directoryPath.chop(1);
+        }
+        if (directoryPath == "/" || treeItems.contains(directoryPath))
         {
             continue;
         }
 
-        const QString childPath = QString::fromStdString(entry.path).isEmpty()
-            ? QString("%1/%2").arg(currentPath == "/" ? QString() : currentPath, QString::fromStdString(entry.name))
-            : QString::fromStdString(entry.path);
-        const QString name = QString::fromStdString(entry.name);
-        auto *child = new QTreeWidgetItem(currentItem, {name});
-        child->setIcon(0, iconForFileItem(this, m_iconProvider, name, entry.type));
-        child->setData(0, Qt::UserRole, childPath);
+        const int slashIndex = directoryPath.lastIndexOf('/');
+        const QString parentPath = slashIndex <= 0 ? "/" : directoryPath.left(slashIndex);
+        QTreeWidgetItem *parentItem = treeItems.value(parentPath, root);
+        const QString name = directoryPath.mid(slashIndex + 1);
+
+        auto *child = new QTreeWidgetItem(parentItem, {name});
+        child->setIcon(0, directoryIcon);
+        child->setData(0, Qt::UserRole, directoryPath);
+        treeItems.insert(directoryPath, child);
+        parentItem->setExpanded(true);
+        if (directoryPath == currentPath)
+        {
+            currentItem = child;
+        }
     }
 
     currentItem->setExpanded(true);

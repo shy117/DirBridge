@@ -64,6 +64,7 @@ public:
     void setRemoteFilesDroppedOnRemoteHandler(std::function<void(const QStringList &, const QString &)> handler);
     QString currentPath() const;
     void setRemoteSummary(const QString &curlVersion, bool hasFtp, bool hasSftp);
+    void setRemoteKnownDirectories(const QStringList &directories);
     void setRemoteItems(const QString &path, const std::vector<FileItem> &items, const QString &status, bool addToHistory = true);
     void setRemoteDisconnected(const QString &status);
     void setRemoteError(const QString &status);
@@ -136,6 +137,7 @@ private:
     Qt::SortOrder m_remoteSortOrder = Qt::AscendingOrder;
     QFileIconProvider m_iconProvider;
     std::vector<FileItem> m_remoteItems;
+    QStringList m_remoteKnownDirectories;
     std::function<void(const QString &, bool)> m_remotePathRequested;
     std::function<void()> m_remoteRefreshRequested;
     std::function<void(const QString &)> m_remoteCreateDirectoryRequested;

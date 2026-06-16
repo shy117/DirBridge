@@ -152,6 +152,34 @@ QString transferSizeText(std::int64_t bytes)
 
     return QString("%1 Bytes").arg(bytes);
 }
+
+QStringList ancestorRemoteDirectories(QString path)
+{
+    if (path.isEmpty())
+    {
+        path = "/";
+    }
+    if (!path.startsWith('/'))
+    {
+        path.prepend('/');
+    }
+    while (path.size() > 1 && path.endsWith('/'))
+    {
+        path.chop(1);
+    }
+
+    QStringList directories;
+    directories << "/";
+    QString accumulated;
+    const QStringList parts = path.split('/', Qt::SkipEmptyParts);
+    for (const QString &part : parts)
+    {
+        accumulated += "/" + part;
+        directories << accumulated;
+    }
+    directories.removeDuplicates();
+    return directories;
+}
 }
 
 MainWindow::MainWindow(const DependencyCheckResult &dependencyCheck, QWidget *parent)
@@ -534,17 +562,7 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     verticalSplitter->setStretchFactor(1, 1);
 
     setCentralWidget(verticalSplitter);
-
-    TransferJob sampleJob;
-    sampleJob.id = "sample-upload";
-    sampleJob.name = "传输任务模型占位";
-    sampleJob.direction = TransferDirection::Upload;
-    sampleJob.status = TransferStatus::Canceled;
-    sampleJob.localPath = "本地路径待选择";
-    sampleJob.remotePath = "远程路径待选择";
-    sampleJob.sessionId = "sample-session";
-    sampleJob.sessionName = "会话待选择";
-    enqueueTransferJob(sampleJob);
+    updateTransferActionButtons();
 }
 
 MainWindow::RemoteSession *MainWindow::createRemoteSession(const SiteProfile &profile, std::unique_ptr<RemoteFileSystem> fileSystem)
@@ -866,7 +884,34 @@ bool MainWindow::loadRemotePath(RemoteSession &session, const QString &path, boo
     try
     {
         const std::vector<FileItem> items = session.fileSystem->listDirectory(normalizedPath.toStdString());
+        QStringList knownDirectories = ancestorRemoteDirectories(normalizedPath);
+        for (const QString &directory : ancestorRemoteDirectories(normalizedPath))
+        {
+            try
+            {
+                const std::vector<FileItem> siblingItems = session.fileSystem->listDirectory(directory.toStdString());
+                for (const FileItem &sibling : siblingItems)
+                {
+                    if (sibling.type == FileItemType::Directory)
+                    {
+                        knownDirectories << QString::fromStdString(sibling.path);
+                    }
+                }
+            }
+            catch (const std::exception &)
+            {
+            }
+        }
+        for (const FileItem &item : items)
+        {
+            if (item.type == FileItemType::Directory)
+            {
+                knownDirectories << QString::fromStdString(item.path);
+            }
+        }
+        knownDirectories.removeDuplicates();
         session.currentPath = normalizedPath;
+        session.panel->setRemoteKnownDirectories(knownDirectories);
         session.panel->setRemoteItems(
             session.currentPath,
             items,

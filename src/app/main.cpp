@@ -12,6 +12,7 @@
 #include <QTextStream>
 #include <QTimer>
 #include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 
 #include <cstdlib>
 #include <chrono>
@@ -90,11 +91,6 @@ bool checkRemoteUiObjects(MainWindow &window)
         QTextStream(stderr) << "Missing UI object: transferTable" << Qt::endl;
         ok = false;
     }
-    else if (transferTable->topLevelItemCount() == 0)
-    {
-        QTextStream(stderr) << "Transfer table has no initial rows" << Qt::endl;
-        ok = false;
-    }
     ok = requireChild<QTreeWidget>(window, "logView") && ok;
 
     QComboBox *quickProtocolCombo = window.findChild<QComboBox *>("quickProtocolCombo");
@@ -128,38 +124,32 @@ bool checkRemoteUiObjects(MainWindow &window)
         ok = false;
     }
 
-    if (transferTable != nullptr && transferTable->topLevelItemCount() > 0)
+    if (transferTable != nullptr)
     {
-        QTreeWidgetItem *firstItem = transferTable->topLevelItem(0);
         if (transferTable->columnCount() < 10)
         {
             QTextStream(stderr) << "Transfer table column count is less than 10" << Qt::endl;
             ok = false;
         }
-        if (firstItem->text(0).trimmed().isEmpty()
-            || firstItem->text(1).trimmed().isEmpty()
-            || firstItem->text(2).trimmed().isEmpty()
-            || firstItem->text(6).trimmed().isEmpty()
-            || firstItem->text(8).trimmed().isEmpty())
+        if (transferTable->topLevelItemCount() != 0)
         {
-            QTextStream(stderr) << "Transfer table initial row is incomplete" << Qt::endl;
+            QTextStream(stderr) << "Transfer table should not contain placeholder rows" << Qt::endl;
             ok = false;
         }
 
-        transferTable->setCurrentItem(firstItem);
         if (cancelTransferButton != nullptr && cancelTransferButton->isEnabled())
         {
-            QTextStream(stderr) << "Cancel button should be disabled for canceled initial row" << Qt::endl;
+            QTextStream(stderr) << "Cancel button should be disabled without a selected transfer" << Qt::endl;
             ok = false;
         }
-        if (retryTransferButton != nullptr && !retryTransferButton->isEnabled())
+        if (retryTransferButton != nullptr && retryTransferButton->isEnabled())
         {
-            QTextStream(stderr) << "Retry button should be enabled for canceled initial row" << Qt::endl;
+            QTextStream(stderr) << "Retry button should be disabled without a selected transfer" << Qt::endl;
             ok = false;
         }
-        if (clearFinishedButton != nullptr && !clearFinishedButton->isEnabled())
+        if (clearFinishedButton != nullptr && clearFinishedButton->isEnabled())
         {
-            QTextStream(stderr) << "Clear finished button should be enabled for canceled initial row" << Qt::endl;
+            QTextStream(stderr) << "Clear finished button should be disabled without transfer history" << Qt::endl;
             ok = false;
         }
     }
@@ -210,6 +200,25 @@ int findTableRowByName(QTableWidget *table, const QString &name)
     }
 
     return -1;
+}
+
+bool treeContainsText(QTreeWidget *tree, const QString &text)
+{
+    if (tree == nullptr)
+    {
+        return false;
+    }
+
+    QTreeWidgetItemIterator iterator(tree);
+    while (*iterator != nullptr)
+    {
+        if ((*iterator)->text(0) == text)
+        {
+            return true;
+        }
+        ++iterator;
+    }
+    return false;
 }
 
 /**
@@ -322,12 +331,13 @@ bool checkRemoteUiWorkflow(
     QLineEdit *remotePathEdit = window.findChild<QLineEdit *>("remotePathEdit");
     QLabel *remoteStateLabel = window.findChild<QLabel *>("remoteStateLabel");
     QTableWidget *remoteTable = window.findChild<QTableWidget *>("remoteFileTable");
+    QTreeWidget *remoteTree = window.findChild<QTreeWidget *>("remoteFileTree");
     QPushButton *remoteUpButton = window.findChild<QPushButton *>("remoteUpButton");
     QAction *disconnectAction = findActionByText(window, "断开");
 
     if (protocolCombo == nullptr || hostEdit == nullptr || portEdit == nullptr || userEdit == nullptr
         || passwordEdit == nullptr || quickRemotePathEdit == nullptr || connectButton == nullptr
-        || remotePathEdit == nullptr || remoteStateLabel == nullptr || remoteTable == nullptr
+        || remotePathEdit == nullptr || remoteStateLabel == nullptr || remoteTable == nullptr || remoteTree == nullptr
         || remoteUpButton == nullptr || disconnectAction == nullptr)
     {
         QTextStream(stderr) << "Remote UI workflow prerequisites are incomplete" << Qt::endl;
@@ -358,6 +368,14 @@ bool checkRemoteUiWorkflow(
         if (findTableRowByName(remoteTable, name) < 0)
         {
             QTextStream(stderr) << "Remote table does not show expected item: " << name << Qt::endl;
+            ok = false;
+        }
+    }
+    for (const QString &name : expectedNames)
+    {
+        if (name != "readme.txt" && !treeContainsText(remoteTree, name))
+        {
+            QTextStream(stderr) << "Remote tree does not show expected sibling directory: " << name << Qt::endl;
             ok = false;
         }
     }
