@@ -1491,20 +1491,36 @@ void FilePanel::updateLocalTreeSelection(const QString &path)
         }
 
         currentItem = driveItem;
-        const QString relativePath = QDir(drivePath).relativeFilePath(currentPath);
-        if (relativePath != ".")
+        const QStringList pathParts = QDir(drivePath).relativeFilePath(currentPath).split('/', Qt::SkipEmptyParts);
+        QString parentPath = drivePath;
+        for (const QString &part : pathParts)
         {
-            const QStringList parts = relativePath.split('/', Qt::SkipEmptyParts);
-            QString accumulatedPath = drivePath;
-            for (const QString &part : parts)
+            const QFileInfoList siblingDirs = QDir(parentPath).entryInfoList(
+                QDir::Dirs | QDir::NoDotAndDotDot,
+                QDir::DirsFirst | QDir::Name | QDir::IgnoreCase);
+            QTreeWidgetItem *pathItem = nullptr;
+            const QString nextPath = QDir::cleanPath(QDir(parentPath).filePath(part));
+            for (const QFileInfo &siblingDir : siblingDirs)
             {
-                accumulatedPath = QDir(accumulatedPath).filePath(part);
-                auto *partItem = new QTreeWidgetItem(currentItem, {part});
-                partItem->setIcon(0, directoryIcon);
-                partItem->setData(0, Qt::UserRole, QDir::cleanPath(accumulatedPath));
-                currentItem->setExpanded(true);
-                currentItem = partItem;
+                const QString siblingPath = QDir::cleanPath(siblingDir.absoluteFilePath());
+                auto *siblingItem = new QTreeWidgetItem(currentItem, {siblingDir.fileName()});
+                siblingItem->setIcon(0, directoryIcon);
+                siblingItem->setData(0, Qt::UserRole, siblingPath);
+                if (siblingPath.compare(nextPath, Qt::CaseInsensitive) == 0)
+                {
+                    pathItem = siblingItem;
+                }
             }
+
+            currentItem->setExpanded(true);
+            if (pathItem == nullptr)
+            {
+                pathItem = new QTreeWidgetItem(currentItem, {part});
+                pathItem->setIcon(0, directoryIcon);
+                pathItem->setData(0, Qt::UserRole, nextPath);
+            }
+            currentItem = pathItem;
+            parentPath = nextPath;
         }
     }
 
