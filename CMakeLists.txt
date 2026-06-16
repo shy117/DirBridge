@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(DirBridge
-    VERSION 0.1.0
+    VERSION 0.5.0
     LANGUAGES CXX
 )
 
@@ -21,8 +21,12 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
 add_library(DirBridgeCore STATIC
     src/config/SiteProfile.cpp
     src/config/SiteProfile.h
+    src/config/SettingsStore.cpp
+    src/config/SettingsStore.h
     src/config/SiteStore.cpp
     src/config/SiteStore.h
+    src/config/UserSettings.cpp
+    src/config/UserSettings.h
     src/core/CurlProtocolCheck.cpp
     src/core/CurlProtocolCheck.h
     src/core/DependencyCheck.cpp

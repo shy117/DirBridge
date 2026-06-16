@@ -55,6 +55,7 @@ SiteProfile SiteStore::createDefaultSite() const
     SiteProfile profile;
     profile.id = "example-sftp";
     profile.name = "示例 SFTP 站点";
+    profile.group = "";
     profile.protocol = RemoteProtocol::Sftp;
     profile.host = "127.0.0.1";
     profile.port = defaultPortForProtocol(profile.protocol);

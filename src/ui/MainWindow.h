@@ -2,11 +2,13 @@
 #define DIRBRIDGE_UI_MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QPoint>
 
 #include <memory>
 #include <vector>
 
 #include "config/SiteProfile.h"
+#include "config/SettingsStore.h"
 #include "config/SiteStore.h"
 #include "core/DependencyCheck.h"
 #include "core/RemoteFileSystem.h"
@@ -89,6 +91,27 @@ public:
      */
     void setLocalPathForTesting(const QString &path);
 
+    /**
+     * @brief Saves or updates a site profile during automated UI tests.
+     * @param profile Site profile to add or replace by id.
+     */
+    void saveSiteForTesting(const SiteProfile &profile);
+
+    /**
+     * @brief Removes a saved site during automated UI tests.
+     * @param siteId Stable site id to remove.
+     * @return true when a site was removed.
+     */
+    bool removeSiteForTesting(const std::string &siteId);
+
+    /**
+     * @brief Renames a site group during automated UI tests.
+     * @param oldGroup Previous group name, or empty for ungrouped sites.
+     * @param newGroup New group name, or empty to move sites to ungrouped.
+     * @return true when at least one site was updated.
+     */
+    bool renameSiteGroupForTesting(const QString &oldGroup, const QString &newGroup);
+
 private:
     struct RemoteSession
     {
@@ -103,12 +126,16 @@ private:
 
     void loadSites();
     void saveSites();
+    void loadSettings();
+    void saveSettings();
     void setupMenuBar();
     void setupToolBar();
     void setupQuickConnectBar();
     void setupCentralWorkspace(const DependencyCheckResult &dependencyCheck);
     QTreeWidget *createSessionManager();
     void populateSessionManager();
+    void showSessionManagerContextMenu(const QPoint &position);
+    void closeRemoteTab(int index);
     void appendLog(const QString &level, const QString &message);
 
     /**
@@ -126,7 +153,7 @@ private:
     void showCriticalMessage(const QString &title, const QString &message);
     SiteProfile profileFromQuickConnect() const;
     void connectQuickProfile(bool saveProfile);
-    void showRemoteProfile(const SiteProfile &profile);
+    void showRemoteProfile(const SiteProfile &profile, const QString &initialRemotePath = {});
     RemoteSession *createRemoteSession(const SiteProfile &profile, std::unique_ptr<RemoteFileSystem> fileSystem);
     RemoteSession *currentRemoteSession() const;
     RemoteSession *remoteSessionByPanel(FilePanel *panel) const;
@@ -182,12 +209,22 @@ private:
     void downloadRemoteFile(const QString &remotePath);
     void downloadRemotePath(RemoteSession &session, const QString &remotePath);
     bool enqueueRemoteDirectoryDownload(RemoteSession &session, const QString &remoteDirectoryPath, const QString &localDirectoryPath, QString *errorMessage = nullptr);
+    int siteIndexById(const std::string &siteId) const;
+    void connectSiteAtIndex(int index, const QString &initialRemotePath = {});
+    void editSiteAtIndex(int index);
+    void deleteSiteAtIndex(int index);
+    bool renameSiteGroup(const QString &oldGroup, const QString &newGroup);
+    void promptRenameSiteGroup(const QString &oldGroup);
+    void recordRecentSession(const RemoteSession &session);
+    void connectRecentSession(const std::string &siteId, const QString &lastRemotePath);
     void fillQuickConnectFromItem(QTreeWidgetItem *item);
     QString siteDisplayName(const SiteProfile &profile) const;
 
 private:
     SiteStore m_siteStore;
+    SettingsStore m_settingsStore;
     std::vector<SiteProfile> m_sites;
+    UserSettings m_settings;
     std::unique_ptr<RemoteFileSystem> m_testingRemoteFileSystem;
     bool m_dialogsSuppressedForTesting = false;
     std::vector<std::unique_ptr<RemoteSession>> m_remoteSessions;

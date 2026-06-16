@@ -18,6 +18,7 @@ struct SiteProfile
 {
     std::string id;
     std::string name;
+    std::string group;
     RemoteProtocol protocol = RemoteProtocol::Sftp;
     std::string host;
     std::uint16_t port = 22;

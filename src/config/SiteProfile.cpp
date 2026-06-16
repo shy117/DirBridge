@@ -78,6 +78,7 @@ void to_json(nlohmann::json &json, const SiteProfile &profile)
     json = nlohmann::json{
         {"id", profile.id},
         {"name", profile.name},
+        {"group", profile.group},
         {"protocol", toString(profile.protocol)},
         {"host", profile.host},
         {"port", profile.port},
@@ -92,6 +93,7 @@ void from_json(const nlohmann::json &json, SiteProfile &profile)
 {
     profile.id = json.value("id", "");
     profile.name = json.value("name", "");
+    profile.group = json.value("group", "");
     profile.protocol = remoteProtocolFromString(json.value("protocol", "sftp"));
     profile.host = json.value("host", "");
     profile.port = json.value("port", defaultPortForProtocol(profile.protocol));

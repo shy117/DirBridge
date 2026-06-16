@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <iomanip>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 
@@ -16,6 +17,8 @@
 #include <QAbstractButton>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDockWidget>
 #include <QDir>
 #include <QDirIterator>
@@ -30,6 +33,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPoint>
 #include <QPushButton>
 #include <QSplitter>
 #include <QStatusBar>
@@ -48,6 +52,19 @@ QString protocolText(RemoteProtocol protocol)
 {
     return QString::fromStdString(toString(protocol)).toUpper();
 }
+
+enum class SessionTreeItemType
+{
+    Group = 1,
+    Site = 2,
+    Recent = 3
+};
+
+constexpr int sessionItemTypeRole = Qt::UserRole;
+constexpr int siteIndexRole = Qt::UserRole + 1;
+constexpr int siteIdRole = Qt::UserRole + 2;
+constexpr int remotePathRole = Qt::UserRole + 3;
+constexpr int groupNameRole = Qt::UserRole + 4;
 
 std::string makeSiteId(const SiteProfile &profile)
 {
@@ -180,16 +197,134 @@ QStringList ancestorRemoteDirectories(QString path)
     directories.removeDuplicates();
     return directories;
 }
+
+QString normalizedRemotePath(QString path)
+{
+    path = path.trimmed();
+    if (path.isEmpty())
+    {
+        path = "/";
+    }
+    if (!path.startsWith('/'))
+    {
+        path.prepend('/');
+    }
+    return path;
+}
+
+/**
+ * @brief Shows the modal site editor and writes edited values back to the profile.
+ * @param parent Parent widget for the modal dialog.
+ * @param profile Site profile to edit in-place when accepted.
+ * @return true when the user accepted a valid profile.
+ */
+bool editSiteProfileDialog(QWidget *parent, SiteProfile &profile)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle("站点属性");
+    dialog.setObjectName("siteProfileDialog");
+
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *form = new QFormLayout();
+
+    auto *nameEdit = new QLineEdit(QString::fromStdString(profile.name), &dialog);
+    nameEdit->setObjectName("siteNameEdit");
+    auto *groupEdit = new QLineEdit(QString::fromStdString(profile.group), &dialog);
+    groupEdit->setObjectName("siteGroupEdit");
+    auto *protocolCombo = new QComboBox(&dialog);
+    protocolCombo->setObjectName("siteProtocolCombo");
+    protocolCombo->addItems({"SFTP", "FTP", "FTPS"});
+    const int protocolIndex = protocolCombo->findText(protocolText(profile.protocol));
+    if (protocolIndex >= 0)
+    {
+        protocolCombo->setCurrentIndex(protocolIndex);
+    }
+    auto *hostEdit = new QLineEdit(QString::fromStdString(profile.host), &dialog);
+    hostEdit->setObjectName("siteHostEdit");
+    auto *portEdit = new QLineEdit(QString::number(profile.port == 0 ? defaultPortForProtocol(profile.protocol) : profile.port), &dialog);
+    portEdit->setObjectName("sitePortEdit");
+    auto *userEdit = new QLineEdit(QString::fromStdString(profile.username), &dialog);
+    userEdit->setObjectName("siteUserEdit");
+    auto *passwordEdit = new QLineEdit(QString::fromStdString(profile.password), &dialog);
+    passwordEdit->setObjectName("sitePasswordEdit");
+    passwordEdit->setEchoMode(QLineEdit::Password);
+    auto *remotePathEdit = new QLineEdit(QString::fromStdString(profile.defaultRemotePath.empty() ? "/" : profile.defaultRemotePath), &dialog);
+    remotePathEdit->setObjectName("siteRemotePathEdit");
+    auto *encodingEdit = new QLineEdit(QString::fromStdString(profile.encoding.empty() ? "UTF-8" : profile.encoding), &dialog);
+    encodingEdit->setObjectName("siteEncodingEdit");
+
+    form->addRow("名称", nameEdit);
+    form->addRow("分组", groupEdit);
+    form->addRow("协议", protocolCombo);
+    form->addRow("主机", hostEdit);
+    form->addRow("端口", portEdit);
+    form->addRow("用户名", userEdit);
+    form->addRow("密码", passwordEdit);
+    form->addRow("默认路径", remotePathEdit);
+    form->addRow("编码", encodingEdit);
+    layout->addLayout(form);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+
+    QObject::connect(protocolCombo, &QComboBox::currentTextChanged, &dialog, [portEdit](const QString &text) {
+        bool ok = false;
+        const int currentPort = portEdit->text().toInt(&ok);
+        if (!ok || currentPort <= 0)
+        {
+            portEdit->setText(QString::number(defaultPortForProtocol(remoteProtocolFromString(text.toStdString()))));
+        }
+    });
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&]() {
+        if (hostEdit->text().trimmed().isEmpty())
+        {
+            QMessageBox::warning(&dialog, "站点信息不完整", "请输入主机地址。");
+            return;
+        }
+        dialog.accept();
+    });
+
+    if (dialog.exec() != QDialog::Accepted)
+    {
+        return false;
+    }
+
+    profile.name = nameEdit->text().trimmed().toStdString();
+    profile.group = groupEdit->text().trimmed().toStdString();
+    profile.protocol = remoteProtocolFromString(protocolCombo->currentText().toStdString());
+    profile.host = hostEdit->text().trimmed().toStdString();
+    profile.port = static_cast<std::uint16_t>(portEdit->text().toUShort());
+    if (profile.port == 0)
+    {
+        profile.port = defaultPortForProtocol(profile.protocol);
+    }
+    profile.username = userEdit->text().trimmed().toStdString();
+    profile.password = passwordEdit->text().toStdString();
+    profile.defaultRemotePath = normalizedRemotePath(remotePathEdit->text()).toStdString();
+    profile.encoding = encodingEdit->text().trimmed().isEmpty() ? "UTF-8" : encodingEdit->text().trimmed().toStdString();
+    if (profile.name.empty())
+    {
+        profile.name = protocolText(profile.protocol).toStdString() + " " + profile.host;
+    }
+    if (profile.id.empty())
+    {
+        profile.id = makeSiteId(profile);
+    }
+    return true;
+}
 }
 
 MainWindow::MainWindow(const DependencyCheckResult &dependencyCheck, QWidget *parent)
     : QMainWindow(parent)
     , m_siteStore(dependencyCheck.siteConfigPath.empty() ? std::filesystem::path("config") / "sites.json" : dependencyCheck.siteConfigPath)
+    , m_settingsStore(m_siteStore.path().parent_path() / "settings.json")
 {
     setWindowTitle("DirBridge - Remote Folder Manager");
     resize(1380, 820);
 
     loadSites();
+    loadSettings();
     setupCentralWorkspace(dependencyCheck);
     setupMenuBar();
     setupToolBar();
@@ -198,6 +333,7 @@ MainWindow::MainWindow(const DependencyCheckResult &dependencyCheck, QWidget *pa
 
     appendLog("INFO", "DirBridge UI started");
     appendLog("INFO", QString("site config: %1").arg(QString::fromStdString(m_siteStore.path().string())));
+    appendLog("INFO", QString("user settings: %1").arg(QString::fromStdString(m_settingsStore.path().string())));
     appendLog("INFO", QString("libcurl ready=%1, JSON ready=%2, logging ready=%3")
         .arg(dependencyCheck.curl.hasFtp && dependencyCheck.curl.hasSftp ? "yes" : "no")
         .arg(dependencyCheck.jsonReady ? "yes" : "no")
@@ -232,6 +368,41 @@ void MainWindow::uploadLocalPathForTesting(const QString &localPath)
     {
         uploadLocalPath(*session, localPath);
     }
+}
+
+void MainWindow::saveSiteForTesting(const SiteProfile &profile)
+{
+    const auto existing = std::find_if(m_sites.begin(), m_sites.end(), [&profile](const SiteProfile &site) {
+        return site.id == profile.id;
+    });
+    if (existing == m_sites.end())
+    {
+        m_sites.push_back(profile);
+    }
+    else
+    {
+        *existing = profile;
+    }
+    saveSites();
+}
+
+bool MainWindow::removeSiteForTesting(const std::string &siteId)
+{
+    const auto oldSize = m_sites.size();
+    m_sites.erase(std::remove_if(m_sites.begin(), m_sites.end(), [&siteId](const SiteProfile &site) {
+        return site.id == siteId;
+    }), m_sites.end());
+    if (m_sites.size() == oldSize)
+    {
+        return false;
+    }
+    saveSites();
+    return true;
+}
+
+bool MainWindow::renameSiteGroupForTesting(const QString &oldGroup, const QString &newGroup)
+{
+    return renameSiteGroup(oldGroup, newGroup);
 }
 
 void MainWindow::downloadRemoteFileForTesting(const QString &remotePath)
@@ -312,8 +483,43 @@ void MainWindow::loadSites()
 
 void MainWindow::saveSites()
 {
-    m_siteStore.save(m_sites);
-    populateSessionManager();
+    try
+    {
+        m_siteStore.save(m_sites);
+        populateSessionManager();
+    }
+    catch (const std::exception &error)
+    {
+        appendLog("ERROR", QString("保存站点配置失败：%1").arg(error.what()));
+        showCriticalMessage("保存站点配置失败", error.what());
+    }
+}
+
+void MainWindow::loadSettings()
+{
+    try
+    {
+        m_settings = m_settingsStore.load();
+    }
+    catch (const std::exception &error)
+    {
+        m_settings = {};
+        appendLog("ERROR", QString("加载用户设置失败：%1").arg(error.what()));
+    }
+}
+
+void MainWindow::saveSettings()
+{
+    try
+    {
+        m_settingsStore.save(m_settings);
+        populateSessionManager();
+    }
+    catch (const std::exception &error)
+    {
+        appendLog("ERROR", QString("保存用户设置失败：%1").arg(error.what()));
+        showCriticalMessage("保存用户设置失败", error.what());
+    }
 }
 
 void MainWindow::setupMenuBar()
@@ -483,6 +689,7 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
 
     m_remoteTabs = new QTabWidget(fileSplitter);
     m_remoteTabs->setObjectName("remoteTabs");
+    m_remoteTabs->setTabsClosable(true);
     connect(m_remoteTabs, &QTabWidget::currentChanged, this, [this]() {
         RemoteSession *session = currentRemoteSession();
         m_remotePanel = session == nullptr ? dynamic_cast<FilePanel *>(m_remoteTabs->currentWidget()) : session->panel;
@@ -494,7 +701,9 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
         {
             m_refreshAction->setText(session != nullptr && session->connected ? "刷新远程" : "刷新本地");
         }
+        populateSessionManager();
     });
+    connect(m_remoteTabs, &QTabWidget::tabCloseRequested, this, &MainWindow::closeRemoteTab);
     m_remotePanel = new FilePanel(FilePanel::Mode::RemotePlaceholder, m_remoteTabs);
     m_remotePanel->setObjectName("remotePanel");
     m_remotePanel->setRemoteSummary(
@@ -668,20 +877,27 @@ MainWindow::RemoteSession *MainWindow::remoteSessionById(const std::string &sess
 QTreeWidget *MainWindow::createSessionManager()
 {
     m_sessionTree = new QTreeWidget(this);
+    m_sessionTree->setObjectName("sessionManagerTree");
     m_sessionTree->setHeaderHidden(true);
+    m_sessionTree->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_sessionTree, &QTreeWidget::customContextMenuRequested, this, &MainWindow::showSessionManagerContextMenu);
     connect(m_sessionTree, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem *item, int) {
         fillQuickConnectFromItem(item);
-        if (item != nullptr && item->data(0, Qt::UserRole).isValid())
+        if (item == nullptr)
         {
-            try
-            {
-                showRemoteProfile(m_sites.at(item->data(0, Qt::UserRole).toInt()));
-            }
-            catch (const std::exception &error)
-            {
-                appendLog("ERROR", QString("打开站点失败：%1").arg(error.what()));
-                showCriticalMessage("打开站点失败", error.what());
-            }
+            return;
+        }
+
+        const auto itemType = static_cast<SessionTreeItemType>(item->data(0, sessionItemTypeRole).toInt());
+        if (itemType == SessionTreeItemType::Site)
+        {
+            connectSiteAtIndex(item->data(0, siteIndexRole).toInt());
+        }
+        else if (itemType == SessionTreeItemType::Recent)
+        {
+            connectRecentSession(
+                item->data(0, siteIdRole).toString().toStdString(),
+                item->data(0, remotePathRole).toString());
         }
     });
     return m_sessionTree;
@@ -695,18 +911,188 @@ void MainWindow::populateSessionManager()
     }
 
     m_sessionTree->clear();
-    auto *root = new QTreeWidgetItem(m_sessionTree, {"所有会话"});
+    auto *sitesRoot = new QTreeWidgetItem(m_sessionTree, {"站点"});
+    sitesRoot->setExpanded(true);
+
+    std::map<QString, QTreeWidgetItem *> groupItems;
+    const RemoteSession *currentSession = currentRemoteSession();
+    const QString currentSiteId = currentSession == nullptr ? QString() : QString::fromStdString(currentSession->profile.id);
     for (int index = 0; index < static_cast<int>(m_sites.size()); ++index)
     {
         const SiteProfile &profile = m_sites.at(index);
-        auto *item = new QTreeWidgetItem(root, {siteDisplayName(profile)});
-        item->setData(0, Qt::UserRole, index);
+        const QString groupName = QString::fromStdString(profile.group).trimmed().isEmpty()
+            ? QString("未分组")
+            : QString::fromStdString(profile.group).trimmed();
+        QTreeWidgetItem *groupItem = nullptr;
+        const auto group = groupItems.find(groupName);
+        if (group == groupItems.end())
+        {
+            groupItem = new QTreeWidgetItem(sitesRoot, {groupName});
+            groupItem->setData(0, sessionItemTypeRole, static_cast<int>(SessionTreeItemType::Group));
+            groupItem->setData(0, groupNameRole, QString::fromStdString(profile.group));
+            groupItem->setExpanded(true);
+            groupItems[groupName] = groupItem;
+        }
+        else
+        {
+            groupItem = group->second;
+        }
+
+        QString label = siteDisplayName(profile);
+        if (QString::fromStdString(profile.id) == currentSiteId)
+        {
+            label += currentSession->connected ? "（当前）" : "（当前，断开）";
+        }
+        auto *item = new QTreeWidgetItem(groupItem, {label});
+        item->setData(0, sessionItemTypeRole, static_cast<int>(SessionTreeItemType::Site));
+        item->setData(0, siteIndexRole, index);
+        item->setData(0, siteIdRole, QString::fromStdString(profile.id));
         item->setToolTip(0, QString("%1://%2:%3")
             .arg(QString::fromStdString(toString(profile.protocol)))
             .arg(QString::fromStdString(profile.host))
             .arg(profile.port));
     }
-    root->setExpanded(true);
+
+    auto *recentRoot = new QTreeWidgetItem(m_sessionTree, {"最近会话"});
+    recentRoot->setExpanded(true);
+    for (const RecentSession &recent : m_settings.recentSessions)
+    {
+        const int siteIndex = siteIndexById(recent.siteId);
+        const QString displayName = QString::fromStdString(recent.displayName.empty() ? recent.siteId : recent.displayName);
+        const QString lastPath = QString::fromStdString(recent.lastRemotePath.empty() ? "/" : recent.lastRemotePath);
+        auto *item = new QTreeWidgetItem(recentRoot, {QString("%1  %2").arg(displayName, lastPath)});
+        item->setData(0, sessionItemTypeRole, static_cast<int>(SessionTreeItemType::Recent));
+        item->setData(0, siteIdRole, QString::fromStdString(recent.siteId));
+        item->setData(0, remotePathRole, lastPath);
+        item->setToolTip(0, QString("上次打开：%1\n路径：%2").arg(QString::fromStdString(recent.lastOpenedAt), lastPath));
+        if (siteIndex < 0)
+        {
+            item->setDisabled(true);
+            item->setText(0, item->text(0) + "（站点已删除）");
+        }
+        else if (QString::fromStdString(recent.siteId) == currentSiteId)
+        {
+            item->setText(0, item->text(0) + "（当前）");
+        }
+    }
+}
+
+void MainWindow::showSessionManagerContextMenu(const QPoint &position)
+{
+    if (m_sessionTree == nullptr)
+    {
+        return;
+    }
+
+    QTreeWidgetItem *item = m_sessionTree->itemAt(position);
+    QMenu menu(m_sessionTree);
+    menu.addAction("新建站点", this, [this]() {
+        editSiteAtIndex(-1);
+    });
+
+    const auto itemType = item == nullptr
+        ? SessionTreeItemType{}
+        : static_cast<SessionTreeItemType>(item->data(0, sessionItemTypeRole).toInt());
+    if (item != nullptr && itemType == SessionTreeItemType::Group)
+    {
+        const QString oldGroup = item->data(0, groupNameRole).toString();
+        menu.addSeparator();
+        menu.addAction("重命名分组", this, [this, oldGroup]() {
+            promptRenameSiteGroup(oldGroup);
+        });
+    }
+    else if (item != nullptr && itemType == SessionTreeItemType::Site)
+    {
+        const int index = item->data(0, siteIndexRole).toInt();
+        menu.addSeparator();
+        menu.addAction("连接", this, [this, index]() {
+            connectSiteAtIndex(index);
+        });
+        menu.addAction("编辑站点", this, [this, index]() {
+            editSiteAtIndex(index);
+        });
+        menu.addAction("删除站点", this, [this, index]() {
+            deleteSiteAtIndex(index);
+        });
+    }
+    else if (item != nullptr && itemType == SessionTreeItemType::Recent && !item->isDisabled())
+    {
+        const std::string siteId = item->data(0, siteIdRole).toString().toStdString();
+        const QString lastRemotePath = item->data(0, remotePathRole).toString();
+        menu.addSeparator();
+        menu.addAction("连接", this, [this, siteId, lastRemotePath]() {
+            connectRecentSession(siteId, lastRemotePath);
+        });
+    }
+
+    menu.exec(m_sessionTree->viewport()->mapToGlobal(position));
+}
+
+void MainWindow::closeRemoteTab(int index)
+{
+    if (m_remoteTabs == nullptr || index < 0 || index >= m_remoteTabs->count())
+    {
+        return;
+    }
+
+    auto *panel = dynamic_cast<FilePanel *>(m_remoteTabs->widget(index));
+    RemoteSession *session = remoteSessionByPanel(panel);
+    if (session == nullptr)
+    {
+        if (m_remoteSessions.empty())
+        {
+            return;
+        }
+        QWidget *widget = m_remoteTabs->widget(index);
+        m_remoteTabs->removeTab(index);
+        if (widget != nullptr)
+        {
+            widget->deleteLater();
+        }
+    }
+    else
+    {
+        if (session->fileSystem != nullptr && session->connected)
+        {
+            session->fileSystem->disconnect();
+        }
+        const QString displayName = session->displayName;
+        QWidget *widget = session->panel;
+        m_remoteTabs->removeTab(index);
+        m_remoteSessions.erase(std::remove_if(m_remoteSessions.begin(), m_remoteSessions.end(), [session](const std::unique_ptr<RemoteSession> &candidate) {
+            return candidate.get() == session;
+        }), m_remoteSessions.end());
+        if (widget != nullptr)
+        {
+            widget->deleteLater();
+        }
+        appendLog("INFO", QString("已关闭远程会话：%1").arg(displayName));
+    }
+
+    if (m_remoteSessions.empty())
+    {
+        m_remotePanel = new FilePanel(FilePanel::Mode::RemotePlaceholder, m_remoteTabs);
+        m_remotePanel->setObjectName("remotePanel");
+        const int placeholderIndex = m_remoteTabs->addTab(m_remotePanel, "远程：未连接");
+        m_remoteTabs->setCurrentIndex(placeholderIndex);
+    }
+    else
+    {
+        RemoteSession *current = currentRemoteSession();
+        m_remotePanel = current == nullptr ? dynamic_cast<FilePanel *>(m_remoteTabs->currentWidget()) : current->panel;
+    }
+
+    if (m_disconnectAction != nullptr)
+    {
+        const RemoteSession *currentSession = currentRemoteSession();
+        m_disconnectAction->setEnabled(currentSession != nullptr && currentSession->connected);
+    }
+    if (m_refreshAction != nullptr)
+    {
+        const RemoteSession *currentSession = currentRemoteSession();
+        m_refreshAction->setText(currentSession != nullptr && currentSession->connected ? "刷新远程" : "刷新本地");
+    }
+    populateSessionManager();
 }
 
 void MainWindow::appendLog(const QString &level, const QString &message)
@@ -817,44 +1203,54 @@ void MainWindow::connectQuickProfile(bool saveProfile)
     }
 }
 
-void MainWindow::showRemoteProfile(const SiteProfile &profile)
+void MainWindow::showRemoteProfile(const SiteProfile &profile, const QString &initialRemotePath)
 {
-    appendLog("INFO", QString("连接远程站点：%1").arg(siteDisplayName(profile)));
+    SiteProfile sessionProfile = profile;
+    if (!initialRemotePath.trimmed().isEmpty())
+    {
+        sessionProfile.defaultRemotePath = normalizedRemotePath(initialRemotePath).toStdString();
+    }
+
+    appendLog("INFO", QString("连接远程站点：%1").arg(siteDisplayName(sessionProfile)));
 
     std::unique_ptr<RemoteFileSystem> fileSystem = m_testingRemoteFileSystem != nullptr
         ? std::move(m_testingRemoteFileSystem)
         : std::make_unique<CurlRemoteFileSystem>();
 
-    RemoteSession *session = createRemoteSession(profile, std::move(fileSystem));
+    RemoteSession *session = createRemoteSession(sessionProfile, std::move(fileSystem));
     if (session == nullptr)
     {
         showWarningMessage("连接失败", "无法创建远程会话。");
         return;
     }
 
-    const RemoteOperationResult result = session->fileSystem->connect(profile);
+    const RemoteOperationResult result = session->fileSystem->connect(sessionProfile);
     if (!result.success)
     {
-        appendLog("ERROR", QString("连接失败：%1").arg(QString::fromStdString(result.message)));
-        showWarningMessage("连接失败", QString::fromStdString(result.message));
-        setRemoteConnectionState(*session, false, QString("连接失败：%1").arg(QString::fromStdString(result.message)));
+        const QString message = QString("连接站点“%1”失败：%2")
+            .arg(siteDisplayName(sessionProfile), QString::fromStdString(result.message));
+        appendLog("ERROR", message);
+        showWarningMessage("连接失败", message);
+        setRemoteConnectionState(*session, false, message);
         return;
     }
 
     session->connected = true;
     QString loadError;
-    const QString defaultRemotePath = QString::fromStdString(profile.defaultRemotePath);
+    const QString defaultRemotePath = QString::fromStdString(sessionProfile.defaultRemotePath);
     if (!loadRemotePath(*session, defaultRemotePath, true, &loadError))
     {
         session->fileSystem->disconnect();
         const QString message = loadError.isEmpty()
-            ? QString("连接失败：无法加载默认目录 %1").arg(defaultRemotePath)
-            : QString("连接失败：无法加载默认目录 %1。%2").arg(defaultRemotePath, loadError);
+            ? QString("站点“%1”已连接，但无法加载默认目录 %2").arg(siteDisplayName(sessionProfile), defaultRemotePath)
+            : QString("站点“%1”已连接，但无法加载默认目录 %2。%3").arg(siteDisplayName(sessionProfile), defaultRemotePath, loadError);
+        appendLog("ERROR", message);
+        showWarningMessage("默认目录加载失败", message);
         setRemoteConnectionState(*session, false, message);
         return;
     }
 
-    setRemoteConnectionState(*session, true, QString("已连接：%1").arg(siteDisplayName(profile)));
+    setRemoteConnectionState(*session, true, QString("已连接：%1").arg(siteDisplayName(sessionProfile)));
 }
 
 bool MainWindow::loadRemotePath(RemoteSession &session, const QString &path, bool addToHistory, QString *errorMessage)
@@ -923,6 +1319,7 @@ bool MainWindow::loadRemotePath(RemoteSession &session, const QString &path, boo
         appendLog("INFO", QString("远程目录已加载：%1").arg(session.currentPath));
         statusBar()->showMessage(QString("远程已连接：%1 %2")
             .arg(protocolText(session.profile.protocol), session.currentPath));
+        recordRecentSession(session);
         return true;
     }
     catch (const std::exception &error)
@@ -1198,6 +1595,7 @@ void MainWindow::setRemoteConnectionState(RemoteSession &session, bool connected
     }
 
     statusBar()->showMessage(message);
+    populateSessionManager();
 }
 
 void MainWindow::enqueueTransferJob(const TransferJob &job)
@@ -1870,14 +2268,220 @@ bool MainWindow::enqueueRemoteDirectoryDownload(RemoteSession &session, const QS
     return true;
 }
 
-void MainWindow::fillQuickConnectFromItem(QTreeWidgetItem *item)
+int MainWindow::siteIndexById(const std::string &siteId) const
 {
-    if (item == nullptr || !item->data(0, Qt::UserRole).isValid())
+    for (int index = 0; index < static_cast<int>(m_sites.size()); ++index)
+    {
+        if (m_sites.at(index).id == siteId)
+        {
+            return index;
+        }
+    }
+    return -1;
+}
+
+void MainWindow::connectSiteAtIndex(int index, const QString &initialRemotePath)
+{
+    if (index < 0 || index >= static_cast<int>(m_sites.size()))
+    {
+        const QString message = "站点不存在，无法连接。";
+        appendLog("ERROR", message);
+        statusBar()->showMessage(message);
+        showWarningMessage("站点不存在", message);
+        return;
+    }
+
+    try
+    {
+        showRemoteProfile(m_sites.at(index), initialRemotePath);
+    }
+    catch (const std::exception &error)
+    {
+        const QString message = QString("打开站点“%1”失败：%2")
+            .arg(siteDisplayName(m_sites.at(index)), QString::fromUtf8(error.what()));
+        appendLog("ERROR", message);
+        showCriticalMessage("打开站点失败", message);
+    }
+}
+
+void MainWindow::editSiteAtIndex(int index)
+{
+    SiteProfile profile;
+    if (index >= 0 && index < static_cast<int>(m_sites.size()))
+    {
+        profile = m_sites.at(index);
+    }
+    else
+    {
+        profile.protocol = RemoteProtocol::Sftp;
+        profile.port = defaultPortForProtocol(profile.protocol);
+        profile.defaultRemotePath = "/";
+        profile.encoding = "UTF-8";
+    }
+
+    if (!editSiteProfileDialog(this, profile))
     {
         return;
     }
 
-    const int index = item->data(0, Qt::UserRole).toInt();
+    if (index >= 0 && index < static_cast<int>(m_sites.size()))
+    {
+        m_sites.at(index) = profile;
+        appendLog("INFO", QString("已更新站点：%1").arg(siteDisplayName(profile)));
+    }
+    else
+    {
+        m_sites.push_back(profile);
+        appendLog("INFO", QString("已新增站点：%1").arg(siteDisplayName(profile)));
+    }
+    saveSites();
+}
+
+void MainWindow::deleteSiteAtIndex(int index)
+{
+    if (index < 0 || index >= static_cast<int>(m_sites.size()))
+    {
+        return;
+    }
+
+    const SiteProfile profile = m_sites.at(index);
+    if (!m_dialogsSuppressedForTesting)
+    {
+        const QMessageBox::StandardButton choice = QMessageBox::question(
+            this,
+            "删除站点",
+            QString("确定删除站点“%1”吗？").arg(siteDisplayName(profile)));
+        if (choice != QMessageBox::Yes)
+        {
+            return;
+        }
+    }
+
+    m_sites.erase(m_sites.begin() + index);
+    m_settings.recentSessions.erase(
+        std::remove_if(m_settings.recentSessions.begin(), m_settings.recentSessions.end(), [&profile](const RecentSession &recent) {
+            return recent.siteId == profile.id;
+        }),
+        m_settings.recentSessions.end());
+    appendLog("INFO", QString("已删除站点：%1").arg(siteDisplayName(profile)));
+    saveSites();
+    saveSettings();
+}
+
+bool MainWindow::renameSiteGroup(const QString &oldGroup, const QString &newGroup)
+{
+    const QString normalizedOldGroup = oldGroup.trimmed();
+    const QString normalizedNewGroup = newGroup.trimmed();
+    if (normalizedOldGroup == normalizedNewGroup)
+    {
+        return false;
+    }
+
+    std::vector<std::string> changedSiteIds;
+    for (SiteProfile &site : m_sites)
+    {
+        if (QString::fromStdString(site.group).trimmed() == normalizedOldGroup)
+        {
+            site.group = normalizedNewGroup.toStdString();
+            changedSiteIds.push_back(site.id);
+        }
+    }
+
+    if (changedSiteIds.empty())
+    {
+        return false;
+    }
+
+    for (const std::unique_ptr<RemoteSession> &session : m_remoteSessions)
+    {
+        if (session == nullptr)
+        {
+            continue;
+        }
+        if (std::find(changedSiteIds.begin(), changedSiteIds.end(), session->profile.id) != changedSiteIds.end())
+        {
+            session->profile.group = normalizedNewGroup.toStdString();
+        }
+    }
+
+    saveSites();
+    appendLog("INFO", QString("已重命名站点分组：%1 -> %2")
+        .arg(normalizedOldGroup.isEmpty() ? "未分组" : normalizedOldGroup,
+            normalizedNewGroup.isEmpty() ? "未分组" : normalizedNewGroup));
+    return true;
+}
+
+void MainWindow::promptRenameSiteGroup(const QString &oldGroup)
+{
+    bool ok = false;
+    const QString label = oldGroup.trimmed().isEmpty() ? QString("未分组") : oldGroup.trimmed();
+    const QString newGroup = QInputDialog::getText(
+        this,
+        "重命名分组",
+        QString("将分组“%1”重命名为：").arg(label),
+        QLineEdit::Normal,
+        oldGroup,
+        &ok).trimmed();
+    if (!ok)
+    {
+        return;
+    }
+
+    if (!renameSiteGroup(oldGroup, newGroup))
+    {
+        statusBar()->showMessage("分组名称未变化。");
+    }
+}
+
+void MainWindow::recordRecentSession(const RemoteSession &session)
+{
+    if (session.profile.id.empty() || siteIndexById(session.profile.id) < 0)
+    {
+        return;
+    }
+
+    RecentSession recent;
+    recent.siteId = session.profile.id;
+    recent.lastRemotePath = session.currentPath.isEmpty() ? "/" : session.currentPath.toStdString();
+    recent.displayName = session.displayName.toStdString();
+    recent.lastOpenedAt = QDateTime::currentDateTime().toString(Qt::ISODate).toStdString();
+
+    m_settings.recentSessions.erase(
+        std::remove_if(m_settings.recentSessions.begin(), m_settings.recentSessions.end(), [&recent](const RecentSession &existing) {
+            return existing.siteId == recent.siteId;
+        }),
+        m_settings.recentSessions.end());
+    m_settings.recentSessions.insert(m_settings.recentSessions.begin(), recent);
+    if (m_settings.recentSessions.size() > 10)
+    {
+        m_settings.recentSessions.resize(10);
+    }
+    saveSettings();
+}
+
+void MainWindow::connectRecentSession(const std::string &siteId, const QString &lastRemotePath)
+{
+    const int index = siteIndexById(siteId);
+    if (index < 0)
+    {
+        const QString message = "最近会话引用的站点已删除，无法连接。";
+        appendLog("WARN", message);
+        statusBar()->showMessage(message);
+        showWarningMessage("站点不存在", message);
+        return;
+    }
+
+    connectSiteAtIndex(index, lastRemotePath);
+}
+
+void MainWindow::fillQuickConnectFromItem(QTreeWidgetItem *item)
+{
+    if (item == nullptr || static_cast<SessionTreeItemType>(item->data(0, sessionItemTypeRole).toInt()) != SessionTreeItemType::Site)
+    {
+        return;
+    }
+
+    const int index = item->data(0, siteIndexRole).toInt();
     if (index < 0 || index >= static_cast<int>(m_sites.size()))
     {
         return;

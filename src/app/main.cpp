@@ -92,6 +92,7 @@ bool checkRemoteUiObjects(MainWindow &window)
         ok = false;
     }
     ok = requireChild<QTreeWidget>(window, "logView") && ok;
+    ok = requireChild<QTreeWidget>(window, "sessionManagerTree") && ok;
 
     QComboBox *quickProtocolCombo = window.findChild<QComboBox *>("quickProtocolCombo");
     if (quickProtocolCombo != nullptr && quickProtocolCombo->currentText() != "SFTP")
@@ -158,6 +159,31 @@ bool checkRemoteUiObjects(MainWindow &window)
 }
 
 /**
+ * @brief Checks whether a tree contains visible text.
+ * @param tree Tree widget to scan.
+ * @param text Text fragment to find.
+ * @return true when any item contains the fragment.
+ */
+bool treeContainsText(QTreeWidget *tree, const QString &text)
+{
+    if (tree == nullptr)
+    {
+        return false;
+    }
+
+    QTreeWidgetItemIterator iterator(tree);
+    while (*iterator != nullptr)
+    {
+        if ((*iterator)->text(0).contains(text))
+        {
+            return true;
+        }
+        ++iterator;
+    }
+    return false;
+}
+
+/**
  * @brief Finds a QAction by visible text, ignoring Qt mnemonic markers.
  * @param window Main window whose actions should be searched.
  * @param text Visible action text to match.
@@ -202,7 +228,7 @@ int findTableRowByName(QTableWidget *table, const QString &name)
     return -1;
 }
 
-bool treeContainsText(QTreeWidget *tree, const QString &text)
+bool remoteTreeContainsText(QTreeWidget *tree, const QString &text)
 {
     if (tree == nullptr)
     {
@@ -373,7 +399,7 @@ bool checkRemoteUiWorkflow(
     }
     for (const QString &name : expectedNames)
     {
-        if (name != "readme.txt" && !treeContainsText(remoteTree, name))
+        if (name != "readme.txt" && !remoteTreeContainsText(remoteTree, name))
         {
             QTextStream(stderr) << "Remote tree does not show expected sibling directory: " << name << Qt::endl;
             ok = false;
@@ -488,6 +514,125 @@ bool connectFakeRemoteSession(MainWindow &window, const QString &remotePath)
         QTextStream(stderr) << "New fake remote session did not connect to expected path" << Qt::endl;
         return false;
     }
+    return true;
+}
+
+/**
+ * @brief Verifies v0.5.0 session manager grouping and recent-session behavior.
+ * @param window Main window under test.
+ * @return true when saved sites, grouping, and recent sessions work with fake remote tabs.
+ */
+bool checkSessionManagerWorkflow(MainWindow &window)
+{
+    QTreeWidget *sessionTree = window.findChild<QTreeWidget *>("sessionManagerTree");
+    QTabWidget *remoteTabs = window.findChild<QTabWidget *>("remoteTabs");
+    if (sessionTree == nullptr || remoteTabs == nullptr)
+    {
+        QTextStream(stderr) << "Session manager prerequisites are incomplete" << Qt::endl;
+        return false;
+    }
+
+    const int initialTabCount = remoteTabs->count();
+
+    SiteProfile grouped;
+    grouped.id = "ui-grouped-site";
+    grouped.name = "UI Grouped Site";
+    grouped.group = "生产";
+    grouped.protocol = RemoteProtocol::Sftp;
+    grouped.host = "fake-host";
+    grouped.port = 22;
+    grouped.username = "testuser";
+    grouped.defaultRemotePath = "/home/testuser/remote_test";
+    grouped.encoding = "UTF-8";
+    window.saveSiteForTesting(grouped);
+
+    SiteProfile ungrouped = grouped;
+    ungrouped.id = "ui-ungrouped-site";
+    ungrouped.name = "UI Ungrouped Site";
+    ungrouped.group.clear();
+    window.saveSiteForTesting(ungrouped);
+    QApplication::processEvents();
+
+    if (!treeContainsText(sessionTree, "生产") || !treeContainsText(sessionTree, "未分组")
+        || !treeContainsText(sessionTree, grouped.name.c_str()))
+    {
+        QTextStream(stderr) << "Session manager did not show saved site groups" << Qt::endl;
+        return false;
+    }
+    if (!window.renameSiteGroupForTesting("生产", "运维"))
+    {
+        QTextStream(stderr) << "Session manager group rename did not update sites" << Qt::endl;
+        return false;
+    }
+    QApplication::processEvents();
+    if (!treeContainsText(sessionTree, "运维") || !treeContainsText(sessionTree, grouped.name.c_str()))
+    {
+        QTextStream(stderr) << "Session manager did not show renamed group" << Qt::endl;
+        return false;
+    }
+    if (remoteTabs->count() != initialTabCount)
+    {
+        QTextStream(stderr) << "Saved sites should not restore remote tabs automatically" << Qt::endl;
+        return false;
+    }
+
+    window.setRemoteFileSystemForTesting(std::make_unique<FakeRemoteFileSystem>());
+    QTreeWidgetItemIterator iterator(sessionTree);
+    QTreeWidgetItem *groupedItem = nullptr;
+    while (*iterator != nullptr)
+    {
+        if ((*iterator)->text(0).contains("UI Grouped Site"))
+        {
+            groupedItem = *iterator;
+            break;
+        }
+        ++iterator;
+    }
+    if (groupedItem == nullptr)
+    {
+        QTextStream(stderr) << "Grouped site item is missing" << Qt::endl;
+        return false;
+    }
+    sessionTree->setCurrentItem(groupedItem);
+    QMetaObject::invokeMethod(sessionTree, "itemDoubleClicked", Qt::DirectConnection, Q_ARG(QTreeWidgetItem *, groupedItem), Q_ARG(int, 0));
+    QApplication::processEvents();
+
+    if (remoteTabs->count() != initialTabCount + 1 || !treeContainsText(sessionTree, "最近会话")
+        || !treeContainsText(sessionTree, "/home/testuser/remote_test") || !treeContainsText(sessionTree, "当前"))
+    {
+        QTextStream(stderr) << "Session manager did not record current recent session" << Qt::endl;
+        return false;
+    }
+    if (!window.renameSiteGroupForTesting("运维", "运行组"))
+    {
+        QTextStream(stderr) << "Session manager group rename did not update active sessions" << Qt::endl;
+        return false;
+    }
+    QApplication::processEvents();
+    if (!treeContainsText(sessionTree, "运行组") || !treeContainsText(sessionTree, "当前"))
+    {
+        QTextStream(stderr) << "Renamed group did not keep current session state" << Qt::endl;
+        return false;
+    }
+
+    const int connectedIndex = remoteTabs->currentIndex();
+    QMetaObject::invokeMethod(remoteTabs, "tabCloseRequested", Qt::DirectConnection, Q_ARG(int, connectedIndex));
+    QApplication::processEvents();
+    if (remoteTabs->count() != initialTabCount)
+    {
+        QTextStream(stderr) << "Remote tab close did not remove current session tab" << Qt::endl;
+        return false;
+    }
+
+    window.removeSiteForTesting(grouped.id);
+    QApplication::processEvents();
+    if (treeContainsText(sessionTree, "UI Grouped Site") && !treeContainsText(sessionTree, "站点已删除"))
+    {
+        QTextStream(stderr) << "Deleted recent session should be marked unavailable" << Qt::endl;
+        return false;
+    }
+
+    window.removeSiteForTesting(ungrouped.id);
     return true;
 }
 
@@ -658,6 +803,7 @@ bool checkRemoteUiWorkflow(MainWindow &window)
         {"download", "upload", "edit", "readme.txt"},
         true);
     return baseWorkflowOk
+        && checkSessionManagerWorkflow(window)
         && checkRemoteMultiSessionWorkflow(window)
         && checkRemoteDirectoryOperationWorkflow(window);
 }
@@ -922,7 +1068,7 @@ int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
     QApplication::setApplicationName("DirBridge");
-    QApplication::setApplicationVersion("0.1.0");
+    QApplication::setApplicationVersion("0.5.0");
 
     QCommandLineParser parser;
     parser.setApplicationDescription("DirBridge remote folder manager");

@@ -1,4 +1,7 @@
+#include "config/SettingsStore.h"
 #include "config/SiteProfile.h"
+#include "config/SiteStore.h"
+#include "config/UserSettings.h"
 #include "core/FakeRemoteFileSystem.h"
 #include "core/TransferJob.h"
 #include "core/TransferManager.h"
@@ -10,6 +13,8 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 namespace
 {
@@ -353,6 +358,59 @@ void checkTransferQueueAndManager()
     require(failedMissingSessionJob->status == TransferStatus::Failed, "missing remote session should fail job");
     require(failedMissingSessionJob->errorMessage == "remote session is not available", "missing session error message mismatch");
 }
+
+void checkSiteProfileAndSettingsStore()
+{
+    const nlohmann::json legacySiteJson = {
+        {"id", "legacy-site"},
+        {"name", "Legacy Site"},
+        {"protocol", "sftp"},
+        {"host", "legacy.example.test"},
+        {"port", 22},
+        {"username", "tester"},
+        {"password", ""},
+        {"defaultRemotePath", "/remote"},
+        {"encoding", "UTF-8"}
+    };
+    const SiteProfile legacySite = legacySiteJson.get<SiteProfile>();
+    require(legacySite.group.empty(), "legacy site without group should load with empty group");
+
+    SiteProfile groupedSite = legacySite;
+    groupedSite.id = "grouped-site";
+    groupedSite.group = "生产";
+    nlohmann::json groupedJson = groupedSite;
+    require(groupedJson.value("group", "") == "生产", "site group should serialize");
+    const SiteProfile roundTripSite = groupedJson.get<SiteProfile>();
+    require(roundTripSite.group == "生产", "site group should round trip");
+
+    const std::filesystem::path tempRoot = std::filesystem::temp_directory_path() / "dirbridge-settings-checks";
+    std::filesystem::remove_all(tempRoot);
+    std::filesystem::create_directories(tempRoot);
+
+    SiteStore siteStore(tempRoot / "sites.json");
+    siteStore.save({groupedSite});
+    const std::vector<SiteProfile> loadedSites = siteStore.load();
+    require(loadedSites.size() == 1, "site store should reload saved site");
+    require(loadedSites.front().group == "生产", "site store should preserve group");
+
+    SettingsStore settingsStore(tempRoot / "settings.json");
+    UserSettings emptySettings = settingsStore.load();
+    require(emptySettings.recentSessions.empty(), "missing settings file should load defaults");
+
+    UserSettings settings;
+    RecentSession recent;
+    recent.siteId = groupedSite.id;
+    recent.displayName = groupedSite.name;
+    recent.lastRemotePath = "/remote/path";
+    recent.lastOpenedAt = "2026-06-16T12:00:00";
+    settings.recentSessions.push_back(recent);
+    settingsStore.save(settings);
+
+    const UserSettings loadedSettings = settingsStore.load();
+    require(loadedSettings.recentSessions.size() == 1, "settings store should reload recent sessions");
+    require(loadedSettings.recentSessions.front().siteId == groupedSite.id, "recent session site id mismatch");
+    require(loadedSettings.recentSessions.front().lastRemotePath == "/remote/path", "recent session path mismatch");
+}
 }
 
 int main()
@@ -362,6 +420,7 @@ int main()
         checkFakeRemoteFileSystem();
         checkTransferJob();
         checkTransferQueueAndManager();
+        checkSiteProfileAndSettingsStore();
     }
     catch (const std::exception &error)
     {
