@@ -1,6 +1,6 @@
 ﻿# CMake依赖方案
 
-关联：[[DirBridge]]、[[技术选型-远程传输库]]
+关联：[总体技术方案](00-总体技术方案.md)、[三方库管理](三方库管理.md)、远程传输库技术选型历史归档
 
 ## 目标
 
@@ -147,12 +147,18 @@ CMake 配置阶段应检查：
 
 通过后再进入 FilePanel 和 TransferManager 实现。
 
-## 当前本机验证记录
+## 当前验证方式
 
-已创建最小 CMake 验证工程：
+仓库保留通用 `CMakePresets.json`，不写入个人机器上的 Qt / MinGW 绝对路径。
 
-- Qt Kit：`D:/QT/6.8.0/mingw_64`
-- MinGW：`D:/QT/Tools/mingw1310_64`
+本机私有路径应放入不提交的 `CMakeUserPresets.json`，例如：
+
+- Qt Kit 路径。
+- MinGW 编译器和 make 路径。
+- 当前终端运行时需要追加的 PATH。
+
+通用依赖路径仍由仓库 preset 指向：
+
 - libcurl：`third_party/installed/curl`
 - nlohmann/json：`third_party/installed/nlohmann_json`
 - spdlog：`third_party/installed/spdlog`
@@ -163,16 +169,11 @@ CMake 配置阶段应检查：
 ```powershell
 cmake --preset windows-mingw-debug
 cmake --build --preset windows-mingw-debug
-$env:PATH='D:\QT\6.8.0\mingw_64\bin;D:\QT\Tools\mingw1310_64\bin;' + $env:PATH
 .\build\windows-mingw-debug\DirBridge.exe --check-curl
 .\build\windows-mingw-debug\DirBridge.exe --check-deps
 .\build\windows-mingw-debug\DirBridge.exe --smoke-test
 ```
 
-直接运行 Debug 构建目录下的 exe 时，需要先把 Qt 和 MinGW 运行库加入当前终端 `PATH`：
+直接运行 Debug 构建目录下的 exe 时，需要确保 Qt 和 MinGW 运行库在当前终端 `PATH` 中。可通过本机 `CMakeUserPresets.json`、终端环境变量或手动设置完成。
 
-```powershell
-$env:PATH='D:\QT\6.8.0\mingw_64\bin;D:\QT\Tools\mingw1310_64\bin;' + $env:PATH
-```
-
-`--check-curl` 已确认当前 libcurl 支持 `ftp` 和 `sftp`。`--check-deps` 已确认 JSON 和 spdlog 可用。
+`--check-curl` 用于确认当前 libcurl 支持 `ftp` 和 `sftp`。`--check-deps` 用于确认 JSON 和 spdlog 可用。

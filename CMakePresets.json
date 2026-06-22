@@ -8,19 +8,10 @@
       "binaryDir": "${sourceDir}/build/windows-mingw-debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_PREFIX_PATH": "D:/QT/6.8.0/mingw_64",
-        "CMAKE_MAKE_PROGRAM": "D:/QT/Tools/mingw1310_64/bin/mingw32-make.exe",
-        "CMAKE_C_COMPILER": "D:/QT/Tools/mingw1310_64/bin/gcc.exe",
-        "CMAKE_CXX_COMPILER": "D:/QT/Tools/mingw1310_64/bin/g++.exe",
         "DIRBRIDGE_THIRD_PARTY_ROOT": "${sourceDir}/third_party/installed",
         "DIRBRIDGE_CURL_ROOT": "${sourceDir}/third_party/installed/curl",
         "DIRBRIDGE_JSON_ROOT": "${sourceDir}/third_party/installed/nlohmann_json",
         "DIRBRIDGE_SPDLOG_ROOT": "${sourceDir}/third_party/installed/spdlog"
-      },
-      "environment": {
-        "PATH": "D:/QT/Tools/mingw1310_64/bin;$penv{PATH}",
-        "TEMP": "${sourceDir}/build/tmp",
-        "TMP": "${sourceDir}/build/tmp"
       }
     }
   ],
