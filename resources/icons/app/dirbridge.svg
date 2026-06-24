@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="1024"
+   height="1024"
+   viewBox="0 0 1024 1024"
+   fill="none"
+   version="1.1"
+   id="svg12"
+   sodipodi:docname="logo.svg"
+   inkscape:version="1.4.4 (dcaf3e7, 2026-05-05)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview12"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="1.1865234"
+     inkscape:cx="512"
+     inkscape:cy="444.57613"
+     inkscape:window-width="2560"
+     inkscape:window-height="1417"
+     inkscape:window-x="-8"
+     inkscape:window-y="-8"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="g12" />
+  <title
+     id="title1">Software Logo</title>
+  <defs
+     id="defs5">
+    <linearGradient
+       id="blueGradient"
+       x1="210"
+       y1="180"
+       x2="785"
+       y2="855"
+       gradientUnits="userSpaceOnUse">
+      <stop
+         offset="0"
+         stop-color="#13B8F4"
+         id="stop1" />
+      <stop
+         offset="0.52"
+         stop-color="#078DF0"
+         id="stop2" />
+      <stop
+         offset="1"
+         stop-color="#0564D9"
+         id="stop3" />
+    </linearGradient>
+    <linearGradient
+       id="nodeBlue"
+       x1="282"
+       y1="660"
+       x2="735"
+       y2="760"
+       gradientUnits="userSpaceOnUse">
+      <stop
+         offset="0"
+         stop-color="#14C4EF"
+         id="stop4" />
+      <stop
+         offset="1"
+         stop-color="#08A8E8"
+         id="stop5" />
+    </linearGradient>
+  </defs>
+  <g
+     id="g12"
+     transform="matrix(1.3,0,0,1.3,-153.6,-153.6)">
+    <path
+       d="M150 728V274C150 219.876 193.876 176 248 176H430C452.5 176 473.281 188.003 484.531 207.488L526.5 280.18C537.75 299.665 558.531 311.668 581.031 311.668H779C833.124 311.668 877 355.544 877 409.668V728C877 782.124 833.124 826 779 826H248C193.876 826 150 782.124 150 728Z"
+       fill="url(#blueGradient)"
+       id="path5" />
+    <path
+       d="M306 371V626"
+       stroke="#FFFFFF"
+       stroke-width="52"
+       stroke-linecap="round"
+       id="path6" />
+    <path
+       d="M718 371V626"
+       stroke="#FFFFFF"
+       stroke-width="52"
+       stroke-linecap="round"
+       id="path7" />
+    <path
+       d="M228 616H796"
+       stroke="#FFFFFF"
+       stroke-width="34"
+       stroke-linecap="round"
+       id="path8" />
+    <path
+       d="M 306,371 C 398,519 496,512 512,512 528,512 626,519 718,371"
+       stroke="#ffffff"
+       stroke-width="48.9728"
+       stroke-linecap="round"
+       stroke-linejoin="round"
+       id="path9"
+       sodipodi:nodetypes="csc" />
+    <circle
+       cx="306"
+       cy="705"
+       r="58"
+       fill="#FFFFFF"
+       id="circle9" />
+    <circle
+       cx="718"
+       cy="705"
+       r="58"
+       fill="#FFFFFF"
+       id="circle10" />
+    <circle
+       cx="306"
+       cy="705"
+       r="33"
+       fill="url(#nodeBlue)"
+       id="circle11" />
+    <circle
+       cx="718"
+       cy="705"
+       r="33"
+       fill="url(#nodeBlue)"
+       id="circle12" />
+    <circle
+       cx="306"
+       cy="705"
+       r="17"
+       fill="#efffff"
+       opacity="0.92"
+       id="circle15"
+       inkscape:label="circle13" />
+    <circle
+       cx="718"
+       cy="705"
+       r="17"
+       fill="#efffff"
+       opacity="0.92"
+       id="circle15-0"
+       inkscape:label="circle14" />
+  </g>
+</svg>

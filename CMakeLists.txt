@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(DirBridge
-    VERSION 0.5.1
+    VERSION 0.5.2
     LANGUAGES CXX
 )
 
@@ -15,8 +15,8 @@ set(CMAKE_AUTOUIC ON)
 
 include(cmake/ThirdParty.cmake)
 
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Svg)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Svg)
 
 add_library(DirBridgeCore STATIC
     src/config/SiteProfile.cpp
@@ -66,17 +66,35 @@ target_include_directories(DirBridgeCore
         src
 )
 
+set(DIRBRIDGE_RESOURCE_FILES
+    resources/resources.qrc
+)
+
+if(WIN32)
+    list(APPEND DIRBRIDGE_RESOURCE_FILES
+        resources/windows/dirbridge.rc
+    )
+endif()
+
 add_executable(DirBridge
     src/app/main.cpp
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
     src/ui/FilePanel.cpp
     src/ui/FilePanel.h
+    ${DIRBRIDGE_RESOURCE_FILES}
 )
+
+if(WIN32)
+    set_target_properties(DirBridge PROPERTIES
+        WIN32_EXECUTABLE TRUE
+    )
+endif()
 
 target_link_libraries(DirBridge
     PRIVATE
         Qt${QT_VERSION_MAJOR}::Widgets
+        Qt${QT_VERSION_MAJOR}::Svg
         DirBridgeCore
 )
 

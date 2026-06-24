@@ -3,6 +3,7 @@
 #include <QCommandLineParser>
 #include <QComboBox>
 #include <QDebug>
+#include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -1067,6 +1068,7 @@ bool checkLiveRemoteTransferWorkflow(MainWindow &window)
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
+    app.setWindowIcon(QIcon(":/icons/app/dirbridge.ico"));
     QApplication::setApplicationName("DirBridge");
     QApplication::setApplicationVersion("0.5.0");
 

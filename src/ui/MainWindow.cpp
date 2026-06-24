@@ -26,6 +26,7 @@
 #include <QFormLayout>
 #include <QFrame>
 #include <QHeaderView>
+#include <QIcon>
 #include <QInputDialog>
 #include <QKeySequence>
 #include <QLabel>
@@ -38,6 +39,7 @@
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTabWidget>
+#include <QTabBar>
 #include <QToolBar>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -59,6 +61,54 @@ enum class SessionTreeItemType
     Site = 2,
     Recent = 3
 };
+
+/**
+ * @brief Creates a Fluent UI SVG icon from the Qt resource bundle.
+ * @param name Fluent icon base name without the _24_regular suffix.
+ * @return Icon loaded from the /icons/fluent resource prefix.
+ */
+QIcon fluentIcon(const QString &name)
+{
+    return QIcon(QString(":/icons/fluent/%1_24_regular.svg").arg(name));
+}
+
+/**
+ * @brief Converts low-level remote backend errors into concise user-facing Chinese text.
+ * @param detail Backend error detail, usually logged for diagnostics.
+ * @return Short text suitable for message boxes and status labels.
+ */
+QString userFacingRemoteError(const QString &detail)
+{
+    if (detail.contains("Connection timed out", Qt::CaseInsensitive))
+    {
+        return "连接超时，请检查主机地址、端口、网络或服务器状态。";
+    }
+    if (detail.contains("Could not resolve host", Qt::CaseInsensitive))
+    {
+        return "无法解析主机地址，请检查主机名是否正确。";
+    }
+    if (detail.contains("Couldn't connect", Qt::CaseInsensitive)
+        || detail.contains("Failed to connect", Qt::CaseInsensitive))
+    {
+        return "无法连接服务器，请检查地址、端口和网络连通性。";
+    }
+    if (detail.contains("Authentication", Qt::CaseInsensitive)
+        || detail.contains("Login denied", Qt::CaseInsensitive)
+        || detail.contains("Access denied", Qt::CaseInsensitive))
+    {
+        return "认证失败，请检查用户名、密码或服务器权限。";
+    }
+    if (detail.contains("No such file", Qt::CaseInsensitive)
+        || detail.contains("not found", Qt::CaseInsensitive))
+    {
+        return "远程目录不存在或当前账号没有访问权限。";
+    }
+    if (detail.trimmed().isEmpty())
+    {
+        return "远程操作失败。";
+    }
+    return "远程操作失败，请检查连接信息；详细错误已写入日志。";
+}
 
 constexpr int sessionItemTypeRole = Qt::UserRole;
 constexpr int siteIndexRole = Qt::UserRole + 1;
@@ -320,7 +370,8 @@ MainWindow::MainWindow(const DependencyCheckResult &dependencyCheck, QWidget *pa
     , m_siteStore(dependencyCheck.siteConfigPath.empty() ? std::filesystem::path("config") / "sites.json" : dependencyCheck.siteConfigPath)
     , m_settingsStore(m_siteStore.path().parent_path() / "settings.json")
 {
-    setWindowTitle("DirBridge - Remote Folder Manager");
+    setWindowTitle("DirBridge");
+    setWindowIcon(QIcon(":/icons/app/dirbridge.ico"));
     resize(1380, 820);
 
     loadSites();
@@ -525,29 +576,30 @@ void MainWindow::saveSettings()
 void MainWindow::setupMenuBar()
 {
     QMenu *fileMenu = menuBar()->addMenu("文件(&F)");
-    fileMenu->addAction("新建会话");
-    fileMenu->addAction("保存快速连接", this, [this]() {
+    fileMenu->addAction(fluentIcon("add"), "新建会话");
+    fileMenu->addAction(fluentIcon("checkmark_circle"), "保存快速连接", this, [this]() {
         connectQuickProfile(true);
     });
     fileMenu->addSeparator();
-    fileMenu->addAction("退出", this, &QWidget::close);
+    fileMenu->addAction(fluentIcon("dismiss_circle"), "退出", this, &QWidget::close);
 
     QMenu *editMenu = menuBar()->addMenu("编辑(&E)");
-    editMenu->addAction("复制")->setEnabled(false);
-    editMenu->addAction("粘贴")->setEnabled(false);
+    editMenu->addAction(fluentIcon("copy"), "复制")->setEnabled(false);
+    editMenu->addAction(fluentIcon("clipboard_paste"), "粘贴")->setEnabled(false);
 
     QMenu *viewMenu = menuBar()->addMenu("查看(&V)");
-    m_refreshAction = viewMenu->addAction("刷新", this, &MainWindow::refreshRemote);
+    m_refreshAction = viewMenu->addAction(fluentIcon("arrow_sync"), "刷新", this, &MainWindow::refreshRemote);
     QAction *sessionManagerAction = nullptr;
     if (m_sessionDock != nullptr)
     {
         sessionManagerAction = m_sessionDock->toggleViewAction();
         sessionManagerAction->setText("会话管理器");
+        sessionManagerAction->setIcon(fluentIcon("more_horizontal"));
         sessionManagerAction->setShortcut(QKeySequence("Ctrl+1"));
         viewMenu->addAction(sessionManagerAction);
     }
 
-    auto *fileTreeAction = viewMenu->addAction("文件树");
+    auto *fileTreeAction = viewMenu->addAction(fluentIcon("folder_add"), "文件树");
     fileTreeAction->setCheckable(true);
     fileTreeAction->setChecked(true);
     connect(fileTreeAction, &QAction::toggled, this, [this](bool visible) {
@@ -565,30 +617,20 @@ void MainWindow::setupMenuBar()
     });
 
     QMenu *commandMenu = menuBar()->addMenu("命令(&C)");
-    commandMenu->addAction("连接", this, [this]() {
+    commandMenu->addAction(fluentIcon("checkmark_circle"), "连接", this, [this]() {
         connectQuickProfile(false);
     });
-    m_disconnectAction = commandMenu->addAction("断开", this, &MainWindow::disconnectRemote);
+    m_disconnectAction = commandMenu->addAction(fluentIcon("dismiss_circle"), "断开", this, &MainWindow::disconnectRemote);
     m_disconnectAction->setEnabled(false);
     commandMenu->addAction(m_refreshAction);
 
-    menuBar()->addMenu("工具(&T)")->addAction("选项");
-    menuBar()->addMenu("窗口(&W)")->addAction("关闭当前标签");
-    menuBar()->addMenu("帮助(&H)")->addAction("关于 DirBridge");
+    menuBar()->addMenu("工具(&T)")->addAction(fluentIcon("settings"), "选项");
+    menuBar()->addMenu("窗口(&W)")->addAction(fluentIcon("dismiss_circle"), "关闭当前标签");
+    menuBar()->addMenu("帮助(&H)")->addAction(fluentIcon("info"), "关于 DirBridge");
 }
 
 void MainWindow::setupToolBar()
 {
-    QToolBar *toolbar = addToolBar("主工具栏");
-    toolbar->setMovable(false);
-    toolbar->addAction("新建会话");
-    toolbar->addAction("连接", this, [this]() {
-        connectQuickProfile(false);
-    });
-    toolbar->addAction(m_disconnectAction);
-    toolbar->addSeparator();
-    toolbar->addAction(m_refreshAction);
-    toolbar->addAction("设置");
 }
 
 void MainWindow::setupQuickConnectBar()
@@ -629,8 +671,10 @@ void MainWindow::setupQuickConnectBar()
 
     m_connectButton = new QPushButton("连接", quickBar);
     m_connectButton->setObjectName("quickConnectButton");
+    m_connectButton->setIcon(fluentIcon("checkmark_circle"));
     m_saveSiteButton = new QPushButton("保存站点", quickBar);
     m_saveSiteButton->setObjectName("quickSaveSiteButton");
+    m_saveSiteButton->setIcon(fluentIcon("folder_add"));
 
     quickBar->addWidget(new QLabel("协议", quickBar));
     quickBar->addWidget(m_protocolCombo);
@@ -689,7 +733,7 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
 
     m_remoteTabs = new QTabWidget(fileSplitter);
     m_remoteTabs->setObjectName("remoteTabs");
-    m_remoteTabs->setTabsClosable(true);
+    m_remoteTabs->setTabsClosable(false);
     connect(m_remoteTabs, &QTabWidget::currentChanged, this, [this]() {
         RemoteSession *session = currentRemoteSession();
         m_remotePanel = session == nullptr ? dynamic_cast<FilePanel *>(m_remoteTabs->currentWidget()) : session->panel;
@@ -710,7 +754,7 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
         QString::fromStdString(dependencyCheck.curl.version),
         dependencyCheck.curl.hasFtp,
         dependencyCheck.curl.hasSftp);
-    m_remoteTabs->addTab(m_remotePanel, "远程：未连接");
+    installRemoteTabCloseButton(m_remoteTabs->addTab(m_remotePanel, "远程：未连接"));
 
     fileSplitter->addWidget(localTabs);
     fileSplitter->addWidget(m_remoteTabs);
@@ -730,10 +774,13 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     transferToolbarLayout->setSpacing(4);
     m_cancelTransferButton = new QPushButton("取消", transferToolbar);
     m_cancelTransferButton->setObjectName("transferCancelButton");
+    m_cancelTransferButton->setIcon(fluentIcon("dismiss_circle"));
     m_retryTransferButton = new QPushButton("重试", transferToolbar);
     m_retryTransferButton->setObjectName("transferRetryButton");
+    m_retryTransferButton->setIcon(fluentIcon("arrow_sync"));
     m_clearFinishedTransfersButton = new QPushButton("清理", transferToolbar);
     m_clearFinishedTransfersButton->setObjectName("transferClearFinishedButton");
+    m_clearFinishedTransfersButton->setIcon(fluentIcon("delete"));
     transferToolbarLayout->addWidget(m_cancelTransferButton);
     transferToolbarLayout->addWidget(m_retryTransferButton);
     transferToolbarLayout->addWidget(m_clearFinishedTransfersButton);
@@ -828,6 +875,7 @@ MainWindow::RemoteSession *MainWindow::createRemoteSession(const SiteProfile &pr
         ? m_remoteTabs->indexOf(sessionPtr->panel)
         : m_remoteTabs->addTab(sessionPtr->panel, QString("远程：%1").arg(sessionPtr->displayName));
     m_remoteTabs->setTabText(tabIndex, QString("远程：%1").arg(sessionPtr->displayName));
+    installRemoteTabCloseButton(tabIndex);
     m_remoteTabs->setCurrentIndex(tabIndex);
     m_remotePanel = sessionPtr->panel;
     m_remoteSessions.push_back(std::move(session));
@@ -986,7 +1034,7 @@ void MainWindow::showSessionManagerContextMenu(const QPoint &position)
 
     QTreeWidgetItem *item = m_sessionTree->itemAt(position);
     QMenu menu(m_sessionTree);
-    menu.addAction("新建站点", this, [this]() {
+    menu.addAction(fluentIcon("folder_add"), "新建站点", this, [this]() {
         editSiteAtIndex(-1);
     });
 
@@ -997,7 +1045,7 @@ void MainWindow::showSessionManagerContextMenu(const QPoint &position)
     {
         const QString oldGroup = item->data(0, groupNameRole).toString();
         menu.addSeparator();
-        menu.addAction("重命名分组", this, [this, oldGroup]() {
+        menu.addAction(fluentIcon("edit"), "重命名分组", this, [this, oldGroup]() {
             promptRenameSiteGroup(oldGroup);
         });
     }
@@ -1005,13 +1053,13 @@ void MainWindow::showSessionManagerContextMenu(const QPoint &position)
     {
         const int index = item->data(0, siteIndexRole).toInt();
         menu.addSeparator();
-        menu.addAction("连接", this, [this, index]() {
+        menu.addAction(fluentIcon("checkmark_circle"), "连接", this, [this, index]() {
             connectSiteAtIndex(index);
         });
-        menu.addAction("编辑站点", this, [this, index]() {
+        menu.addAction(fluentIcon("edit"), "编辑站点", this, [this, index]() {
             editSiteAtIndex(index);
         });
-        menu.addAction("删除站点", this, [this, index]() {
+        menu.addAction(fluentIcon("delete"), "删除站点", this, [this, index]() {
             deleteSiteAtIndex(index);
         });
     }
@@ -1020,12 +1068,61 @@ void MainWindow::showSessionManagerContextMenu(const QPoint &position)
         const std::string siteId = item->data(0, siteIdRole).toString().toStdString();
         const QString lastRemotePath = item->data(0, remotePathRole).toString();
         menu.addSeparator();
-        menu.addAction("连接", this, [this, siteId, lastRemotePath]() {
+        menu.addAction(fluentIcon("checkmark_circle"), "连接", this, [this, siteId, lastRemotePath]() {
             connectRecentSession(siteId, lastRemotePath);
         });
     }
 
     menu.exec(m_sessionTree->viewport()->mapToGlobal(position));
+}
+
+void MainWindow::installRemoteTabCloseButton(int index)
+{
+    if (m_remoteTabs == nullptr || index < 0 || index >= m_remoteTabs->count())
+    {
+        return;
+    }
+
+    auto *closeButton = new QPushButton(QString::fromUtf8("×"), m_remoteTabs->tabBar());
+    closeButton->setObjectName("remoteTabCloseButton");
+    closeButton->setFlat(true);
+    closeButton->setFixedSize(16, 16);
+    closeButton->setCursor(Qt::ArrowCursor);
+    closeButton->setToolTip("关闭会话");
+    closeButton->setStyleSheet(
+        "QPushButton#remoteTabCloseButton {"
+        "border: none;"
+        "border-radius: 8px;"
+        "color: #666666;"
+        "font-size: 13px;"
+        "font-weight: 600;"
+        "padding: 0;"
+        "}"
+        "QPushButton#remoteTabCloseButton:hover {"
+        "background: #E5E7EB;"
+        "color: #222222;"
+        "}"
+        "QPushButton#remoteTabCloseButton:pressed {"
+        "background: #D1D5DB;"
+        "}"
+    );
+
+    connect(closeButton, &QPushButton::clicked, this, [this, closeButton]() {
+        if (m_remoteTabs == nullptr)
+        {
+            return;
+        }
+        const QPoint tabBarPosition = closeButton->mapTo(
+            m_remoteTabs->tabBar(),
+            closeButton->rect().center());
+        const int tabIndex = m_remoteTabs->tabBar()->tabAt(tabBarPosition);
+        if (tabIndex >= 0)
+        {
+            closeRemoteTab(tabIndex);
+        }
+    });
+
+    m_remoteTabs->tabBar()->setTabButton(index, QTabBar::RightSide, closeButton);
 }
 
 void MainWindow::closeRemoteTab(int index)
@@ -1047,7 +1144,7 @@ void MainWindow::closeRemoteTab(int index)
         m_remoteTabs->removeTab(index);
         if (widget != nullptr)
         {
-            widget->deleteLater();
+            delete widget;
         }
     }
     else
@@ -1059,13 +1156,13 @@ void MainWindow::closeRemoteTab(int index)
         const QString displayName = session->displayName;
         QWidget *widget = session->panel;
         m_remoteTabs->removeTab(index);
+        if (widget != nullptr)
+        {
+            delete widget;
+        }
         m_remoteSessions.erase(std::remove_if(m_remoteSessions.begin(), m_remoteSessions.end(), [session](const std::unique_ptr<RemoteSession> &candidate) {
             return candidate.get() == session;
         }), m_remoteSessions.end());
-        if (widget != nullptr)
-        {
-            widget->deleteLater();
-        }
         appendLog("INFO", QString("已关闭远程会话：%1").arg(displayName));
     }
 
@@ -1074,6 +1171,7 @@ void MainWindow::closeRemoteTab(int index)
         m_remotePanel = new FilePanel(FilePanel::Mode::RemotePlaceholder, m_remoteTabs);
         m_remotePanel->setObjectName("remotePanel");
         const int placeholderIndex = m_remoteTabs->addTab(m_remotePanel, "远程：未连接");
+        installRemoteTabCloseButton(placeholderIndex);
         m_remoteTabs->setCurrentIndex(placeholderIndex);
     }
     else
@@ -1227,9 +1325,10 @@ void MainWindow::showRemoteProfile(const SiteProfile &profile, const QString &in
     const RemoteOperationResult result = session->fileSystem->connect(sessionProfile);
     if (!result.success)
     {
-        const QString message = QString("连接站点“%1”失败：%2")
-            .arg(siteDisplayName(sessionProfile), QString::fromStdString(result.message));
-        appendLog("ERROR", message);
+        const QString detail = QString::fromUtf8(result.message.c_str());
+        const QString message = QString("连接站点“%1”失败。%2")
+            .arg(siteDisplayName(sessionProfile), userFacingRemoteError(detail));
+        appendLog("ERROR", QString("%1 详细信息：%2").arg(message, detail));
         showWarningMessage("连接失败", message);
         setRemoteConnectionState(*session, false, message);
         return;
@@ -1242,8 +1341,8 @@ void MainWindow::showRemoteProfile(const SiteProfile &profile, const QString &in
     {
         session->fileSystem->disconnect();
         const QString message = loadError.isEmpty()
-            ? QString("站点“%1”已连接，但无法加载默认目录 %2").arg(siteDisplayName(sessionProfile), defaultRemotePath)
-            : QString("站点“%1”已连接，但无法加载默认目录 %2。%3").arg(siteDisplayName(sessionProfile), defaultRemotePath, loadError);
+            ? QString("站点“%1”已连接，但无法加载默认目录“%2”。").arg(siteDisplayName(sessionProfile), defaultRemotePath)
+            : QString("站点“%1”已连接，但无法加载默认目录“%2”。%3").arg(siteDisplayName(sessionProfile), defaultRemotePath, loadError);
         appendLog("ERROR", message);
         showWarningMessage("默认目录加载失败", message);
         setRemoteConnectionState(*session, false, message);
@@ -1324,14 +1423,19 @@ bool MainWindow::loadRemotePath(RemoteSession &session, const QString &path, boo
     }
     catch (const std::exception &error)
     {
-        const QString message = QString("远程目录加载失败：%1").arg(error.what());
+        const QString detail = QString::fromUtf8(error.what());
+        const QString message = QString("无法加载远程目录“%1”。%2")
+            .arg(normalizedPath, userFacingRemoteError(detail));
         if (errorMessage != nullptr)
         {
             *errorMessage = message;
         }
-        appendLog("ERROR", message);
+        appendLog("ERROR", QString("远程目录加载失败：%1").arg(detail));
         session.panel->setRemoteError(message);
-        showWarningMessage("远程目录加载失败", message);
+        if (errorMessage == nullptr)
+        {
+            showWarningMessage("远程目录加载失败", message);
+        }
         return false;
     }
 }

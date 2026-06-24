@@ -135,6 +135,11 @@ private:
     QTreeWidget *createSessionManager();
     void populateSessionManager();
     void showSessionManagerContextMenu(const QPoint &position);
+    /**
+     * @brief Installs the neutral close button used by remote session tabs.
+     * @param index Remote tab index that should receive the custom close button.
+     */
+    void installRemoteTabCloseButton(int index);
     void closeRemoteTab(int index);
     void appendLog(const QString &level, const QString &message);
 

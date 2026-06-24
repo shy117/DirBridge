@@ -13,6 +13,7 @@
 #include <QFileInfo>
 #include <QHeaderView>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
@@ -38,6 +39,16 @@
 namespace
 {
 const char *RemotePathMimeType = "application/x-dirbridge-remote-paths";
+
+/**
+ * @brief Creates a Fluent UI SVG icon from the Qt resource bundle.
+ * @param name Fluent icon base name without the _24_regular suffix.
+ * @return Icon loaded from the /icons/fluent resource prefix.
+ */
+QIcon fluentIcon(const QString &name)
+{
+    return QIcon(QString(":/icons/fluent/%1_24_regular.svg").arg(name));
+}
 
 QString fileItemTypeText(FileItemType type)
 {
@@ -379,6 +390,10 @@ void FilePanel::setupUi()
     m_forwardButton->setToolTip("前进");
     m_upButton->setToolTip("上一级");
     m_refreshButton->setToolTip("刷新当前目录");
+    m_backButton->setIcon(fluentIcon("arrow_left"));
+    m_forwardButton->setIcon(fluentIcon("arrow_right"));
+    m_upButton->setIcon(fluentIcon("arrow_up"));
+    m_refreshButton->setIcon(fluentIcon("arrow_sync"));
 
     toolbarLayout->addWidget(m_backButton);
     toolbarLayout->addWidget(m_forwardButton);
@@ -776,8 +791,8 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
     QAction *newFileAction = nullptr;
     QAction *fileTreeAction = nullptr;
 
-    QMenu *viewMenu = menu.addMenu("查看");
-    fileTreeAction = viewMenu->addAction("文件树");
+    QMenu *viewMenu = menu.addMenu(fluentIcon("more_horizontal"), "查看");
+    fileTreeAction = viewMenu->addAction(fluentIcon("folder_add"), "文件树");
     fileTreeAction->setCheckable(true);
     fileTreeAction->setChecked(isFileTreeVisible());
 
@@ -785,39 +800,39 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
     {
         if (isLocal)
         {
-            openAction = menu.addAction("打开");
+            openAction = menu.addAction(fluentIcon("chevron_right"), "打开");
         }
         else if (selectedIsDirectory)
         {
-            enterAction = menu.addAction("进入");
+            enterAction = menu.addAction(fluentIcon("chevron_right"), "进入");
         }
         if (isLocal)
         {
-            uploadAction = menu.addAction("上传");
+            uploadAction = menu.addAction(fluentIcon("arrow_right"), "上传");
             uploadAction->setEnabled(!selectedIsDirectory && m_localUploadRequested != nullptr);
         }
         else if (!selectedIsDirectory)
         {
-            downloadAction = menu.addAction("下载");
+            downloadAction = menu.addAction(fluentIcon("arrow_left"), "下载");
             downloadAction->setEnabled(m_remoteDownloadRequested != nullptr);
         }
-        renameAction = menu.addAction("重命名");
-        removeAction = menu.addAction("删除");
+        renameAction = menu.addAction(fluentIcon("edit"), "重命名");
+        removeAction = menu.addAction(fluentIcon("delete"), "删除");
         menu.addSeparator();
-        copyPathAction = menu.addAction("复制路径");
-        copyFolderPathAction = menu.addAction("复制文件夹路径");
+        copyPathAction = menu.addAction(fluentIcon("copy"), "复制路径");
+        copyFolderPathAction = menu.addAction(fluentIcon("copy"), "复制文件夹路径");
     }
     else
     {
-        copyFolderPathAction = menu.addAction("复制文件夹路径");
+        copyFolderPathAction = menu.addAction(fluentIcon("copy"), "复制文件夹路径");
     }
 
     menu.addSeparator();
-    QMenu *newMenu = menu.addMenu("新建");
-    newDirectoryAction = newMenu->addAction("新建文件夹");
-    newFileAction = newMenu->addAction("新建文件");
+    QMenu *newMenu = menu.addMenu(fluentIcon("add"), "新建");
+    newDirectoryAction = newMenu->addAction(fluentIcon("folder_add"), "新建文件夹");
+    newFileAction = newMenu->addAction(fluentIcon("add"), "新建文件");
 
-    propertiesAction = menu.addAction("属性");
+    propertiesAction = menu.addAction(fluentIcon("info"), "属性");
 
     QAction *selectedAction = menu.exec(m_table->viewport()->mapToGlobal(position));
     if (selectedAction == nullptr)

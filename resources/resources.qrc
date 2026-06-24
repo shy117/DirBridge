@@ -1,0 +1,37 @@
+<RCC>
+    <qresource prefix="/icons/app">
+        <file alias="dirbridge.ico">icons/app/dirbridge.ico</file>
+        <file alias="dirbridge.svg">icons/app/dirbridge.svg</file>
+        <file alias="dirbridge_16.png">icons/app/dirbridge_16.png</file>
+        <file alias="dirbridge_24.png">icons/app/dirbridge_24.png</file>
+        <file alias="dirbridge_32.png">icons/app/dirbridge_32.png</file>
+        <file alias="dirbridge_48.png">icons/app/dirbridge_48.png</file>
+        <file alias="dirbridge_64.png">icons/app/dirbridge_64.png</file>
+        <file alias="dirbridge_128.png">icons/app/dirbridge_128.png</file>
+        <file alias="dirbridge_256.png">icons/app/dirbridge_256.png</file>
+        <file alias="dirbridge_logo.png">icons/app/dirbridge_logo.png</file>
+    </qresource>
+
+    <qresource prefix="/icons/fluent">
+        <file alias="add_24_regular.svg">icons/fluent/add_24_regular.svg</file>
+        <file alias="arrow_left_24_regular.svg">icons/fluent/arrow_left_24_regular.svg</file>
+        <file alias="arrow_right_24_regular.svg">icons/fluent/arrow_right_24_regular.svg</file>
+        <file alias="arrow_sync_24_regular.svg">icons/fluent/arrow_sync_24_regular.svg</file>
+        <file alias="arrow_up_24_regular.svg">icons/fluent/arrow_up_24_regular.svg</file>
+        <file alias="checkmark_circle_24_regular.svg">icons/fluent/checkmark_circle_24_regular.svg</file>
+        <file alias="chevron_down_24_regular.svg">icons/fluent/chevron_down_24_regular.svg</file>
+        <file alias="chevron_right_24_regular.svg">icons/fluent/chevron_right_24_regular.svg</file>
+        <file alias="clipboard_paste_24_regular.svg">icons/fluent/clipboard_paste_24_regular.svg</file>
+        <file alias="copy_24_regular.svg">icons/fluent/copy_24_regular.svg</file>
+        <file alias="delete_24_regular.svg">icons/fluent/delete_24_regular.svg</file>
+        <file alias="dismiss_circle_24_regular.svg">icons/fluent/dismiss_circle_24_regular.svg</file>
+        <file alias="edit_24_regular.svg">icons/fluent/edit_24_regular.svg</file>
+        <file alias="folder_add_24_regular.svg">icons/fluent/folder_add_24_regular.svg</file>
+        <file alias="info_24_regular.svg">icons/fluent/info_24_regular.svg</file>
+        <file alias="lock_closed_24_regular.svg">icons/fluent/lock_closed_24_regular.svg</file>
+        <file alias="more_horizontal_24_regular.svg">icons/fluent/more_horizontal_24_regular.svg</file>
+        <file alias="search_24_regular.svg">icons/fluent/search_24_regular.svg</file>
+        <file alias="settings_24_regular.svg">icons/fluent/settings_24_regular.svg</file>
+        <file alias="warning_24_regular.svg">icons/fluent/warning_24_regular.svg</file>
+    </qresource>
+</RCC>

@@ -9,6 +9,7 @@ DirBridge 使用 CMake 作为唯一构建系统，不再使用 qmake。
 第一阶段依赖：
 
 - Qt Widgets
+- Qt Svg
 - libcurl
 - nlohmann/json
 - spdlog
@@ -45,11 +46,11 @@ CMake 中优先支持 Qt 6，同时保留 Qt 5 兼容空间。
 推荐策略：
 
 ```cmake
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Svg)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Svg)
 ```
 
-第一版使用 Qt Widgets，不引入 QML。
+第一版使用 Qt Widgets，不引入 QML。应用图标和 Fluent SVG 图标通过 Qt 资源系统加载，因此需要显式接入 Qt Svg；Qt Svg 属于 Qt 自身模块，不是额外第三方依赖。
 
 ## 三方依赖
 
