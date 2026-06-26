@@ -10,11 +10,13 @@
 - 远程面板会显示连接中状态。
 - 连接过程中可以点击取消。
 - 连接过程中会拦截重复连接，避免连续创建多个未完成远程会话。
+- 补充 Apache License 2.0 项目许可声明和第三方许可证说明。
 
 ### 修复
 
 - 修复远程连接过程中重复点击连接可能造成状态混乱的问题。
 - 修复验证程序可能加载 PATH 中其他软件 MinGW 运行库而启动失败的问题。
+- 修复 Release 构建下 UI workflow smoke test 对异步连接状态判断过早的问题。
 
 ### 开发者说明
 
@@ -23,12 +25,15 @@
 - 将 UI smoke test 从 `src/app/main.cpp` 拆分到 `src/app/UiSmokeTests.h/.cpp`，主入口只保留应用启动和命令行分发。
 - CMake 在 Windows 下为 `DirBridge`、`DirBridgeCoreChecks` 和 `DirBridgeRemoteCheck` 复制 libcurl 与 MinGW 运行库。
 - CMake 项目版本和 QApplication 显示版本同步为 `0.5.3`。
+- 新增 `windows-mingw-release` preset、发布打包脚本和 Inno Setup 脚本模板。
+- 发布脚本会生成绿色包，复制许可证说明，并在包内运行最小 smoke 验证；未找到 `ISCC.exe` 时跳过安装包生成。
 
 ### 已知问题
 
 - 当前取消连接属于逻辑取消，不能强制中断已进入阻塞状态的底层 libcurl 调用。
 - 远程刷新和路径跳转仍是同步目录加载流程，后续可复用同一套异步任务模型。
 - 目录传输仍未提供聚合进度显示。
+- 当前本机未找到 Inno Setup 编译器，已生成绿色 ZIP，安装包需要安装或配置 `ISCC.exe` 后再生成。
 
 ## v0.5.2 - 2026-06-24
 

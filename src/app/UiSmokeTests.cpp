@@ -191,7 +191,9 @@ bool waitForRemoteDisconnected(QWidget *remotePanel)
         QApplication::processEvents();
         QLabel *remoteStateLabel = remotePanel == nullptr ? nullptr : remotePanel->findChild<QLabel *>("remoteStateLabel");
         if (remoteStateLabel != nullptr
-            && (remoteStateLabel->text().contains("断开") || remoteStateLabel->text().contains("取消")))
+            && (remoteStateLabel->text().contains("断开")
+                || remoteStateLabel->text().contains("已取消")
+                || remoteStateLabel->text().contains("连接已取消")))
         {
             return true;
         }
@@ -718,6 +720,12 @@ bool checkSessionManagerWorkflow(MainWindow &window)
     sessionTree->setCurrentItem(groupedItem);
     QMetaObject::invokeMethod(sessionTree, "itemDoubleClicked", Qt::DirectConnection, Q_ARG(QTreeWidgetItem *, groupedItem), Q_ARG(int, 0));
     QApplication::processEvents();
+
+    if (!waitForRemoteConnected(remoteTabs->currentWidget(), "/home/testuser/remote_test"))
+    {
+        QTextStream(stderr) << "Session manager site double click did not connect remote session" << Qt::endl;
+        return false;
+    }
 
     if (remoteTabs->count() != initialTabCount + 1 || !treeContainsText(sessionTree, "最近会话")
         || !treeContainsText(sessionTree, "/home/testuser/remote_test") || !treeContainsText(sessionTree, "当前"))

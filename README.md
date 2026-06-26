@@ -73,9 +73,10 @@ DirBridge 是一个面向 Windows 桌面场景的远程文件管理工具，目�
 - MVP 阶段仍明文保存站点密码，仅用于本地开发验证。
 - 暂未实现安全密码存储。
 - 暂未实现目录传输聚合进度。
-- 暂未提供正式安装包。
-- 暂未声明开源许可证。
+- v0.5.3 开始准备 Windows 绿色包和安装包发布流程。
 
 ## 许可证
 
-当前仓库暂未声明许可证。未经明确授权，请不要将本项目视为已按某个开源协议发布。
+DirBridge 源码使用 Apache License 2.0，详见 [LICENSE](LICENSE)。
+
+第三方库和图标资源遵循各自许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。Windows 发布包应随附项目许可证和第三方许可证说明。

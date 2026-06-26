@@ -13,12 +13,29 @@
         "DIRBRIDGE_JSON_ROOT": "${sourceDir}/third_party/installed/nlohmann_json",
         "DIRBRIDGE_SPDLOG_ROOT": "${sourceDir}/third_party/installed/spdlog"
       }
+    },
+    {
+      "name": "windows-mingw-release",
+      "displayName": "Windows MinGW Release",
+      "generator": "MinGW Makefiles",
+      "binaryDir": "${sourceDir}/build/windows-mingw-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "DIRBRIDGE_THIRD_PARTY_ROOT": "${sourceDir}/third_party/installed",
+        "DIRBRIDGE_CURL_ROOT": "${sourceDir}/third_party/installed/curl",
+        "DIRBRIDGE_JSON_ROOT": "${sourceDir}/third_party/installed/nlohmann_json",
+        "DIRBRIDGE_SPDLOG_ROOT": "${sourceDir}/third_party/installed/spdlog"
+      }
     }
   ],
   "buildPresets": [
     {
       "name": "windows-mingw-debug",
       "configurePreset": "windows-mingw-debug"
+    },
+    {
+      "name": "windows-mingw-release",
+      "configurePreset": "windows-mingw-release"
     }
   ]
 }
