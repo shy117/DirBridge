@@ -12,7 +12,8 @@
 
 ## 分支与版本
 
-- 项目分支只使用 `feature/*`、`fix/*`、`docs/*`。
+- 项目分支只使用 `feature/*`、`fix/*`。
+- 单独文档整理也使用 `feature/*`，例如 `feature/reorganize-version-docs`。
 - 不使用 `codex/*` 作为项目归档分支；Codex 临时分支如需归档，应先切到符合项目约定的分支。
 - `main` 是稳定主线，功能完成并验证后再快进或合并到 `main`。
 - 版本归档使用 Git tag，例如 `v0.5.3`。
