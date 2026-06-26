@@ -21,7 +21,6 @@ third_party/
 /config/
 docs/archive/
 docs/版本归档/
-AGENTS.md
 CMakeUserPresets.json
 Thumbs.db
 Desktop.ini
