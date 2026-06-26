@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.5.3",
+    [string]$Version = "0.5.4",
     [string]$BuildPreset = "windows-mingw-release",
     [string]$BuildDir = "build/windows-mingw-release",
     [string]$ReleaseDir = "build/release",

@@ -4,7 +4,7 @@
 
 ## 当前版本
 
-- 版本：v0.5.3
+- 版本：v0.5.4
 - 平台：Windows x64
 - 状态：MVP 阶段预发布包
 
@@ -12,8 +12,8 @@
 
 建议同一版本同时提供：
 
-- `DirBridge-v0.5.3-win64.zip`：绿色压缩包，解压后运行 `DirBridge.exe`。
-- `DirBridge-v0.5.3-win64-setup.exe`：Inno Setup 安装包；如果本机未安装 Inno Setup 编译器，则本轮只生成绿色压缩包。
+- `DirBridge-v0.5.4-win64.zip`：绿色压缩包，解压后运行 `DirBridge.exe`。
+- `DirBridge-v0.5.4-win64-setup.exe`：Inno Setup 安装包。
 
 二进制产物生成在 `build/release/` 下，不提交到 Git。
 
@@ -37,14 +37,14 @@
 powershell -ExecutionPolicy Bypass -File scripts\package_release.ps1
 ```
 
-脚本默认使用 `windows-mingw-release` preset 构建并生成绿色包；如果找到 `ISCC.exe`，会继续生成安装包。
+脚本默认使用 `windows-mingw-release` preset 构建并生成绿色包；如果找到 `ISCC.exe`，会继续生成安装包。如果 `ISCC.exe` 不在 `PATH` 或常见安装目录中，可通过 `-InnoCompiler` 显式指定。
 
 ## 发布前验证
 
 在发布目录内运行：
 
 ```powershell
-Set-Location build\release\DirBridge-v0.5.3-win64
+Set-Location build\release\DirBridge-v0.5.4-win64
 .\DirBridge.exe --check-deps
 .\DirBridge.exe --smoke-test
 .\DirBridge.exe --ui-remote-smoke-test
@@ -53,12 +53,11 @@ Set-Location build\release\DirBridge-v0.5.3-win64
 
 真实 FTP/SFTP 验证需要在本机临时设置 `DIRBRIDGE_TEST_*` 环境变量后运行，不要把密码写入仓库或发布包。
 
-## v0.5.3 用户可见变化
+## v0.5.4 用户可见变化
 
-- 远程首次连接改为后台执行，慢连接时主界面不再被同步阻塞。
-- 远程面板会显示连接中状态。
-- 连接过程中可以点击取消。
-- 连接过程中会拦截重复连接，避免连续创建多个未完成远程会话。
+- 补充 Apache License 2.0 项目许可声明和第三方许可证说明。
+- 提供 Windows 绿色包和 Inno Setup 安装包发布流程。
+- 发布包随附 README、CHANGELOG、RELEASE、项目许可和第三方许可证说明。
 
 ## 已知问题
 
