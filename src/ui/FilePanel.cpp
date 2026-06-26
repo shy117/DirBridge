@@ -1440,6 +1440,36 @@ void FilePanel::populateRemotePlaceholder()
     updateRemoteTree("/", {});
 }
 
+void FilePanel::setRemoteConnecting(const QString &status)
+{
+    if (m_mode != Mode::RemotePlaceholder)
+    {
+        return;
+    }
+
+    m_currentPath.clear();
+    m_remoteItems.clear();
+    m_pathEdit->setText("/");
+    m_pathEdit->setEnabled(false);
+    m_refreshButton->setEnabled(false);
+    m_backButton->setEnabled(false);
+    m_forwardButton->setEnabled(false);
+    m_upButton->setEnabled(false);
+
+    m_table->setSortingEnabled(false);
+    m_table->setRowCount(0);
+    const int row = m_table->rowCount();
+    m_table->insertRow(row);
+    m_table->setItem(row, 0, createItem("正在连接远程会话"));
+    m_table->setItem(row, 1, createItem(""));
+    m_table->setItem(row, 2, createItem("连接中"));
+    m_table->setItem(row, 3, createItem(""));
+    m_table->setItem(row, 4, createItem(""));
+    m_table->setItem(row, 5, createItem(""));
+    m_stateLabel->setText(status.isEmpty() ? "正在连接远程会话..." : status);
+    updateRemoteTree("/", {});
+}
+
 void FilePanel::populateRemoteItems(const QString &path, const std::vector<FileItem> &items, const QString &status)
 {
     m_currentPath = path.isEmpty() ? "/" : path;

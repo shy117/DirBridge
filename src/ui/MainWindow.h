@@ -5,6 +5,7 @@
 #include <QPoint>
 
 #include <memory>
+#include <atomic>
 #include <vector>
 
 #include "config/SiteProfile.h"
@@ -113,6 +114,8 @@ public:
     bool renameSiteGroupForTesting(const QString &oldGroup, const QString &newGroup);
 
 private:
+    struct RemoteConnectionResult;
+
     struct RemoteSession
     {
         QString id;
@@ -121,6 +124,8 @@ private:
         FilePanel *panel = nullptr;
         QString currentPath;
         bool connected = false;
+        bool connecting = false;
+        std::shared_ptr<std::atomic_bool> connectionCanceled;
         QString displayName;
     };
 
@@ -163,6 +168,31 @@ private:
     RemoteSession *currentRemoteSession() const;
     RemoteSession *remoteSessionByPanel(FilePanel *panel) const;
     RemoteSession *remoteSessionById(const std::string &sessionId) const;
+    /**
+     * @brief Checks whether any remote session is currently running its initial connection task.
+     * @return true when a connection attempt is in progress.
+     */
+    bool hasConnectingRemoteSession() const;
+    /**
+     * @brief Starts the initial remote connection and default-directory load on a background thread.
+     * @param session Session that owns the pending connection state.
+     */
+    void startRemoteConnection(RemoteSession &session);
+    /**
+     * @brief Applies the background connection result back on the UI thread.
+     * @param sessionId Session id captured when the task started.
+     * @param result Connection result and backend ownership returned by the worker.
+     */
+    void finishRemoteConnection(const QString &sessionId, const std::shared_ptr<RemoteConnectionResult> &result);
+    /**
+     * @brief Requests logical cancellation of an in-flight remote connection.
+     * @param session Session whose connection attempt should be canceled.
+     */
+    void cancelRemoteConnection(RemoteSession &session);
+    /**
+     * @brief Updates menu and quick-connect controls for disconnected, connecting, and connected states.
+     */
+    void updateRemoteConnectionActions();
     bool loadRemotePath(RemoteSession &session, const QString &path, bool addToHistory, QString *errorMessage = nullptr);
     bool loadRemotePath(const QString &path, bool addToHistory, QString *errorMessage = nullptr);
     void refreshRemote();

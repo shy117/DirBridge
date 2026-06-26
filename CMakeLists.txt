@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(DirBridge
-    VERSION 0.5.2
+    VERSION 0.5.3
     LANGUAGES CXX
 )
 
@@ -78,6 +78,8 @@ endif()
 
 add_executable(DirBridge
     src/app/main.cpp
+    src/app/UiSmokeTests.cpp
+    src/app/UiSmokeTests.h
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
     src/ui/FilePanel.cpp
@@ -136,14 +138,35 @@ target_include_directories(DirBridgeRemoteCheck
         src
 )
 
-if(WIN32 AND EXISTS "${DIRBRIDGE_CURL_ROOT}/bin/libcurl-x64.dll")
-    add_custom_command(TARGET DirBridge POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${DIRBRIDGE_CURL_ROOT}/bin/libcurl-x64.dll"
-            "$<TARGET_FILE_DIR:DirBridge>/libcurl-x64.dll"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${DIRBRIDGE_CURL_ROOT}/bin/curl-ca-bundle.crt"
-            "$<TARGET_FILE_DIR:DirBridge>/curl-ca-bundle.crt"
-        COMMENT "Copying libcurl runtime files"
-    )
+if(WIN32)
+    get_filename_component(DIRBRIDGE_CXX_RUNTIME_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+
+    function(dirbridge_copy_runtime_files target_name)
+        if(EXISTS "${DIRBRIDGE_CURL_ROOT}/bin/libcurl-x64.dll")
+            add_custom_command(TARGET ${target_name} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${DIRBRIDGE_CURL_ROOT}/bin/libcurl-x64.dll"
+                    "$<TARGET_FILE_DIR:${target_name}>/libcurl-x64.dll"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${DIRBRIDGE_CURL_ROOT}/bin/curl-ca-bundle.crt"
+                    "$<TARGET_FILE_DIR:${target_name}>/curl-ca-bundle.crt"
+                COMMENT "Copying libcurl runtime files for ${target_name}"
+            )
+        endif()
+
+        foreach(runtime_name IN ITEMS libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll)
+            if(EXISTS "${DIRBRIDGE_CXX_RUNTIME_DIR}/${runtime_name}")
+                add_custom_command(TARGET ${target_name} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${DIRBRIDGE_CXX_RUNTIME_DIR}/${runtime_name}"
+                        "$<TARGET_FILE_DIR:${target_name}>/${runtime_name}"
+                    COMMENT "Copying MinGW runtime ${runtime_name} for ${target_name}"
+                )
+            endif()
+        endforeach()
+    endfunction()
+
+    dirbridge_copy_runtime_files(DirBridge)
+    dirbridge_copy_runtime_files(DirBridgeCoreChecks)
+    dirbridge_copy_runtime_files(DirBridgeRemoteCheck)
 endif()

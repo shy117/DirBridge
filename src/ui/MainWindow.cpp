@@ -12,6 +12,7 @@
 #include <map>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 
 #include <QAction>
 #include <QAbstractButton>
@@ -34,7 +35,9 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QMetaObject>
 #include <QPoint>
+#include <QPointer>
 #include <QPushButton>
 #include <QSplitter>
 #include <QStatusBar>
@@ -364,6 +367,20 @@ bool editSiteProfileDialog(QWidget *parent, SiteProfile &profile)
     return true;
 }
 }
+
+struct MainWindow::RemoteConnectionResult
+{
+    SiteProfile profile;
+    QString requestedPath;
+    QString finalMessage;
+    QString detail;
+    QStringList knownDirectories;
+    std::vector<FileItem> items;
+    std::unique_ptr<RemoteFileSystem> fileSystem;
+    bool canceled = false;
+    bool connected = false;
+    bool loaded = false;
+};
 
 MainWindow::MainWindow(const DependencyCheckResult &dependencyCheck, QWidget *parent)
     : QMainWindow(parent)
@@ -696,6 +713,12 @@ void MainWindow::setupQuickConnectBar()
         m_portEdit->setText(QString::number(defaultPortForProtocol(protocol)));
     });
     connect(m_connectButton, &QPushButton::clicked, this, [this]() {
+        RemoteSession *session = currentRemoteSession();
+        if (session != nullptr && session->connecting)
+        {
+            cancelRemoteConnection(*session);
+            return;
+        }
         connectQuickProfile(false);
     });
     connect(m_saveSiteButton, &QPushButton::clicked, this, [this]() {
@@ -737,14 +760,7 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     connect(m_remoteTabs, &QTabWidget::currentChanged, this, [this]() {
         RemoteSession *session = currentRemoteSession();
         m_remotePanel = session == nullptr ? dynamic_cast<FilePanel *>(m_remoteTabs->currentWidget()) : session->panel;
-        if (m_disconnectAction != nullptr)
-        {
-            m_disconnectAction->setEnabled(session != nullptr && session->connected);
-        }
-        if (m_refreshAction != nullptr)
-        {
-            m_refreshAction->setText(session != nullptr && session->connected ? "刷新远程" : "刷新本地");
-        }
+        updateRemoteConnectionActions();
         populateSessionManager();
     });
     connect(m_remoteTabs, &QTabWidget::tabCloseRequested, this, &MainWindow::closeRemoteTab);
@@ -823,7 +839,7 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
 
 MainWindow::RemoteSession *MainWindow::createRemoteSession(const SiteProfile &profile, std::unique_ptr<RemoteFileSystem> fileSystem)
 {
-    if (m_remoteTabs == nullptr || fileSystem == nullptr)
+    if (m_remoteTabs == nullptr)
     {
         return nullptr;
     }
@@ -832,6 +848,7 @@ MainWindow::RemoteSession *MainWindow::createRemoteSession(const SiteProfile &pr
     session->id = QString("%1-%2").arg(QString::fromStdString(profile.id)).arg(m_remoteSessions.size() + 1);
     session->profile = profile;
     session->fileSystem = std::move(fileSystem);
+    session->connectionCanceled = std::make_shared<std::atomic_bool>(false);
     session->displayName = siteDisplayName(profile);
     const bool reusePlaceholderPanel = m_remoteSessions.empty() && m_remotePanel != nullptr && m_remoteTabs->indexOf(m_remotePanel) >= 0;
     session->panel = reusePlaceholderPanel ? m_remotePanel : new FilePanel(FilePanel::Mode::RemotePlaceholder, m_remoteTabs);
@@ -922,6 +939,13 @@ MainWindow::RemoteSession *MainWindow::remoteSessionById(const std::string &sess
     return nullptr;
 }
 
+bool MainWindow::hasConnectingRemoteSession() const
+{
+    return std::any_of(m_remoteSessions.begin(), m_remoteSessions.end(), [](const std::unique_ptr<RemoteSession> &session) {
+        return session != nullptr && session->connecting;
+    });
+}
+
 QTreeWidget *MainWindow::createSessionManager()
 {
     m_sessionTree = new QTreeWidget(this);
@@ -989,7 +1013,7 @@ void MainWindow::populateSessionManager()
         QString label = siteDisplayName(profile);
         if (QString::fromStdString(profile.id) == currentSiteId)
         {
-            label += currentSession->connected ? "（当前）" : "（当前，断开）";
+            label += currentSession->connecting ? "（当前，连接中）" : currentSession->connected ? "（当前）" : "（当前，断开）";
         }
         auto *item = new QTreeWidgetItem(groupItem, {label});
         item->setData(0, sessionItemTypeRole, static_cast<int>(SessionTreeItemType::Site));
@@ -1149,6 +1173,10 @@ void MainWindow::closeRemoteTab(int index)
     }
     else
     {
+        if (session->connecting)
+        {
+            cancelRemoteConnection(*session);
+        }
         if (session->fileSystem != nullptr && session->connected)
         {
             session->fileSystem->disconnect();
@@ -1180,16 +1208,7 @@ void MainWindow::closeRemoteTab(int index)
         m_remotePanel = current == nullptr ? dynamic_cast<FilePanel *>(m_remoteTabs->currentWidget()) : current->panel;
     }
 
-    if (m_disconnectAction != nullptr)
-    {
-        const RemoteSession *currentSession = currentRemoteSession();
-        m_disconnectAction->setEnabled(currentSession != nullptr && currentSession->connected);
-    }
-    if (m_refreshAction != nullptr)
-    {
-        const RemoteSession *currentSession = currentRemoteSession();
-        m_refreshAction->setText(currentSession != nullptr && currentSession->connected ? "刷新远程" : "刷新本地");
-    }
+    updateRemoteConnectionActions();
     populateSessionManager();
 }
 
@@ -1303,6 +1322,15 @@ void MainWindow::connectQuickProfile(bool saveProfile)
 
 void MainWindow::showRemoteProfile(const SiteProfile &profile, const QString &initialRemotePath)
 {
+    if (hasConnectingRemoteSession())
+    {
+        const QString message = "已有远程连接正在进行，请等待完成或先取消当前连接。";
+        appendLog("WARN", message);
+        statusBar()->showMessage(message);
+        showWarningMessage("连接进行中", message);
+        return;
+    }
+
     SiteProfile sessionProfile = profile;
     if (!initialRemotePath.trimmed().isEmpty())
     {
@@ -1322,38 +1350,212 @@ void MainWindow::showRemoteProfile(const SiteProfile &profile, const QString &in
         return;
     }
 
-    const RemoteOperationResult result = session->fileSystem->connect(sessionProfile);
-    if (!result.success)
-    {
-        const QString detail = QString::fromUtf8(result.message.c_str());
-        const QString message = QString("连接站点“%1”失败。%2")
-            .arg(siteDisplayName(sessionProfile), userFacingRemoteError(detail));
-        appendLog("ERROR", QString("%1 详细信息：%2").arg(message, detail));
-        showWarningMessage("连接失败", message);
-        setRemoteConnectionState(*session, false, message);
-        return;
-    }
+    startRemoteConnection(*session);
+}
 
-    session->connected = true;
-    QString loadError;
-    const QString defaultRemotePath = QString::fromStdString(sessionProfile.defaultRemotePath);
-    if (!loadRemotePath(*session, defaultRemotePath, true, &loadError))
+void MainWindow::startRemoteConnection(RemoteSession &session)
+{
+    if (session.fileSystem == nullptr)
     {
-        session->fileSystem->disconnect();
-        const QString message = loadError.isEmpty()
-            ? QString("站点“%1”已连接，但无法加载默认目录“%2”。").arg(siteDisplayName(sessionProfile), defaultRemotePath)
-            : QString("站点“%1”已连接，但无法加载默认目录“%2”。%3").arg(siteDisplayName(sessionProfile), defaultRemotePath, loadError);
+        const QString message = "远程后端不可用，无法连接。";
         appendLog("ERROR", message);
-        showWarningMessage("默认目录加载失败", message);
-        setRemoteConnectionState(*session, false, message);
+        setRemoteConnectionState(session, false, message);
+        showWarningMessage("连接失败", message);
         return;
     }
 
-    setRemoteConnectionState(*session, true, QString("已连接：%1").arg(siteDisplayName(sessionProfile)));
+    session.connected = false;
+    session.connecting = true;
+    if (session.connectionCanceled == nullptr)
+    {
+        session.connectionCanceled = std::make_shared<std::atomic_bool>(false);
+    }
+    session.connectionCanceled->store(false);
+    const QString sessionId = session.id;
+    const SiteProfile profile = session.profile;
+    const QString defaultRemotePath = QString::fromStdString(profile.defaultRemotePath.empty() ? "/" : profile.defaultRemotePath);
+    std::unique_ptr<RemoteFileSystem> fileSystem = std::move(session.fileSystem);
+
+    session.panel->setRemoteConnecting(QString("正在连接：%1").arg(siteDisplayName(profile)));
+    if (m_remoteTabs != nullptr && session.panel != nullptr)
+    {
+        m_remoteTabs->setTabText(m_remoteTabs->indexOf(session.panel), QString("远程：%1（连接中）").arg(session.displayName));
+    }
+    appendLog("INFO", QString("开始连接远程站点：%1").arg(siteDisplayName(profile)));
+    statusBar()->showMessage(QString("正在连接远程站点：%1").arg(siteDisplayName(profile)));
+    updateRemoteConnectionActions();
+    populateSessionManager();
+
+    const std::shared_ptr<std::atomic_bool> canceled = session.connectionCanceled;
+    QPointer<MainWindow> window(this);
+    std::thread([window, sessionId, profile, defaultRemotePath, canceled, fileSystem = std::move(fileSystem)]() mutable {
+        auto result = std::make_shared<RemoteConnectionResult>();
+        result->profile = profile;
+        result->requestedPath = defaultRemotePath;
+        result->fileSystem = std::move(fileSystem);
+
+        if (canceled->load())
+        {
+            result->canceled = true;
+        }
+        else
+        {
+            const RemoteOperationResult connectResult = result->fileSystem->connect(profile);
+            if (!connectResult.success)
+            {
+                result->detail = QString::fromUtf8(connectResult.message.c_str());
+                result->finalMessage = QString("连接站点“%1”失败。%2")
+                    .arg(QString::fromStdString(profile.name.empty() ? profile.host : profile.name), userFacingRemoteError(result->detail));
+            }
+            else if (canceled->load())
+            {
+                result->fileSystem->disconnect();
+                result->canceled = true;
+            }
+            else
+            {
+                result->connected = true;
+                try
+                {
+                    result->items = result->fileSystem->listDirectory(defaultRemotePath.toStdString());
+                    QStringList knownDirectories = ancestorRemoteDirectories(defaultRemotePath);
+                    for (const QString &directory : ancestorRemoteDirectories(defaultRemotePath))
+                    {
+                        try
+                        {
+                            const std::vector<FileItem> siblingItems = result->fileSystem->listDirectory(directory.toStdString());
+                            for (const FileItem &sibling : siblingItems)
+                            {
+                                if (sibling.type == FileItemType::Directory)
+                                {
+                                    knownDirectories << QString::fromStdString(sibling.path);
+                                }
+                            }
+                        }
+                        catch (const std::exception &)
+                        {
+                        }
+                    }
+                    for (const FileItem &item : result->items)
+                    {
+                        if (item.type == FileItemType::Directory)
+                        {
+                            knownDirectories << QString::fromStdString(item.path);
+                        }
+                    }
+                    knownDirectories.removeDuplicates();
+                    result->knownDirectories = knownDirectories;
+                    result->loaded = true;
+                }
+                catch (const std::exception &error)
+                {
+                    result->detail = QString::fromUtf8(error.what());
+                    result->finalMessage = QString("站点已连接，但无法加载默认目录“%1”。%2")
+                        .arg(defaultRemotePath, userFacingRemoteError(result->detail));
+                    result->fileSystem->disconnect();
+                    result->connected = false;
+                }
+            }
+        }
+
+        if (canceled->load())
+        {
+            if (result->fileSystem != nullptr && result->fileSystem->isConnected())
+            {
+                result->fileSystem->disconnect();
+            }
+            result->canceled = true;
+        }
+
+        if (window != nullptr)
+        {
+            QMetaObject::invokeMethod(window, [window, sessionId, result]() {
+                if (window != nullptr)
+                {
+                    window->finishRemoteConnection(sessionId, result);
+                }
+            }, Qt::QueuedConnection);
+        }
+    }).detach();
+}
+
+void MainWindow::finishRemoteConnection(const QString &sessionId, const std::shared_ptr<RemoteConnectionResult> &result)
+{
+    RemoteSession *session = remoteSessionById(sessionId.toStdString());
+    if (session == nullptr || result == nullptr)
+    {
+        return;
+    }
+
+    session->connecting = false;
+    if (result->canceled || (session->connectionCanceled != nullptr && session->connectionCanceled->load()))
+    {
+        setRemoteConnectionState(*session, false, "远程连接已取消。");
+        appendLog("INFO", QString("远程连接已取消：%1").arg(session->displayName));
+        updateRemoteConnectionActions();
+        return;
+    }
+
+    if (!result->connected || !result->loaded)
+    {
+        const QString message = result->finalMessage.isEmpty()
+            ? QString("连接站点“%1”失败。").arg(session->displayName)
+            : result->finalMessage;
+        appendLog("ERROR", result->detail.isEmpty() ? message : QString("%1 详细信息：%2").arg(message, result->detail));
+        showWarningMessage(result->connected ? "默认目录加载失败" : "连接失败", message);
+        setRemoteConnectionState(*session, false, message);
+        updateRemoteConnectionActions();
+        return;
+    }
+
+    session->fileSystem = std::move(result->fileSystem);
+    session->connected = true;
+    session->currentPath = result->requestedPath;
+    session->panel->setRemoteKnownDirectories(result->knownDirectories);
+    session->panel->setRemoteItems(
+        session->currentPath,
+        result->items,
+        QString("%1 已连接：%2，%3 个项目")
+            .arg(protocolText(session->profile.protocol))
+            .arg(session->currentPath)
+            .arg(result->items.size()),
+        true);
+    appendLog("INFO", QString("远程目录已加载：%1").arg(session->currentPath));
+    setRemoteConnectionState(*session, true, QString("已连接：%1").arg(session->displayName));
+    recordRecentSession(*session);
+    updateRemoteConnectionActions();
+}
+
+void MainWindow::cancelRemoteConnection(RemoteSession &session)
+{
+    if (!session.connecting)
+    {
+        return;
+    }
+
+    if (session.connectionCanceled != nullptr)
+    {
+        session.connectionCanceled->store(true);
+    }
+    session.panel->setRemoteConnecting(QString("正在取消连接：%1").arg(session.displayName));
+    statusBar()->showMessage(QString("正在取消远程连接：%1").arg(session.displayName));
+    appendLog("INFO", QString("已请求取消远程连接：%1").arg(session.displayName));
+    updateRemoteConnectionActions();
 }
 
 bool MainWindow::loadRemotePath(RemoteSession &session, const QString &path, bool addToHistory, QString *errorMessage)
 {
+    if (session.connecting)
+    {
+        const QString message = "远程会话正在连接，暂时无法加载目录。";
+        if (errorMessage != nullptr)
+        {
+            *errorMessage = message;
+        }
+        appendLog("WARN", message);
+        return false;
+    }
+
     if (!session.connected || session.fileSystem == nullptr)
     {
         const QString message = "远程会话未连接，无法加载目录。";
@@ -1453,6 +1655,11 @@ bool MainWindow::loadRemotePath(const QString &path, bool addToHistory, QString 
 void MainWindow::refreshRemote()
 {
     RemoteSession *session = currentRemoteSession();
+    if (session != nullptr && session->connecting)
+    {
+        statusBar()->showMessage("远程会话正在连接，暂时不能刷新。");
+        return;
+    }
     if (session == nullptr || !session->connected)
     {
         if (m_localPanel != nullptr)
@@ -1472,6 +1679,11 @@ void MainWindow::refreshRemote()
 void MainWindow::disconnectRemote()
 {
     RemoteSession *session = currentRemoteSession();
+    if (session != nullptr && session->connecting)
+    {
+        cancelRemoteConnection(*session);
+        return;
+    }
     if (session == nullptr || !session->connected)
     {
         return;
@@ -1671,6 +1883,7 @@ void MainWindow::moveRemotePaths(RemoteSession &session, const QStringList &sour
 void MainWindow::setRemoteConnectionState(RemoteSession &session, bool connected, const QString &message)
 {
     session.connected = connected;
+    session.connecting = false;
     if (!connected)
     {
         session.currentPath.clear();
@@ -1687,19 +1900,37 @@ void MainWindow::setRemoteConnectionState(RemoteSession &session, bool connected
             QString("远程：%1").arg(session.displayName));
     }
 
-    if (m_disconnectAction != nullptr)
-    {
-        const RemoteSession *currentSession = currentRemoteSession();
-        m_disconnectAction->setEnabled(currentSession != nullptr && currentSession->connected);
-    }
-    if (m_refreshAction != nullptr)
-    {
-        const RemoteSession *currentSession = currentRemoteSession();
-        m_refreshAction->setText(currentSession != nullptr && currentSession->connected ? "刷新远程" : "刷新本地");
-    }
+    updateRemoteConnectionActions();
 
     statusBar()->showMessage(message);
     populateSessionManager();
+}
+
+void MainWindow::updateRemoteConnectionActions()
+{
+    const RemoteSession *currentSession = currentRemoteSession();
+    const bool currentConnecting = currentSession != nullptr && currentSession->connecting;
+    const bool currentConnected = currentSession != nullptr && currentSession->connected;
+
+    if (m_disconnectAction != nullptr)
+    {
+        m_disconnectAction->setEnabled(currentConnecting || currentConnected);
+        m_disconnectAction->setText(currentConnecting ? "取消连接" : "断开");
+    }
+    if (m_refreshAction != nullptr)
+    {
+        m_refreshAction->setEnabled(!currentConnecting);
+        m_refreshAction->setText(currentConnected ? "刷新远程" : "刷新本地");
+    }
+    if (m_connectButton != nullptr)
+    {
+        m_connectButton->setText(currentConnecting ? "取消" : "连接");
+        m_connectButton->setIcon(fluentIcon(currentConnecting ? "dismiss_circle" : "checkmark_circle"));
+    }
+    if (m_saveSiteButton != nullptr)
+    {
+        m_saveSiteButton->setEnabled(!hasConnectingRemoteSession());
+    }
 }
 
 void MainWindow::enqueueTransferJob(const TransferJob &job)

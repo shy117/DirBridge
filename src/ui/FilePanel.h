@@ -66,6 +66,11 @@ public:
     void setRemoteSummary(const QString &curlVersion, bool hasFtp, bool hasSftp);
     void setRemoteKnownDirectories(const QStringList &directories);
     void setRemoteItems(const QString &path, const std::vector<FileItem> &items, const QString &status, bool addToHistory = true);
+    /**
+     * @brief Shows the transient state used while a remote session is connecting.
+     * @param status User-facing connection progress text.
+     */
+    void setRemoteConnecting(const QString &status);
     void setRemoteDisconnected(const QString &status);
     void setRemoteError(const QString &status);
 
