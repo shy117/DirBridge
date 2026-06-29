@@ -288,10 +288,18 @@ void checkTransferQueueAndManager()
     queue.enqueue(downloadMissing);
 
     int notifications = 0;
+    int progressNotifications = 0;
     TransferManager manager(remote, queue);
     manager.setConcurrencyLimit(0);
     manager.setQueueChangedCallback([&notifications]() {
         ++notifications;
+    });
+    manager.setProgressCallback([&progressNotifications](const TransferJob &, std::int64_t transferredBytes, std::int64_t totalBytes) {
+        if (totalBytes >= 0 && transferredBytes >= 0)
+        {
+            ++progressNotifications;
+        }
+        return true;
     });
     manager.processPending();
 
@@ -305,6 +313,7 @@ void checkTransferQueueAndManager()
     require(failedDownload->status == TransferStatus::Failed, "missing download should fail");
     require(!failedDownload->errorMessage.empty(), "failed download should keep error message");
     require(notifications >= 4, "manager should notify on running and terminal state changes");
+    require(progressNotifications > 0, "manager should forward transfer progress");
 
     const TransferJob *retryJob = queue.retry(downloadMissing.id, "retry-missing-download");
     require(retryJob != nullptr, "failed job should be retryable");

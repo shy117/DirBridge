@@ -272,7 +272,7 @@ RemoteOperationResult FakeRemoteFileSystem::rename(const std::string &sourcePath
     return {true, "remote item renamed"};
 }
 
-RemoteOperationResult FakeRemoteFileSystem::uploadFile(const std::string &localPath, const std::string &remotePath)
+RemoteOperationResult FakeRemoteFileSystem::uploadFile(const std::string &localPath, const std::string &remotePath, TransferProgressCallback progress)
 {
     if (!m_connected)
     {
@@ -292,11 +292,16 @@ RemoteOperationResult FakeRemoteFileSystem::uploadFile(const std::string &localP
     }
 
     const std::string owner = m_profile.username.empty() ? "user" : m_profile.username;
-    m_items[normalizedRemotePath] = makeFile(normalizedRemotePath, static_cast<std::int64_t>(std::filesystem::file_size(source)), owner);
+    const auto size = static_cast<std::int64_t>(std::filesystem::file_size(source));
+    if (progress && !progress(size, size))
+    {
+        return {false, "transfer canceled"};
+    }
+    m_items[normalizedRemotePath] = makeFile(normalizedRemotePath, size, owner);
     return {true, "file uploaded"};
 }
 
-RemoteOperationResult FakeRemoteFileSystem::downloadFile(const std::string &remotePath, const std::string &localPath)
+RemoteOperationResult FakeRemoteFileSystem::downloadFile(const std::string &remotePath, const std::string &localPath, TransferProgressCallback progress)
 {
     if (!m_connected)
     {
@@ -323,5 +328,9 @@ RemoteOperationResult FakeRemoteFileSystem::downloadFile(const std::string &remo
     }
 
     output << "fake remote file: " << normalizedRemotePath << '\n';
+    if (progress && !progress(remoteItem->second.size, remoteItem->second.size))
+    {
+        return {false, "transfer canceled"};
+    }
     return {true, "file downloaded"};
 }

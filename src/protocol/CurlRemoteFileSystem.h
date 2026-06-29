@@ -14,8 +14,8 @@ public:
     RemoteOperationResult createFile(const std::string &path) override;
     RemoteOperationResult remove(const std::string &path) override;
     RemoteOperationResult rename(const std::string &sourcePath, const std::string &targetPath) override;
-    RemoteOperationResult uploadFile(const std::string &localPath, const std::string &remotePath) override;
-    RemoteOperationResult downloadFile(const std::string &remotePath, const std::string &localPath) override;
+    RemoteOperationResult uploadFile(const std::string &localPath, const std::string &remotePath, TransferProgressCallback progress = {}) override;
+    RemoteOperationResult downloadFile(const std::string &remotePath, const std::string &localPath, TransferProgressCallback progress = {}) override;
 
 private:
     SiteProfile m_profile;

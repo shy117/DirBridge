@@ -11,6 +11,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMetaObject>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QStringList>
 #include <QTableWidget>
@@ -93,6 +94,11 @@ bool checkRemoteUiObjects(MainWindow &window)
     if (remoteTabs != nullptr && remoteTabs->count() != 0)
     {
         QTextStream(stderr) << "Remote tabs should start without placeholder pages" << Qt::endl;
+        ok = false;
+    }
+    if (remoteTabs != nullptr && !remoteTabs->isHidden())
+    {
+        QTextStream(stderr) << "Remote tabs should be hidden before the first remote session" << Qt::endl;
         ok = false;
     }
     if (findActionByText(window, "关于 DirBridge") == nullptr)
@@ -351,6 +357,21 @@ bool hasTransferRow(QTreeWidget *table, const QString &name, const QString &dire
     return false;
 }
 
+bool waitForTransferRow(QTreeWidget *table, const QString &name, const QString &direction, const QString &status)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        QApplication::processEvents();
+        if (hasTransferRow(table, name, direction, status))
+        {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+}
+
 /**
  * @brief Verifies that a file-panel navigation button is icon-only but still discoverable.
  * @param panel Panel that owns the button.
@@ -398,6 +419,13 @@ QTreeWidgetItem *findTopLevelTransferRow(QTreeWidget *table, const QString &name
     }
 
     return nullptr;
+}
+
+bool hasProgressBar(QTreeWidget *table, QTreeWidgetItem *item)
+{
+    return table != nullptr
+        && item != nullptr
+        && qobject_cast<QProgressBar *>(table->itemWidget(item, 4)) != nullptr;
 }
 
 void dumpTransferRows(QTreeWidget *table)
@@ -674,6 +702,72 @@ bool connectFakeRemoteSession(MainWindow &window, const QString &remotePath)
     return true;
 }
 
+bool checkQuickSavePreservesExistingSite(MainWindow &window)
+{
+    QTreeWidget *sessionTree = window.findChild<QTreeWidget *>("sessionManagerTree");
+    QComboBox *protocolCombo = window.findChild<QComboBox *>("quickProtocolCombo");
+    QLineEdit *hostEdit = window.findChild<QLineEdit *>("quickHostEdit");
+    QLineEdit *portEdit = window.findChild<QLineEdit *>("quickPortEdit");
+    QLineEdit *userEdit = window.findChild<QLineEdit *>("quickUserEdit");
+    QLineEdit *passwordEdit = window.findChild<QLineEdit *>("quickPasswordEdit");
+    QLineEdit *quickRemotePathEdit = window.findChild<QLineEdit *>("quickRemotePathEdit");
+    QPushButton *saveButton = window.findChild<QPushButton *>("quickSaveSiteButton");
+    QTabWidget *remoteTabs = window.findChild<QTabWidget *>("remoteTabs");
+    if (sessionTree == nullptr || protocolCombo == nullptr || hostEdit == nullptr || portEdit == nullptr
+        || userEdit == nullptr || passwordEdit == nullptr || quickRemotePathEdit == nullptr || saveButton == nullptr || remoteTabs == nullptr)
+    {
+        QTextStream(stderr) << "Quick-save preservation prerequisites are incomplete" << Qt::endl;
+        return false;
+    }
+
+    SiteProfile existing;
+    existing.id = "ui-preserve-existing-site";
+    existing.name = "SFTP_192.168.8.128";
+    existing.group = "虚拟机测试";
+    existing.protocol = RemoteProtocol::Sftp;
+    existing.host = "192.168.8.128";
+    existing.port = 22;
+    existing.username = "testuser";
+    existing.password = "old-password";
+    existing.defaultRemotePath = "/home/testuser/remote_test";
+    existing.encoding = "UTF-8";
+    window.saveSiteForTesting(existing);
+    QApplication::processEvents();
+
+    window.setRemoteFileSystemForTesting(std::make_unique<FakeRemoteFileSystem>());
+    protocolCombo->setCurrentText("SFTP");
+    hostEdit->setText("192.168.8.128");
+    portEdit->setText("22");
+    userEdit->setText("testuser");
+    passwordEdit->setText("new-password");
+    quickRemotePathEdit->setText("/home/testuser/remote_test");
+    saveButton->click();
+    QApplication::processEvents();
+
+    if (!waitForRemoteConnected(remoteTabs->currentWidget(), "/home/testuser/remote_test"))
+    {
+        QTextStream(stderr) << "Quick-save preservation connection did not complete" << Qt::endl;
+        return false;
+    }
+    if (!treeContainsText(sessionTree, "虚拟机测试") || !treeContainsText(sessionTree, "SFTP_192.168.8.128"))
+    {
+        QTextStream(stderr) << "Quick-save changed the existing site name or group" << Qt::endl;
+        return false;
+    }
+    if (treeContainsText(sessionTree, "SFTP 192.168.8.128"))
+    {
+        QTextStream(stderr) << "Quick-save created or exposed a generated ungrouped site name" << Qt::endl;
+        return false;
+    }
+
+    const int connectedIndex = remoteTabs->currentIndex();
+    QMetaObject::invokeMethod(remoteTabs, "tabCloseRequested", Qt::DirectConnection, Q_ARG(int, connectedIndex));
+    QApplication::processEvents();
+    window.removeSiteForTesting(existing.id);
+    QApplication::processEvents();
+    return true;
+}
+
 /**
  * @brief Verifies connecting state, duplicate-connect prevention, and logical cancellation.
  * @param window Main window under test.
@@ -849,6 +943,11 @@ bool checkSessionManagerWorkflow(MainWindow &window)
         QTextStream(stderr) << "Remote tab close did not remove current session tab" << Qt::endl;
         return false;
     }
+    if (initialTabCount == 0 && !remoteTabs->isHidden())
+    {
+        QTextStream(stderr) << "Remote tabs should be hidden after closing the last session" << Qt::endl;
+        return false;
+    }
 
     window.removeSiteForTesting(grouped.id);
     QApplication::processEvents();
@@ -941,6 +1040,12 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
     {
         return false;
     }
+    QTreeWidget *transferTable = window.findChild<QTreeWidget *>("transferTable");
+    if (transferTable == nullptr)
+    {
+        QTextStream(stderr) << "Directory operation transfer table is missing" << Qt::endl;
+        return false;
+    }
 
     const std::filesystem::path tempRoot = std::filesystem::temp_directory_path() / "dirbridge-ui-directory-smoke";
     const std::filesystem::path uploadRoot = tempRoot / "upload-src";
@@ -964,18 +1069,24 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
     window.setLocalPathForTesting(QString::fromStdString(downloadRoot.u8string()));
 
     window.uploadLocalPathForTesting(QString::fromStdString(localDirectory.u8string()));
-    QApplication::processEvents();
-    window.uploadLocalPathForTesting(QString::fromStdString(localDirectory.u8string()));
-    QApplication::processEvents();
-
+    if (!waitForTransferRow(transferTable, "dirbridge-folder", "上传", "已完成"))
+    {
+        QTextStream(stderr) << "Directory upload did not complete before conflict retry" << Qt::endl;
+        dumpTransferRows(transferTable);
+        return false;
+    }
     const QString uploadedDirectory = "/home/testuser/remote_test/dirbridge-folder";
     const QString movedDirectory = "/home/testuser/remote_test/upload/dirbridge-folder";
     window.moveRemotePathsForTesting({uploadedDirectory}, "/home/testuser/remote_test/upload");
     QApplication::processEvents();
 
     window.downloadRemotePathForTesting(movedDirectory);
-    QApplication::processEvents();
-    QTreeWidget *transferTable = window.findChild<QTreeWidget *>("transferTable");
+    if (!waitForTransferRow(transferTable, "dirbridge-folder", "下载", "已完成"))
+    {
+        QTextStream(stderr) << "Directory download did not complete" << Qt::endl;
+        dumpTransferRows(transferTable);
+        return false;
+    }
     const std::filesystem::path downloadedFile = downloadRoot / "dirbridge-folder" / "nested" / "inside.txt";
     if (!std::filesystem::is_regular_file(downloadedFile))
     {
@@ -992,14 +1103,21 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
     }
     QTreeWidgetItem *uploadParent = findTopLevelTransferRow(transferTable, "dirbridge-folder", "上传", "已完成");
     QTreeWidgetItem *downloadParent = findTopLevelTransferRow(transferTable, "dirbridge-folder", "下载", "已完成");
-    if (uploadParent == nullptr || uploadParent->text(4) != "100%" || uploadParent->childCount() < 2)
+    if (uploadParent == nullptr || uploadParent->text(4) != "100%" || uploadParent->childCount() < 2
+        || uploadParent->isExpanded() || !hasProgressBar(transferTable, uploadParent))
     {
         QTextStream(stderr) << "Directory upload parent transfer row is incomplete" << Qt::endl;
         return false;
     }
-    if (downloadParent == nullptr || downloadParent->text(4) != "100%" || downloadParent->childCount() < 2)
+    if (downloadParent == nullptr || downloadParent->text(4) != "100%" || downloadParent->childCount() < 2
+        || downloadParent->isExpanded() || !hasProgressBar(transferTable, downloadParent))
     {
         QTextStream(stderr) << "Directory download parent transfer row is incomplete" << Qt::endl;
+        return false;
+    }
+    if (!hasProgressBar(transferTable, uploadParent->child(0)) || !hasProgressBar(transferTable, downloadParent->child(0)))
+    {
+        QTextStream(stderr) << "Directory child transfer row does not use a progress bar" << Qt::endl;
         return false;
     }
 
@@ -1044,6 +1162,7 @@ bool checkRemoteUiWorkflow(MainWindow &window)
         {"download", "upload", "edit", "readme.txt"},
         true);
     return baseWorkflowOk
+        && checkQuickSavePreservesExistingSite(window)
         && checkRemoteConnectionControlWorkflow(window)
         && checkSessionManagerWorkflow(window)
         && checkRemoteMultiSessionWorkflow(window)
@@ -1274,8 +1393,7 @@ bool checkLiveRemoteTransferWorkflow(MainWindow &window)
 
     const QString remoteFilePath = joinRemotePathForCheck(remotePath, fileName);
     window.uploadLocalFileForTesting(QString::fromStdString(localUploadPath.string()));
-    QApplication::processEvents();
-    if (!hasTransferRow(transferTable, fileName, "上传", "已完成"))
+    if (!waitForTransferRow(transferTable, fileName, "上传", "已完成"))
     {
         QTextStream(stderr) << "Upload transfer row was not completed" << Qt::endl;
         return false;
@@ -1287,8 +1405,7 @@ bool checkLiveRemoteTransferWorkflow(MainWindow &window)
     }
 
     window.downloadRemoteFileForTesting(remoteFilePath);
-    QApplication::processEvents();
-    if (!hasTransferRow(transferTable, fileName, "下载", "已完成"))
+    if (!waitForTransferRow(transferTable, fileName, "下载", "已完成"))
     {
         QTextStream(stderr) << "Download transfer row was not completed" << Qt::endl;
         return false;

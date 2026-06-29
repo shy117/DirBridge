@@ -165,6 +165,19 @@ size_t readFileCallback(char *buffer, size_t size, size_t count, void *userData)
     return std::fread(buffer, size, count, static_cast<FILE *>(userData));
 }
 
+int transferProgressCallback(void *userData, curl_off_t downloadTotal, curl_off_t downloadNow, curl_off_t uploadTotal, curl_off_t uploadNow)
+{
+    auto *progress = static_cast<TransferProgressCallback *>(userData);
+    if (progress == nullptr || !(*progress))
+    {
+        return 0;
+    }
+
+    const curl_off_t total = uploadTotal > 0 ? uploadTotal : downloadTotal;
+    const curl_off_t now = uploadNow > 0 ? uploadNow : downloadNow;
+    return (*progress)(static_cast<std::int64_t>(now), static_cast<std::int64_t>(total)) ? 0 : 1;
+}
+
 std::string trimCopy(std::string value)
 {
     auto isSpace = [](unsigned char character) {
@@ -735,7 +748,7 @@ RemoteOperationResult CurlRemoteFileSystem::rename(const std::string &sourcePath
         {"RNFR " + ftpCommandPath(normalizedSourcePath), "RNTO " + ftpCommandPath(normalizedTargetPath)});
 }
 
-RemoteOperationResult CurlRemoteFileSystem::uploadFile(const std::string &localPath, const std::string &remotePath)
+RemoteOperationResult CurlRemoteFileSystem::uploadFile(const std::string &localPath, const std::string &remotePath, TransferProgressCallback progress)
 {
     if (!m_connected)
     {
@@ -766,6 +779,12 @@ RemoteOperationResult CurlRemoteFileSystem::uploadFile(const std::string &localP
         curl_easy_setopt(handle.get(), CURLOPT_READFUNCTION, readFileCallback);
         curl_easy_setopt(handle.get(), CURLOPT_READDATA, file);
         curl_easy_setopt(handle.get(), CURLOPT_ERRORBUFFER, errorBuffer);
+        if (progress)
+        {
+            curl_easy_setopt(handle.get(), CURLOPT_NOPROGRESS, 0L);
+            curl_easy_setopt(handle.get(), CURLOPT_XFERINFOFUNCTION, transferProgressCallback);
+            curl_easy_setopt(handle.get(), CURLOPT_XFERINFODATA, &progress);
+        }
 
         const std::uintmax_t size = std::filesystem::file_size(localFilesystemPath(localPath));
         curl_easy_setopt(handle.get(), CURLOPT_INFILESIZE_LARGE, static_cast<curl_off_t>(size));
@@ -791,7 +810,7 @@ RemoteOperationResult CurlRemoteFileSystem::uploadFile(const std::string &localP
     return {true, "upload succeeded"};
 }
 
-RemoteOperationResult CurlRemoteFileSystem::downloadFile(const std::string &remotePath, const std::string &localPath)
+RemoteOperationResult CurlRemoteFileSystem::downloadFile(const std::string &remotePath, const std::string &localPath, TransferProgressCallback progress)
 {
     if (!m_connected)
     {
@@ -827,6 +846,12 @@ RemoteOperationResult CurlRemoteFileSystem::downloadFile(const std::string &remo
         curl_easy_setopt(handle.get(), CURLOPT_WRITEFUNCTION, writeFileCallback);
         curl_easy_setopt(handle.get(), CURLOPT_WRITEDATA, file);
         curl_easy_setopt(handle.get(), CURLOPT_ERRORBUFFER, errorBuffer);
+        if (progress)
+        {
+            curl_easy_setopt(handle.get(), CURLOPT_NOPROGRESS, 0L);
+            curl_easy_setopt(handle.get(), CURLOPT_XFERINFOFUNCTION, transferProgressCallback);
+            curl_easy_setopt(handle.get(), CURLOPT_XFERINFODATA, &progress);
+        }
 
         const CURLcode code = curl_easy_perform(handle.get());
         if (code != CURLE_OK)

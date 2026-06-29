@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <atomic>
+#include <map>
 #include <vector>
 
 #include "config/SiteProfile.h"
@@ -22,7 +23,9 @@ class QFileInfo;
 class QLineEdit;
 class QPushButton;
 class QAction;
+class QSplitter;
 class QTabWidget;
+class QThread;
 class QTreeWidget;
 class QTreeWidgetItem;
 class FilePanel;
@@ -209,6 +212,7 @@ private:
     bool removeRemotePathRecursive(RemoteSession &session, const QString &path, QString *errorMessage = nullptr);
     void moveRemotePaths(RemoteSession &session, const QStringList &sourcePaths, const QString &targetDirectory);
     void setRemoteConnectionState(RemoteSession &session, bool connected, const QString &message);
+    void updateFileSplitterLayout();
     /**
      * @brief Adds a transfer job to the queue and refreshes the transfer table.
      * @param job Pending transfer job to display and schedule.
@@ -232,6 +236,9 @@ private:
      * @brief Runs pending transfer jobs through the core transfer manager.
      */
     void processTransferQueue();
+    void handleTransferProgress(const QString &jobId, std::int64_t transferredBytes, std::int64_t totalBytes);
+    void handleTransferFinished(const QString &jobId, const RemoteOperationResult &result, bool canceled);
+    bool hasRunningTransferForSession(const QString &sessionId) const;
     void refreshTransferTable();
     void updateTransferActionButtons();
     QString selectedTransferJobId() const;
@@ -279,6 +286,10 @@ private:
     bool m_dialogsSuppressedForTesting = false;
     std::vector<std::unique_ptr<RemoteSession>> m_remoteSessions;
     TransferQueue m_transferQueue;
+    bool m_transferWorkerRunning = false;
+    QString m_runningTransferJobId;
+    QThread *m_transferThread = nullptr;
+    std::map<std::string, std::shared_ptr<std::atomic_bool>> m_transferCancelFlags;
 
     QAction *m_disconnectAction = nullptr;
     QAction *m_refreshAction = nullptr;
@@ -298,6 +309,7 @@ private:
     QPushButton *m_clearFinishedTransfersButton = nullptr;
     QTreeWidget *m_logView = nullptr;
     FilePanel *m_localPanel = nullptr;
+    QSplitter *m_fileSplitter = nullptr;
     QTabWidget *m_remoteTabs = nullptr;
     FilePanel *m_remotePanel = nullptr;
 };

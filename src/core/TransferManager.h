@@ -5,12 +5,14 @@
 #include "core/TransferQueue.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 
 class TransferManager
 {
 public:
     using QueueChangedCallback = std::function<void()>;
+    using ProgressCallback = std::function<bool(const TransferJob &, std::int64_t, std::int64_t)>;
     using RemoteResolver = std::function<RemoteFileSystem *(const TransferJob &)>;
 
     /**
@@ -34,6 +36,12 @@ public:
     void setQueueChangedCallback(QueueChangedCallback callback);
 
     /**
+     * @brief Sets a callback emitted while the active file transfer reports byte progress.
+     * @param callback Callback returning false to request cancellation.
+     */
+    void setProgressCallback(ProgressCallback callback);
+
+    /**
      * @brief Sets the maximum number of jobs that may run at once.
      * @param limit Positive concurrency limit. Values below 1 are treated as 1.
      */
@@ -52,6 +60,7 @@ private:
     RemoteResolver m_remoteResolver;
     TransferQueue &m_queue;
     QueueChangedCallback m_queueChangedCallback;
+    ProgressCallback m_progressCallback;
     std::size_t m_concurrencyLimit = 1;
 };
 

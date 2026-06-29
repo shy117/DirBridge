@@ -39,11 +39,14 @@
 #include <QMetaObject>
 #include <QPoint>
 #include <QPointer>
+#include <QPointer>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QTabBar>
+#include <QThread>
 #include <QToolBar>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -798,9 +801,9 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     addDockWidget(Qt::LeftDockWidgetArea, m_sessionDock);
 
     auto *verticalSplitter = new QSplitter(Qt::Vertical, this);
-    auto *fileSplitter = new QSplitter(Qt::Horizontal, verticalSplitter);
+    m_fileSplitter = new QSplitter(Qt::Horizontal, verticalSplitter);
 
-    auto *localTabs = new QTabWidget(fileSplitter);
+    auto *localTabs = new QTabWidget(m_fileSplitter);
     localTabs->setObjectName("localTabs");
     m_localPanel = new FilePanel(FilePanel::Mode::Local, localTabs);
     m_localPanel->setLocalUploadRequestedHandler([this](const QString &localPath) {
@@ -818,7 +821,7 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     });
     localTabs->addTab(m_localPanel, "本地：桌面");
 
-    m_remoteTabs = new QTabWidget(fileSplitter);
+    m_remoteTabs = new QTabWidget(m_fileSplitter);
     m_remoteTabs->setObjectName("remoteTabs");
     m_remoteTabs->setTabsClosable(false);
     connect(m_remoteTabs, &QTabWidget::currentChanged, this, [this]() {
@@ -831,10 +834,11 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     Q_UNUSED(dependencyCheck);
     m_remotePanel = nullptr;
 
-    fileSplitter->addWidget(localTabs);
-    fileSplitter->addWidget(m_remoteTabs);
-    fileSplitter->setStretchFactor(0, 1);
-    fileSplitter->setStretchFactor(1, 1);
+    m_fileSplitter->addWidget(localTabs);
+    m_fileSplitter->addWidget(m_remoteTabs);
+    m_fileSplitter->setStretchFactor(0, 1);
+    m_fileSplitter->setStretchFactor(1, 1);
+    updateFileSplitterLayout();
 
     auto *bottomTabs = new QTabWidget(verticalSplitter);
     bottomTabs->setObjectName("bottomTabs");
@@ -887,7 +891,7 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     bottomTabs->addTab(transferTab, "传输");
     bottomTabs->addTab(m_logView, "日志");
 
-    verticalSplitter->addWidget(fileSplitter);
+    verticalSplitter->addWidget(m_fileSplitter);
     verticalSplitter->addWidget(bottomTabs);
     verticalSplitter->setStretchFactor(0, 5);
     verticalSplitter->setStretchFactor(1, 1);
@@ -952,6 +956,7 @@ MainWindow::RemoteSession *MainWindow::createRemoteSession(const SiteProfile &pr
     m_remoteTabs->setCurrentIndex(tabIndex);
     m_remotePanel = sessionPtr->panel;
     m_remoteSessions.push_back(std::move(session));
+    updateFileSplitterLayout();
     return sessionPtr;
 }
 
@@ -1233,6 +1238,11 @@ void MainWindow::closeRemoteTab(int index)
         {
             cancelRemoteConnection(*session);
         }
+        if (hasRunningTransferForSession(session->id))
+        {
+            showWarningMessage("无法关闭会话", "当前远程会话仍有传输任务正在运行，请等待完成或先取消传输。");
+            return;
+        }
         if (session->fileSystem != nullptr && session->connected)
         {
             session->fileSystem->disconnect();
@@ -1254,6 +1264,7 @@ void MainWindow::closeRemoteTab(int index)
     m_remotePanel = current == nullptr ? dynamic_cast<FilePanel *>(m_remoteTabs->currentWidget()) : current->panel;
 
     updateRemoteConnectionActions();
+    updateFileSplitterLayout();
     populateSessionManager();
 }
 
@@ -1349,7 +1360,11 @@ void MainWindow::connectQuickProfile(bool saveProfile)
             }
             else
             {
+                const std::string existingName = existing->name;
+                const std::string existingGroup = existing->group;
                 profile.id = existing->id;
+                profile.name = existingName;
+                profile.group = existingGroup;
                 *existing = profile;
             }
             saveSites();
@@ -1727,6 +1742,11 @@ void MainWindow::disconnectRemote()
     {
         return;
     }
+    if (hasRunningTransferForSession(session->id))
+    {
+        showWarningMessage("无法断开会话", "当前远程会话仍有传输任务正在运行，请等待完成或先取消传输。");
+        return;
+    }
 
     session->fileSystem->disconnect();
     setRemoteConnectionState(*session, false, "远程会话已断开。");
@@ -1945,6 +1965,25 @@ void MainWindow::setRemoteConnectionState(RemoteSession &session, bool connected
     populateSessionManager();
 }
 
+void MainWindow::updateFileSplitterLayout()
+{
+    if (m_fileSplitter == nullptr || m_remoteTabs == nullptr)
+    {
+        return;
+    }
+
+    if (m_remoteTabs->count() == 0)
+    {
+        m_remoteTabs->hide();
+        m_fileSplitter->setSizes({1, 0});
+        return;
+    }
+
+    m_remoteTabs->show();
+    const int width = std::max(2, m_fileSplitter->width());
+    m_fileSplitter->setSizes({width / 2, width - (width / 2)});
+}
+
 void MainWindow::updateRemoteConnectionActions()
 {
     const RemoteSession *currentSession = currentRemoteSession();
@@ -2085,20 +2124,177 @@ void MainWindow::updateDirectoryTransferParents()
 
 void MainWindow::processTransferQueue()
 {
-    TransferManager manager([this](const TransferJob &job) -> RemoteFileSystem * {
-        RemoteSession *session = remoteSessionById(job.sessionId);
-        if (session == nullptr || !session->connected)
-        {
-            return nullptr;
-        }
-        return session->fileSystem.get();
-    }, m_transferQueue);
-    manager.setQueueChangedCallback([this]() {
+    if (m_transferWorkerRunning)
+    {
+        return;
+    }
+
+    TransferJob *job = m_transferQueue.nextPending();
+    if (job == nullptr)
+    {
         refreshTransferTable();
-    });
-    manager.setConcurrencyLimit(1);
-    manager.processPending();
+        return;
+    }
+
+    RemoteSession *session = remoteSessionById(job->sessionId);
+    if (session == nullptr || !session->connected || session->fileSystem == nullptr)
+    {
+        job->status = TransferStatus::Failed;
+        job->errorMessage = "remote session is not available";
+        refreshTransferTable();
+        processTransferQueue();
+        return;
+    }
+
+    job->status = TransferStatus::Running;
+    job->errorMessage.clear();
+    const TransferJob jobSnapshot = *job;
+    auto cancelFlag = std::make_shared<std::atomic_bool>(false);
+    m_transferCancelFlags[jobSnapshot.id] = cancelFlag;
+    m_runningTransferJobId = QString::fromStdString(jobSnapshot.id);
+    m_transferWorkerRunning = true;
     refreshTransferTable();
+
+    RemoteFileSystem *fileSystem = session->fileSystem.get();
+    QPointer<MainWindow> window(this);
+    QThread *thread = QThread::create([window, fileSystem, jobSnapshot, cancelFlag]() {
+        auto lastProgressAt = std::chrono::steady_clock::now() - std::chrono::milliseconds(250);
+        const QString jobId = QString::fromStdString(jobSnapshot.id);
+        auto progress = [window, jobId, cancelFlag, &lastProgressAt](std::int64_t transferredBytes, std::int64_t totalBytes) {
+            if (cancelFlag->load())
+            {
+                return false;
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            const bool terminalProgress = totalBytes > 0 && transferredBytes >= totalBytes;
+            if (terminalProgress || now - lastProgressAt >= std::chrono::milliseconds(100))
+            {
+                lastProgressAt = now;
+                if (window != nullptr)
+                {
+                    QMetaObject::invokeMethod(window.data(), [window, jobId, transferredBytes, totalBytes]() {
+                        if (window != nullptr)
+                        {
+                            window->handleTransferProgress(jobId, transferredBytes, totalBytes);
+                        }
+                    }, Qt::QueuedConnection);
+                }
+            }
+            return !cancelFlag->load();
+        };
+
+        RemoteOperationResult result;
+        if (fileSystem == nullptr)
+        {
+            result = {false, "remote session is not available"};
+        }
+        else if (jobSnapshot.direction == TransferDirection::Upload)
+        {
+            result = fileSystem->uploadFile(jobSnapshot.localPath, jobSnapshot.remotePath, progress);
+        }
+        else
+        {
+            result = fileSystem->downloadFile(jobSnapshot.remotePath, jobSnapshot.localPath, progress);
+        }
+
+        const bool canceled = cancelFlag->load();
+        if (window != nullptr)
+        {
+            QMetaObject::invokeMethod(window.data(), [window, jobId, result, canceled]() {
+                if (window != nullptr)
+                {
+                    window->handleTransferFinished(jobId, result, canceled);
+                }
+            }, Qt::QueuedConnection);
+        }
+    });
+    m_transferThread = thread;
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
+}
+
+void MainWindow::handleTransferProgress(const QString &jobId, std::int64_t transferredBytes, std::int64_t totalBytes)
+{
+    TransferJob *job = m_transferQueue.find(jobId.toStdString());
+    if (job == nullptr
+        || job->status == TransferStatus::Completed
+        || job->status == TransferStatus::Failed
+        || job->status == TransferStatus::Canceled)
+    {
+        return;
+    }
+
+    if (totalBytes > 0)
+    {
+        job->totalBytes = totalBytes;
+    }
+    job->transferredBytes = std::max<std::int64_t>(0, transferredBytes);
+    refreshTransferTable();
+}
+
+void MainWindow::handleTransferFinished(const QString &jobId, const RemoteOperationResult &result, bool canceled)
+{
+    TransferJob *job = m_transferQueue.find(jobId.toStdString());
+    if (job != nullptr)
+    {
+        const bool wasCanceling = job->status == TransferStatus::Canceling;
+        if (canceled || wasCanceling)
+        {
+            job->status = TransferStatus::Canceled;
+            job->errorMessage = "transfer canceled";
+        }
+        else if (result.success)
+        {
+            job->status = TransferStatus::Completed;
+            if (job->totalBytes >= 0)
+            {
+                job->transferredBytes = job->totalBytes;
+            }
+            job->errorMessage = result.message;
+        }
+        else
+        {
+            job->status = TransferStatus::Failed;
+            job->errorMessage = result.message;
+        }
+
+        if (job->status == TransferStatus::Completed)
+        {
+            if (job->direction == TransferDirection::Upload)
+            {
+                RemoteSession *session = remoteSessionById(job->sessionId);
+                if (session != nullptr && session->connected)
+                {
+                    loadRemotePath(*session, session->currentPath, false);
+                }
+            }
+            else if (m_localPanel != nullptr)
+            {
+                m_localPanel->refresh();
+            }
+        }
+    }
+
+    m_transferCancelFlags.erase(jobId.toStdString());
+    m_transferWorkerRunning = false;
+    m_runningTransferJobId.clear();
+    m_transferThread = nullptr;
+    refreshTransferTable();
+    processTransferQueue();
+}
+
+bool MainWindow::hasRunningTransferForSession(const QString &sessionId) const
+{
+    for (const TransferJob &job : m_transferQueue.jobs())
+    {
+        if (QString::fromStdString(job.sessionId) == sessionId
+            && (job.status == TransferStatus::Running || job.status == TransferStatus::Canceling))
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 void MainWindow::refreshTransferTable()
@@ -2109,6 +2305,25 @@ void MainWindow::refreshTransferTable()
     }
 
     updateDirectoryTransferParents();
+    std::map<std::string, bool> expandedStates;
+    for (int index = 0; index < m_transferTable->topLevelItemCount(); ++index)
+    {
+        QTreeWidgetItem *item = m_transferTable->topLevelItem(index);
+        if (item != nullptr)
+        {
+            expandedStates[item->data(0, Qt::UserRole).toString().toStdString()] = item->isExpanded();
+        }
+    }
+
+    auto installProgressBar = [this](QTreeWidgetItem *item, const TransferJob &job) {
+        auto *bar = new QProgressBar(m_transferTable);
+        bar->setRange(0, 100);
+        bar->setValue(progressPercent(job));
+        bar->setTextVisible(true);
+        bar->setFormat("%p%");
+        m_transferTable->setItemWidget(item, 4, bar);
+    };
+
     m_transferTable->clear();
     std::map<std::string, QTreeWidgetItem *> parentItems;
     for (const TransferJob &job : m_transferQueue.jobs())
@@ -2132,10 +2347,12 @@ void MainWindow::refreshTransferTable()
         });
         item->setData(0, Qt::UserRole, QString::fromStdString(job.id));
         m_transferTable->addTopLevelItem(item);
+        installProgressBar(item, job);
         if (job.kind == TransferJobKind::Directory)
         {
             parentItems[job.id] = item;
-            item->setExpanded(true);
+            const auto expanded = expandedStates.find(job.id);
+            item->setExpanded(expanded != expandedStates.end() && expanded->second);
         }
     }
 
@@ -2165,6 +2382,7 @@ void MainWindow::refreshTransferTable()
             transferMessageText(job)
         });
         item->setData(0, Qt::UserRole, QString::fromStdString(job.id));
+        installProgressBar(item, job);
     }
     updateTransferActionButtons();
 }
@@ -2231,6 +2449,11 @@ void MainWindow::cancelSelectedTransferJob()
             if (snapshot.parentId == selectedJob->id)
             {
                 changed = m_transferQueue.cancel(snapshot.id, "用户取消目录传输") || changed;
+                const auto cancelFlag = m_transferCancelFlags.find(snapshot.id);
+                if (cancelFlag != m_transferCancelFlags.end() && cancelFlag->second != nullptr)
+                {
+                    cancelFlag->second->store(true);
+                }
             }
         }
         if (changed)
@@ -2243,6 +2466,11 @@ void MainWindow::cancelSelectedTransferJob()
 
     if (m_transferQueue.cancel(id.toStdString(), "用户取消传输"))
     {
+        const auto cancelFlag = m_transferCancelFlags.find(id.toStdString());
+        if (cancelFlag != m_transferCancelFlags.end() && cancelFlag->second != nullptr)
+        {
+            cancelFlag->second->store(true);
+        }
         appendLog("INFO", QString("传输任务已取消：%1").arg(id));
         refreshTransferTable();
     }
@@ -2472,21 +2700,6 @@ void MainWindow::uploadLocalFile(RemoteSession &session, const QString &localPat
     job.transferredBytes = 0;
     enqueueTransferJob(job);
     processTransferQueue();
-
-    const TransferJob *finishedJob = m_transferQueue.find(job.id);
-    if (finishedJob == nullptr)
-    {
-        return;
-    }
-    if (finishedJob->status == TransferStatus::Completed)
-    {
-        appendLog("INFO", QString("上传完成：%1").arg(QString::fromStdString(finishedJob->remotePath)));
-        loadRemotePath(session, session.currentPath, false);
-        return;
-    }
-
-    appendLog("ERROR", QString("上传失败：%1").arg(QString::fromStdString(finishedJob->errorMessage)));
-    showWarningMessage("上传失败", QString::fromStdString(finishedJob->errorMessage));
 }
 
 void MainWindow::uploadLocalFile(const QString &localPath)
@@ -2560,7 +2773,6 @@ void MainWindow::uploadLocalPath(RemoteSession &session, const QString &localPat
     }
 
     processTransferQueue();
-    loadRemotePath(session, session.currentPath, false);
 }
 
 bool MainWindow::enqueueLocalDirectoryUpload(RemoteSession &session, const QString &localDirectoryPath, const QString &remoteDirectoryPath, const QString &parentJobId, QString *errorMessage)
@@ -2726,27 +2938,6 @@ void MainWindow::downloadRemoteFile(RemoteSession &session, const QString &remot
     job.sessionName = session.displayName.toStdString();
     enqueueTransferJob(job);
     processTransferQueue();
-
-    const TransferJob *finishedJob = m_transferQueue.find(job.id);
-    if (finishedJob == nullptr)
-    {
-        return;
-    }
-    if (finishedJob->status == TransferStatus::Completed)
-    {
-        const QFileInfo downloadedInfo(localPath);
-        TransferJob completedJob = *finishedJob;
-        completedJob.totalBytes = downloadedInfo.exists() ? downloadedInfo.size() : -1;
-        completedJob.transferredBytes = completedJob.totalBytes;
-        m_transferQueue.update(completedJob);
-        refreshTransferTable();
-        appendLog("INFO", QString("下载完成：%1").arg(localPath));
-        m_localPanel->refresh();
-        return;
-    }
-
-    appendLog("ERROR", QString("下载失败：%1").arg(QString::fromStdString(finishedJob->errorMessage)));
-    showWarningMessage("下载失败", QString::fromStdString(finishedJob->errorMessage));
 }
 
 void MainWindow::downloadRemoteFile(const QString &remotePath)
@@ -2791,7 +2982,6 @@ void MainWindow::downloadRemotePath(RemoteSession &session, const QString &remot
     if (enqueueRemoteDirectoryDownload(session, remotePath, localPath, parentJobId, &errorMessage))
     {
         processTransferQueue();
-        m_localPanel->refresh();
         return;
     }
 

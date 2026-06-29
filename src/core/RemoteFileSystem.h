@@ -3,6 +3,8 @@
 
 #include <string>
 #include <vector>
+#include <cstdint>
+#include <functional>
 
 #include "config/SiteProfile.h"
 #include "core/FileItem.h"
@@ -12,6 +14,8 @@ struct RemoteOperationResult
     bool success = false;
     std::string message;
 };
+
+using TransferProgressCallback = std::function<bool(std::int64_t transferredBytes, std::int64_t totalBytes)>;
 
 class RemoteFileSystem
 {
@@ -58,17 +62,19 @@ public:
         return {false, "rename is not implemented"};
     }
 
-    virtual RemoteOperationResult uploadFile(const std::string &localPath, const std::string &remotePath)
+    virtual RemoteOperationResult uploadFile(const std::string &localPath, const std::string &remotePath, TransferProgressCallback progress = {})
     {
         (void)localPath;
         (void)remotePath;
+        (void)progress;
         return {false, "upload is not implemented"};
     }
 
-    virtual RemoteOperationResult downloadFile(const std::string &remotePath, const std::string &localPath)
+    virtual RemoteOperationResult downloadFile(const std::string &remotePath, const std::string &localPath, TransferProgressCallback progress = {})
     {
         (void)remotePath;
         (void)localPath;
+        (void)progress;
         return {false, "download is not implemented"};
     }
 };

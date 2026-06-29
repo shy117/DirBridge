@@ -22,6 +22,11 @@ void TransferManager::setQueueChangedCallback(QueueChangedCallback callback)
     m_queueChangedCallback = std::move(callback);
 }
 
+void TransferManager::setProgressCallback(ProgressCallback callback)
+{
+    m_progressCallback = std::move(callback);
+}
+
 void TransferManager::setConcurrencyLimit(std::size_t limit)
 {
     m_concurrencyLimit = std::max<std::size_t>(1, limit);
@@ -79,9 +84,13 @@ RemoteOperationResult TransferManager::runJob(const TransferJob &job)
     switch (job.direction)
     {
     case TransferDirection::Upload:
-        return remoteFileSystem->uploadFile(job.localPath, job.remotePath);
+        return remoteFileSystem->uploadFile(job.localPath, job.remotePath, [this, &job](std::int64_t transferredBytes, std::int64_t totalBytes) {
+            return m_progressCallback ? m_progressCallback(job, transferredBytes, totalBytes) : true;
+        });
     case TransferDirection::Download:
-        return remoteFileSystem->downloadFile(job.remotePath, job.localPath);
+        return remoteFileSystem->downloadFile(job.remotePath, job.localPath, [this, &job](std::int64_t transferredBytes, std::int64_t totalBytes) {
+            return m_progressCallback ? m_progressCallback(job, transferredBytes, totalBytes) : true;
+        });
     }
 
     return {false, "unsupported transfer direction"};
