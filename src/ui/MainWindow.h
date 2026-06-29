@@ -215,6 +215,20 @@ private:
      */
     void enqueueTransferJob(const TransferJob &job);
     /**
+     * @brief Updates aggregate directory transfer rows from their child file jobs.
+     */
+    void updateDirectoryTransferParents();
+    /**
+     * @brief Creates a visible parent row for a directory transfer.
+     * @param direction Upload or download direction.
+     * @param name Directory display name.
+     * @param localPath Local directory root.
+     * @param remotePath Remote directory root.
+     * @param session Current remote session.
+     * @return Generated parent transfer id.
+     */
+    QString enqueueDirectoryTransferParent(TransferDirection direction, const QString &name, const QString &localPath, const QString &remotePath, const RemoteSession &session);
+    /**
      * @brief Runs pending transfer jobs through the core transfer manager.
      */
     void processTransferQueue();
@@ -224,10 +238,11 @@ private:
     void cancelSelectedTransferJob();
     void retrySelectedTransferJob();
     void clearFinishedTransferJobs();
+    void showAboutDialog();
     void uploadLocalFile(RemoteSession &session, const QString &localPath);
     void uploadLocalFile(const QString &localPath);
     void uploadLocalPath(RemoteSession &session, const QString &localPath);
-    bool enqueueLocalDirectoryUpload(RemoteSession &session, const QString &localDirectoryPath, const QString &remoteDirectoryPath, QString *errorMessage = nullptr);
+    bool enqueueLocalDirectoryUpload(RemoteSession &session, const QString &localDirectoryPath, const QString &remoteDirectoryPath, const QString &parentJobId = {}, QString *errorMessage = nullptr);
     bool ensureRemoteDirectory(RemoteSession &session, const QString &remoteDirectoryPath, QString *errorMessage = nullptr);
     enum class UploadConflictAction
     {
@@ -243,7 +258,7 @@ private:
     void downloadRemoteFile(RemoteSession &session, const QString &remotePath);
     void downloadRemoteFile(const QString &remotePath);
     void downloadRemotePath(RemoteSession &session, const QString &remotePath);
-    bool enqueueRemoteDirectoryDownload(RemoteSession &session, const QString &remoteDirectoryPath, const QString &localDirectoryPath, QString *errorMessage = nullptr);
+    bool enqueueRemoteDirectoryDownload(RemoteSession &session, const QString &remoteDirectoryPath, const QString &localDirectoryPath, const QString &parentJobId = {}, QString *errorMessage = nullptr);
     int siteIndexById(const std::string &siteId) const;
     void connectSiteAtIndex(int index, const QString &initialRemotePath = {});
     void editSiteAtIndex(int index);

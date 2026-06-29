@@ -41,7 +41,9 @@ bool TransferQueue::cancel(const std::string &id, const std::string &message)
 const TransferJob *TransferQueue::retry(const std::string &id, const std::string &retryId)
 {
     const TransferJob *job = find(id);
-    if (job == nullptr || (job->status != TransferStatus::Failed && job->status != TransferStatus::Canceled))
+    if (job == nullptr
+        || job->kind != TransferJobKind::File
+        || (job->status != TransferStatus::Failed && job->status != TransferStatus::Canceled))
     {
         return nullptr;
     }
@@ -85,7 +87,7 @@ const TransferJob *TransferQueue::find(const std::string &id) const
 TransferJob *TransferQueue::nextPending()
 {
     const auto job = std::find_if(m_jobs.begin(), m_jobs.end(), [](const TransferJob &current) {
-        return current.status == TransferStatus::Pending;
+        return current.kind == TransferJobKind::File && current.status == TransferStatus::Pending;
     });
     return job == m_jobs.end() ? nullptr : &(*job);
 }
@@ -93,7 +95,7 @@ TransferJob *TransferQueue::nextPending()
 std::size_t TransferQueue::runningCount() const
 {
     return static_cast<std::size_t>(std::count_if(m_jobs.begin(), m_jobs.end(), [](const TransferJob &job) {
-        return job.status == TransferStatus::Running;
+        return job.kind == TransferJobKind::File && job.status == TransferStatus::Running;
     }));
 }
 

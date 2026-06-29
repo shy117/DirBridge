@@ -227,6 +227,10 @@ void checkTransferJob()
     require(toString(download.status) == "canceled", "canceled status text mismatch");
     download.status = TransferStatus::Canceling;
     require(toString(download.status) == "canceling", "canceling status text mismatch");
+    download.kind = TransferJobKind::Directory;
+    require(toString(download.kind) == "directory", "directory job kind text mismatch");
+    download.kind = TransferJobKind::File;
+    require(toString(download.kind) == "file", "file job kind text mismatch");
 
     download.transferredBytes = -10;
     require(progressPercent(download) == 0, "negative transfer progress should clamp to 0");
@@ -309,6 +313,27 @@ void checkTransferQueueAndManager()
     require(retryJob->localPath == downloadMissing.localPath, "retry job should keep local path");
     require(retryJob->sessionId == downloadMissing.sessionId, "retry job should keep session id");
     require(queue.retry(upload.id, "retry-completed-upload") == nullptr, "completed job should not be retryable");
+
+    TransferQueue aggregateQueue;
+    TransferJob directoryParent;
+    directoryParent.id = "directory-parent";
+    directoryParent.name = "folder";
+    directoryParent.kind = TransferJobKind::Directory;
+    directoryParent.status = TransferStatus::Pending;
+    aggregateQueue.enqueue(directoryParent);
+    TransferJob directoryChild = upload;
+    directoryChild.id = "directory-child";
+    directoryChild.parentId = directoryParent.id;
+    directoryChild.status = TransferStatus::Pending;
+    aggregateQueue.enqueue(directoryChild);
+    TransferJob *nextAggregateJob = aggregateQueue.nextPending();
+    require(nextAggregateJob != nullptr && nextAggregateJob->id == directoryChild.id, "directory parent should not be picked as executable transfer");
+    directoryParent.status = TransferStatus::Failed;
+    aggregateQueue.update(directoryParent);
+    require(aggregateQueue.retry(directoryParent.id, "retry-directory-parent") == nullptr, "directory parent should not be retried directly");
+    directoryParent.status = TransferStatus::Running;
+    aggregateQueue.update(directoryParent);
+    require(aggregateQueue.runningCount() == 0, "directory parent should not consume transfer concurrency");
 
     const std::size_t removed = queue.clearFinished();
     require(removed >= 3, "clearFinished should remove completed, failed, and canceled jobs");

@@ -67,8 +67,8 @@ public:
     TransferJob *nextPending();
 
     /**
-     * @brief Counts jobs currently in the running state.
-     * @return Number of running jobs.
+     * @brief Counts executable file jobs currently in the running state.
+     * @return Number of running file jobs.
      */
     std::size_t runningCount() const;
 

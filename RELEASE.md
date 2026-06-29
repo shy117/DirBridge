@@ -4,7 +4,7 @@
 
 ## 当前版本
 
-- 版本：v0.5.4
+- 版本：v0.5.5
 - 平台：Windows x64
 - 状态：MVP 阶段预发布包
 
@@ -12,8 +12,8 @@
 
 建议同一版本同时提供：
 
-- `DirBridge-v0.5.4-win64.zip`：绿色压缩包，解压后运行 `DirBridge.exe`。
-- `DirBridge-v0.5.4-win64-setup.exe`：Inno Setup 安装包。
+- `DirBridge-v0.5.5-win64.zip`：绿色压缩包，解压后运行 `DirBridge.exe`。
+- `DirBridge-v0.5.5-win64-setup.exe`：Inno Setup 安装包。
 
 二进制产物生成在 `build/release/` 下，不提交到 Git。
 
@@ -44,7 +44,7 @@ powershell -ExecutionPolicy Bypass -File scripts\package_release.ps1
 在发布目录内运行：
 
 ```powershell
-Set-Location build\release\DirBridge-v0.5.4-win64
+Set-Location build\release\DirBridge-v0.5.5-win64
 .\DirBridge.exe --check-deps
 .\DirBridge.exe --smoke-test
 .\DirBridge.exe --ui-remote-smoke-test
@@ -53,15 +53,17 @@ Set-Location build\release\DirBridge-v0.5.4-win64
 
 真实 FTP/SFTP 验证需要在本机临时设置 `DIRBRIDGE_TEST_*` 环境变量后运行，不要把密码写入仓库或发布包。
 
-## v0.5.4 用户可见变化
+## v0.5.5 用户可见变化
 
-- 补充 Apache License 2.0 项目许可声明和第三方许可证说明。
-- 提供 Windows 绿色包和 Inno Setup 安装包发布流程。
-- 发布包随附 README、CHANGELOG、RELEASE、项目许可和第三方许可证说明。
+- 目录上传和下载显示文件夹父任务，可展开查看子文件明细。
+- 文件列表和传输表按 B / KB / MB / GB / TB 自动显示大小。
+- 传输成功、取消和常见失败消息改为中文展示。
+- 远程区域启动时不再显示“未连接”占位 Tab。
+- 菜单栏收敛为文件、查看、命令和帮助四类当前可用功能。
+- 关于窗口显示版本、MVP 阶段说明、许可证、GitHub 仓库地址和作者信息。
 
 ## 已知问题
 
 - 连接取消目前是逻辑取消，不能强制中断已进入阻塞状态的底层 libcurl 调用。
 - 远程刷新和路径跳转仍是同步目录加载流程。
-- 目录传输仍未提供聚合进度显示。
 - MVP 阶段仍明文保存站点密码，仅用于本地开发验证。

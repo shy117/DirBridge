@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.5.4",
+    [string]$Version = "0.5.5",
     [string]$BuildPreset = "windows-mingw-release",
     [string]$BuildDir = "build/windows-mingw-release",
     [string]$ReleaseDir = "build/release",
@@ -215,8 +215,14 @@ if ($iscc -eq "") {
     Write-Warning "ISCC.exe was not found. Installer generation was skipped. Zip package: $zipPath"
 }
 else {
+    $installerPath = Join-Path $releaseRoot "DirBridge-v$Version-win64-setup.exe"
+    Remove-PathWithRetry -Path $installerPath
     Write-Host "==> Building installer with $iscc"
     & $iscc "/DAppVersion=$Version" "/DReleaseDir=$stageDir" "/DOutputDir=$releaseRoot" (Resolve-RepoPath "installer/DirBridge.iss")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Installer generation failed with exit code $LASTEXITCODE."
+    }
+    Write-Host "    $installerPath"
 }
 
 Write-Host "==> Release package ready:"

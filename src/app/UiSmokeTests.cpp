@@ -25,6 +25,8 @@
 #include <fstream>
 #include <thread>
 
+QAction *findActionByText(MainWindow &window, const QString &text);
+
 /**
  * @brief Finds a required child widget by object name and reports a smoke-test error when missing.
  * @param window Main window to search.
@@ -58,10 +60,7 @@ bool checkRemoteUiObjects(MainWindow &window)
     ok = requireChild<QLineEdit>(window, "quickPasswordEdit") && ok;
     ok = requireChild<QLineEdit>(window, "quickRemotePathEdit") && ok;
     ok = requireChild<QPushButton>(window, "quickConnectButton") && ok;
-    ok = requireChild<QLineEdit>(window, "remotePathEdit") && ok;
-    ok = requireChild<QTreeWidget>(window, "remoteFileTree") && ok;
-    ok = requireChild<QTableWidget>(window, "remoteFileTable") && ok;
-    ok = requireChild<QLabel>(window, "remoteStateLabel") && ok;
+    ok = requireChild<QTabWidget>(window, "remoteTabs") && ok;
     QPushButton *cancelTransferButton = window.findChild<QPushButton *>("transferCancelButton");
     QPushButton *retryTransferButton = window.findChild<QPushButton *>("transferRetryButton");
     QPushButton *clearFinishedButton = window.findChild<QPushButton *>("transferClearFinishedButton");
@@ -89,6 +88,18 @@ bool checkRemoteUiObjects(MainWindow &window)
     }
     ok = requireChild<QTreeWidget>(window, "logView") && ok;
     ok = requireChild<QTreeWidget>(window, "sessionManagerTree") && ok;
+
+    QTabWidget *remoteTabs = window.findChild<QTabWidget *>("remoteTabs");
+    if (remoteTabs != nullptr && remoteTabs->count() != 0)
+    {
+        QTextStream(stderr) << "Remote tabs should start without placeholder pages" << Qt::endl;
+        ok = false;
+    }
+    if (findActionByText(window, "关于 DirBridge") == nullptr)
+    {
+        QTextStream(stderr) << "About DirBridge action is missing" << Qt::endl;
+        ok = false;
+    }
 
     QComboBox *quickProtocolCombo = window.findChild<QComboBox *>("quickProtocolCombo");
     if (quickProtocolCombo != nullptr && quickProtocolCombo->currentText() != "SFTP")
@@ -169,7 +180,8 @@ bool waitForRemoteConnected(QWidget *remotePanel, const QString &remotePath)
         QLineEdit *remotePathEdit = remotePanel == nullptr ? nullptr : remotePanel->findChild<QLineEdit *>("remotePathEdit");
         QLabel *remoteStateLabel = remotePanel == nullptr ? nullptr : remotePanel->findChild<QLabel *>("remoteStateLabel");
         if (remotePathEdit != nullptr && remoteStateLabel != nullptr
-            && remotePathEdit->text() == remotePath && remoteStateLabel->text().contains("已连接"))
+            && remotePathEdit->text() == remotePath
+            && (remoteStateLabel->text().contains("个项目") || remoteStateLabel->text().contains("已连接")))
         {
             return true;
         }
@@ -322,6 +334,57 @@ bool hasTransferRow(QTreeWidget *table, const QString &name, const QString &dire
         return false;
     }
 
+    QTreeWidgetItemIterator iterator(table);
+    while (*iterator != nullptr)
+    {
+        QTreeWidgetItem *item = *iterator;
+        if (item != nullptr
+            && item->text(0) == name
+            && item->text(2) == direction
+            && item->text(3) == status)
+        {
+            return true;
+        }
+        ++iterator;
+    }
+
+    return false;
+}
+
+/**
+ * @brief Verifies that a file-panel navigation button is icon-only but still discoverable.
+ * @param panel Panel that owns the button.
+ * @param objectName Expected button object name.
+ * @return true when the button keeps icon and tooltip while hiding text.
+ */
+bool checkIconOnlyNavigationButton(QWidget *panel, const char *objectName)
+{
+    QPushButton *button = panel == nullptr ? nullptr : panel->findChild<QPushButton *>(objectName);
+    if (button == nullptr)
+    {
+        QTextStream(stderr) << "Missing navigation button: " << objectName << Qt::endl;
+        return false;
+    }
+    if (!button->text().isEmpty())
+    {
+        QTextStream(stderr) << "Navigation button should be icon-only: " << objectName << Qt::endl;
+        return false;
+    }
+    if (button->icon().isNull() || button->toolTip().isEmpty())
+    {
+        QTextStream(stderr) << "Navigation button should keep icon and tooltip: " << objectName << Qt::endl;
+        return false;
+    }
+    return true;
+}
+
+QTreeWidgetItem *findTopLevelTransferRow(QTreeWidget *table, const QString &name, const QString &direction, const QString &status)
+{
+    if (table == nullptr)
+    {
+        return nullptr;
+    }
+
     for (int index = 0; index < table->topLevelItemCount(); ++index)
     {
         QTreeWidgetItem *item = table->topLevelItem(index);
@@ -330,11 +393,36 @@ bool hasTransferRow(QTreeWidget *table, const QString &name, const QString &dire
             && item->text(2) == direction
             && item->text(3) == status)
         {
-            return true;
+            return item;
         }
     }
 
-    return false;
+    return nullptr;
+}
+
+void dumpTransferRows(QTreeWidget *table)
+{
+    if (table == nullptr)
+    {
+        QTextStream(stderr) << "Transfer table is missing" << Qt::endl;
+        return;
+    }
+
+    QTreeWidgetItemIterator iterator(table);
+    while (*iterator != nullptr)
+    {
+        QTreeWidgetItem *item = *iterator;
+        QTextStream(stderr)
+            << "Transfer row: "
+            << item->text(0) << " | "
+            << item->text(2) << " | "
+            << item->text(3) << " | "
+            << item->text(4) << " | "
+            << item->text(8) << " | "
+            << item->text(9)
+            << Qt::endl;
+        ++iterator;
+    }
 }
 
 /**
@@ -415,17 +503,11 @@ bool checkRemoteUiWorkflow(
     QLineEdit *quickRemotePathEdit = window.findChild<QLineEdit *>("quickRemotePathEdit");
     QPushButton *connectButton = window.findChild<QPushButton *>("quickConnectButton");
     QTabWidget *remoteTabs = window.findChild<QTabWidget *>("remoteTabs");
-    QLineEdit *remotePathEdit = window.findChild<QLineEdit *>("remotePathEdit");
-    QLabel *remoteStateLabel = window.findChild<QLabel *>("remoteStateLabel");
-    QTableWidget *remoteTable = window.findChild<QTableWidget *>("remoteFileTable");
-    QTreeWidget *remoteTree = window.findChild<QTreeWidget *>("remoteFileTree");
-    QPushButton *remoteUpButton = window.findChild<QPushButton *>("remoteUpButton");
     QAction *disconnectAction = findActionByText(window, "断开");
 
     if (protocolCombo == nullptr || hostEdit == nullptr || portEdit == nullptr || userEdit == nullptr
         || passwordEdit == nullptr || quickRemotePathEdit == nullptr || connectButton == nullptr
-        || remoteTabs == nullptr || remotePathEdit == nullptr || remoteStateLabel == nullptr || remoteTable == nullptr || remoteTree == nullptr
-        || remoteUpButton == nullptr || disconnectAction == nullptr)
+        || remoteTabs == nullptr || disconnectAction == nullptr)
     {
         QTextStream(stderr) << "Remote UI workflow prerequisites are incomplete" << Qt::endl;
         return false;
@@ -442,12 +524,26 @@ bool checkRemoteUiWorkflow(
 
     if (!waitForRemoteConnected(remoteTabs->currentWidget(), remotePath))
     {
-        QTextStream(stderr) << "Remote path after connect is unexpected: " << remotePathEdit->text() << Qt::endl;
+        QTextStream(stderr) << "Remote path after connect is unexpected" << Qt::endl;
         ok = false;
     }
-    if (!remoteStateLabel->text().contains("已连接"))
+    QWidget *remotePanel = remoteTabs->currentWidget();
+    QLineEdit *remotePathEdit = remotePanel == nullptr ? nullptr : remotePanel->findChild<QLineEdit *>("remotePathEdit");
+    QLabel *remoteStateLabel = remotePanel == nullptr ? nullptr : remotePanel->findChild<QLabel *>("remoteStateLabel");
+    QTableWidget *remoteTable = remotePanel == nullptr ? nullptr : remotePanel->findChild<QTableWidget *>("remoteFileTable");
+    QTreeWidget *remoteTree = remotePanel == nullptr ? nullptr : remotePanel->findChild<QTreeWidget *>("remoteFileTree");
+    QPushButton *remoteUpButton = remotePanel == nullptr ? nullptr : remotePanel->findChild<QPushButton *>("remoteUpButton");
+    if (remotePathEdit == nullptr || remoteStateLabel == nullptr || remoteTable == nullptr || remoteTree == nullptr || remoteUpButton == nullptr)
     {
-        QTextStream(stderr) << "Remote state label does not show connected: " << remoteStateLabel->text() << Qt::endl;
+        QTextStream(stderr) << "Connected remote panel prerequisites are incomplete" << Qt::endl;
+        return false;
+    }
+    ok = checkIconOnlyNavigationButton(remotePanel, "remoteBackButton") && ok;
+    ok = checkIconOnlyNavigationButton(remotePanel, "remoteForwardButton") && ok;
+    ok = checkIconOnlyNavigationButton(remotePanel, "remoteUpButton") && ok;
+    if (!remoteStateLabel->text().contains("个项目"))
+    {
+        QTextStream(stderr) << "Remote state label does not show item count: " << remoteStateLabel->text() << Qt::endl;
         ok = false;
     }
     for (const QString &name : expectedNames)
@@ -804,7 +900,7 @@ bool checkRemoteMultiSessionWorkflow(MainWindow &window)
     QApplication::processEvents();
     auto *firstPathEdit = remoteTabs->currentWidget()->findChild<QLineEdit *>("remotePathEdit");
     auto *firstStateLabel = remoteTabs->currentWidget()->findChild<QLabel *>("remoteStateLabel");
-    if (firstPathEdit == nullptr || firstStateLabel == nullptr || firstPathEdit->text() != firstPath || !firstStateLabel->text().contains("已连接"))
+    if (firstPathEdit == nullptr || firstStateLabel == nullptr || firstPathEdit->text() != firstPath || !firstStateLabel->text().contains("个项目"))
     {
         QTextStream(stderr) << "First remote tab did not preserve connected state" << Qt::endl;
         return false;
@@ -824,7 +920,7 @@ bool checkRemoteMultiSessionWorkflow(MainWindow &window)
     remoteTabs->setCurrentIndex(firstIndex);
     QApplication::processEvents();
     firstStateLabel = remoteTabs->currentWidget()->findChild<QLabel *>("remoteStateLabel");
-    if (firstStateLabel == nullptr || !firstStateLabel->text().contains("已连接"))
+    if (firstStateLabel == nullptr || !firstStateLabel->text().contains("个项目"))
     {
         QTextStream(stderr) << "Disconnect leaked into first remote tab" << Qt::endl;
         return false;
@@ -879,16 +975,31 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
 
     window.downloadRemotePathForTesting(movedDirectory);
     QApplication::processEvents();
+    QTreeWidget *transferTable = window.findChild<QTreeWidget *>("transferTable");
     const std::filesystem::path downloadedFile = downloadRoot / "dirbridge-folder" / "nested" / "inside.txt";
     if (!std::filesystem::is_regular_file(downloadedFile))
     {
         QTextStream(stderr) << "Downloaded remote directory does not contain nested file" << Qt::endl;
+        dumpTransferRows(transferTable);
         return false;
     }
     const std::filesystem::path downloadedDeepFile = downloadRoot / "dirbridge-folder" / "nested" / "level2" / "level3" / "deep.txt";
     if (!std::filesystem::is_regular_file(downloadedDeepFile))
     {
         QTextStream(stderr) << "Downloaded remote directory does not contain deep nested file" << Qt::endl;
+        dumpTransferRows(transferTable);
+        return false;
+    }
+    QTreeWidgetItem *uploadParent = findTopLevelTransferRow(transferTable, "dirbridge-folder", "上传", "已完成");
+    QTreeWidgetItem *downloadParent = findTopLevelTransferRow(transferTable, "dirbridge-folder", "下载", "已完成");
+    if (uploadParent == nullptr || uploadParent->text(4) != "100%" || uploadParent->childCount() < 2)
+    {
+        QTextStream(stderr) << "Directory upload parent transfer row is incomplete" << Qt::endl;
+        return false;
+    }
+    if (downloadParent == nullptr || downloadParent->text(4) != "100%" || downloadParent->childCount() < 2)
+    {
+        QTextStream(stderr) << "Directory download parent transfer row is incomplete" << Qt::endl;
         return false;
     }
 
@@ -986,12 +1097,10 @@ bool connectLiveRemoteUi(MainWindow &window, const QString &protocol, const QStr
     QLineEdit *quickRemotePathEdit = window.findChild<QLineEdit *>("quickRemotePathEdit");
     QPushButton *connectButton = window.findChild<QPushButton *>("quickConnectButton");
     QTabWidget *remoteTabs = window.findChild<QTabWidget *>("remoteTabs");
-    QLineEdit *remotePathEdit = window.findChild<QLineEdit *>("remotePathEdit");
-    QLabel *remoteStateLabel = window.findChild<QLabel *>("remoteStateLabel");
 
     if (protocolCombo == nullptr || hostEdit == nullptr || portEdit == nullptr || userEdit == nullptr
         || passwordEdit == nullptr || quickRemotePathEdit == nullptr || connectButton == nullptr
-        || remoteTabs == nullptr || remotePathEdit == nullptr || remoteStateLabel == nullptr)
+        || remoteTabs == nullptr)
     {
         QTextStream(stderr) << "Live remote UI connect prerequisites are incomplete" << Qt::endl;
         return false;
@@ -1009,6 +1118,14 @@ bool connectLiveRemoteUi(MainWindow &window, const QString &protocol, const QStr
     if (!waitForRemoteConnected(remoteTabs->currentWidget(), remotePath))
     {
         QTextStream(stderr) << "Live remote UI connect did not reach connected state" << Qt::endl;
+        return false;
+    }
+    QWidget *remotePanel = remoteTabs->currentWidget();
+    QLineEdit *remotePathEdit = remotePanel == nullptr ? nullptr : remotePanel->findChild<QLineEdit *>("remotePathEdit");
+    QLabel *remoteStateLabel = remotePanel == nullptr ? nullptr : remotePanel->findChild<QLabel *>("remoteStateLabel");
+    if (remotePathEdit == nullptr || remoteStateLabel == nullptr || remotePathEdit->text() != remotePath || !remoteStateLabel->text().contains("个项目"))
+    {
+        QTextStream(stderr) << "Live remote connected panel is incomplete" << Qt::endl;
         return false;
     }
 

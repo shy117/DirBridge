@@ -373,9 +373,9 @@ void FilePanel::setupUi()
     toolbarLayout->setContentsMargins(0, 0, 0, 0);
     toolbarLayout->setSpacing(4);
 
-    m_backButton = new QPushButton("<", toolbar);
-    m_forwardButton = new QPushButton(">", toolbar);
-    m_upButton = new QPushButton("..", toolbar);
+    m_backButton = new QPushButton(toolbar);
+    m_forwardButton = new QPushButton(toolbar);
+    m_upButton = new QPushButton(toolbar);
     m_refreshButton = new QPushButton("刷新", toolbar);
     m_pathEdit = new QLineEdit(toolbar);
 

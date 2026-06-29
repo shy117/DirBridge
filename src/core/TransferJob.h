@@ -20,10 +20,18 @@ enum class TransferStatus
     Canceling
 };
 
+enum class TransferJobKind
+{
+    File,
+    Directory
+};
+
 struct TransferJob
 {
     std::string id;
     std::string name;
+    TransferJobKind kind = TransferJobKind::File;
+    std::string parentId;
     TransferDirection direction = TransferDirection::Upload;
     TransferStatus status = TransferStatus::Pending;
     std::string localPath;
@@ -32,9 +40,12 @@ struct TransferJob
     std::string sessionName;
     std::int64_t totalBytes = -1;
     std::int64_t transferredBytes = 0;
+    int totalChildren = 0;
+    int finishedChildren = 0;
     std::string errorMessage;
 };
 
+std::string toString(TransferJobKind kind);
 std::string toString(TransferDirection direction);
 std::string toString(TransferStatus status);
 int progressPercent(const TransferJob &job);

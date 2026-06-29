@@ -2,6 +2,19 @@
 
 #include <algorithm>
 
+std::string toString(TransferJobKind kind)
+{
+    switch (kind)
+    {
+    case TransferJobKind::File:
+        return "file";
+    case TransferJobKind::Directory:
+        return "directory";
+    }
+
+    return "file";
+}
+
 std::string toString(TransferDirection direction)
 {
     switch (direction)
