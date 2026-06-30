@@ -7,6 +7,7 @@
 #include <memory>
 #include <atomic>
 #include <map>
+#include <set>
 #include <vector>
 
 #include "config/SiteProfile.h"
@@ -149,6 +150,7 @@ private:
      */
     void installRemoteTabCloseButton(int index);
     void closeRemoteTab(int index);
+    void showRemoteTabContextMenu(const QPoint &position);
     void appendLog(const QString &level, const QString &message);
 
     /**
@@ -192,6 +194,7 @@ private:
      * @param session Session whose connection attempt should be canceled.
      */
     void cancelRemoteConnection(RemoteSession &session);
+    void reconnectRemoteSession(RemoteSession &session);
     /**
      * @brief Updates menu and quick-connect controls for disconnected, connecting, and connected states.
      */
@@ -208,6 +211,7 @@ private:
     void createRemoteFile(RemoteSession &session, const QString &path);
     void removeRemotePath(RemoteSession &session, const QString &path);
     void removeRemotePath(const QString &path);
+    void finishRemoteRemove(const QString &sessionId, const QString &path, const QString &errorMessage);
     void renameRemotePath(RemoteSession &session, const QString &sourcePath, const QString &targetPath);
     bool removeRemotePathRecursive(RemoteSession &session, const QString &path, QString *errorMessage = nullptr);
     void moveRemotePaths(RemoteSession &session, const QStringList &sourcePaths, const QString &targetDirectory);
@@ -248,7 +252,10 @@ private:
     void showAboutDialog();
     void uploadLocalFile(RemoteSession &session, const QString &localPath);
     void uploadLocalFile(const QString &localPath);
+    void startSingleFileUploadPreparation(RemoteSession &session, const QString &jobId);
+    void finishSingleFileUploadPreparation(const QString &jobId, bool exists, const FileItem &existingItem, const QString &errorMessage);
     void uploadLocalPath(RemoteSession &session, const QString &localPath);
+    void startLocalDirectoryUploadPreparation(RemoteSession &session, const QString &localDirectoryPath, const QString &remoteDirectoryPath, const QString &parentJobId);
     bool enqueueLocalDirectoryUpload(RemoteSession &session, const QString &localDirectoryPath, const QString &remoteDirectoryPath, const QString &parentJobId = {}, QString *errorMessage = nullptr);
     bool ensureRemoteDirectory(RemoteSession &session, const QString &remoteDirectoryPath, QString *errorMessage = nullptr);
     enum class UploadConflictAction
@@ -265,6 +272,8 @@ private:
     void downloadRemoteFile(RemoteSession &session, const QString &remotePath);
     void downloadRemoteFile(const QString &remotePath);
     void downloadRemotePath(RemoteSession &session, const QString &remotePath);
+    void startRemoteDirectoryDownloadPreparation(RemoteSession &session, const QString &remoteDirectoryPath, const QString &localDirectoryPath, const QString &parentJobId);
+    void handlePreparedDirectoryTransfer(const QString &parentJobId, const std::vector<TransferJob> &jobs, const QString &errorMessage);
     bool enqueueRemoteDirectoryDownload(RemoteSession &session, const QString &remoteDirectoryPath, const QString &localDirectoryPath, const QString &parentJobId = {}, QString *errorMessage = nullptr);
     int siteIndexById(const std::string &siteId) const;
     void connectSiteAtIndex(int index, const QString &initialRemotePath = {});
@@ -290,6 +299,7 @@ private:
     QString m_runningTransferJobId;
     QThread *m_transferThread = nullptr;
     std::map<std::string, std::shared_ptr<std::atomic_bool>> m_transferCancelFlags;
+    std::set<QString> m_pendingRemoteDeletes;
 
     QAction *m_disconnectAction = nullptr;
     QAction *m_refreshAction = nullptr;

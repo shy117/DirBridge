@@ -10,11 +10,16 @@
 #include <QComboBox>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
+#include <QMenuBar>
 #include <QMetaObject>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QStringList>
 #include <QTableWidget>
+#include <QTimer>
 #include <QTabWidget>
 #include <QTextStream>
 #include <QTreeWidget>
@@ -27,6 +32,7 @@
 #include <thread>
 
 QAction *findActionByText(MainWindow &window, const QString &text);
+bool checkAboutDialog(MainWindow &window);
 
 /**
  * @brief Finds a required child widget by object name and reports a smoke-test error when missing.
@@ -106,6 +112,52 @@ bool checkRemoteUiObjects(MainWindow &window)
         QTextStream(stderr) << "About DirBridge action is missing" << Qt::endl;
         ok = false;
     }
+    else if (!checkAboutDialog(window))
+    {
+        QTextStream(stderr) << "About DirBridge dialog content is unexpected" << Qt::endl;
+        ok = false;
+    }
+    QMenuBar *menuBar = window.menuBar();
+    if (menuBar == nullptr)
+    {
+        QTextStream(stderr) << "Menu bar is missing" << Qt::endl;
+        ok = false;
+    }
+    else
+    {
+        QMenu *fileMenu = nullptr;
+        for (QAction *action : menuBar->actions())
+        {
+            const QString text = action == nullptr ? QString() : QString(action->text()).remove('&');
+            if (text.startsWith("命令"))
+            {
+                QTextStream(stderr) << "Command menu should be removed" << Qt::endl;
+                ok = false;
+            }
+            if (text.startsWith("文件"))
+            {
+                fileMenu = action->menu();
+            }
+        }
+        int visibleFileActions = 0;
+        QString lastFileActionText;
+        if (fileMenu != nullptr)
+        {
+            for (QAction *action : fileMenu->actions())
+            {
+                if (action != nullptr && !action->isSeparator())
+                {
+                    ++visibleFileActions;
+                    lastFileActionText = QString(action->text()).remove('&');
+                }
+            }
+        }
+        if (fileMenu == nullptr || visibleFileActions != 1 || lastFileActionText != "新建站点")
+        {
+            QTextStream(stderr) << "File menu should only contain New Site" << Qt::endl;
+            ok = false;
+        }
+    }
 
     QComboBox *quickProtocolCombo = window.findChild<QComboBox *>("quickProtocolCombo");
     if (quickProtocolCombo != nullptr && quickProtocolCombo->currentText() != "SFTP")
@@ -143,6 +195,14 @@ bool checkRemoteUiObjects(MainWindow &window)
         if (transferTable->columnCount() < 10)
         {
             QTextStream(stderr) << "Transfer table column count is less than 10" << Qt::endl;
+            ok = false;
+        }
+        if (transferTable->headerItem() == nullptr
+            || transferTable->headerItem()->text(7) != "速度"
+            || transferTable->headerItem()->text(8) != "估计剩余"
+            || transferTable->headerItem()->text(9) != "经过时间")
+        {
+            QTextStream(stderr) << "Transfer table timing headers are missing" << Qt::endl;
             ok = false;
         }
         if (transferTable->topLevelItemCount() != 0)
@@ -340,14 +400,15 @@ bool hasTransferRow(QTreeWidget *table, const QString &name, const QString &dire
         return false;
     }
 
+    const QString arrow = direction == "上传" ? "->" : "<-";
     QTreeWidgetItemIterator iterator(table);
     while (*iterator != nullptr)
     {
         QTreeWidgetItem *item = *iterator;
         if (item != nullptr
             && item->text(0) == name
-            && item->text(2) == direction
-            && item->text(3) == status)
+            && item->text(1) == status
+            && item->text(5) == arrow)
         {
             return true;
         }
@@ -370,6 +431,67 @@ bool waitForTransferRow(QTreeWidget *table, const QString &name, const QString &
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     return false;
+}
+
+bool waitForTableRowAbsent(QTableWidget *table, const QString &name)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        QApplication::processEvents();
+        if (findTableRowByName(table, name) < 0)
+        {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+}
+
+bool checkAboutDialog(MainWindow &window)
+{
+    QAction *aboutAction = findActionByText(window, "关于 DirBridge");
+    if (aboutAction == nullptr)
+    {
+        return false;
+    }
+
+    bool checked = false;
+    QTimer::singleShot(0, [&]() {
+        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+        if (dialog == nullptr || dialog->objectName() != "aboutDialog")
+        {
+            return;
+        }
+        QString text;
+        const QList<QLabel *> labels = dialog->findChildren<QLabel *>();
+        for (QLabel *label : labels)
+        {
+            if (label != nullptr)
+            {
+                text += label->text();
+            }
+        }
+        auto *buttons = dialog->findChild<QDialogButtonBox *>();
+        checked = text.contains("版本")
+            && text.contains("许可证")
+            && text.contains("GitHub")
+            && text.contains("作者")
+            && !text.contains("阶段")
+            && buttons != nullptr
+            && buttons->button(QDialogButtonBox::Close)->text() == "关闭";
+        if (buttons != nullptr)
+        {
+            buttons->button(QDialogButtonBox::Close)->click();
+        }
+        else
+        {
+            dialog->reject();
+        }
+    });
+    aboutAction->trigger();
+    QApplication::processEvents();
+    return checked;
 }
 
 /**
@@ -406,13 +528,14 @@ QTreeWidgetItem *findTopLevelTransferRow(QTreeWidget *table, const QString &name
         return nullptr;
     }
 
+    const QString arrow = direction == "上传" ? "->" : "<-";
     for (int index = 0; index < table->topLevelItemCount(); ++index)
     {
         QTreeWidgetItem *item = table->topLevelItem(index);
         if (item != nullptr
             && item->text(0) == name
-            && item->text(2) == direction
-            && item->text(3) == status)
+            && item->text(1) == status
+            && item->text(5) == arrow)
         {
             return item;
         }
@@ -425,7 +548,7 @@ bool hasProgressBar(QTreeWidget *table, QTreeWidgetItem *item)
 {
     return table != nullptr
         && item != nullptr
-        && qobject_cast<QProgressBar *>(table->itemWidget(item, 4)) != nullptr;
+        && qobject_cast<QProgressBar *>(table->itemWidget(item, 2)) != nullptr;
 }
 
 void dumpTransferRows(QTreeWidget *table)
@@ -443,11 +566,12 @@ void dumpTransferRows(QTreeWidget *table)
         QTextStream(stderr)
             << "Transfer row: "
             << item->text(0) << " | "
+            << item->text(1) << " | "
             << item->text(2) << " | "
             << item->text(3) << " | "
             << item->text(4) << " | "
-            << item->text(8) << " | "
-            << item->text(9)
+            << item->text(5) << " | "
+            << item->text(6)
             << Qt::endl;
         ++iterator;
     }
@@ -702,7 +826,7 @@ bool connectFakeRemoteSession(MainWindow &window, const QString &remotePath)
     return true;
 }
 
-bool checkQuickSavePreservesExistingSite(MainWindow &window)
+bool checkQuickSaveCreatesSeparateSite(MainWindow &window)
 {
     QTreeWidget *sessionTree = window.findChild<QTreeWidget *>("sessionManagerTree");
     QComboBox *protocolCombo = window.findChild<QComboBox *>("quickProtocolCombo");
@@ -712,11 +836,10 @@ bool checkQuickSavePreservesExistingSite(MainWindow &window)
     QLineEdit *passwordEdit = window.findChild<QLineEdit *>("quickPasswordEdit");
     QLineEdit *quickRemotePathEdit = window.findChild<QLineEdit *>("quickRemotePathEdit");
     QPushButton *saveButton = window.findChild<QPushButton *>("quickSaveSiteButton");
-    QTabWidget *remoteTabs = window.findChild<QTabWidget *>("remoteTabs");
     if (sessionTree == nullptr || protocolCombo == nullptr || hostEdit == nullptr || portEdit == nullptr
-        || userEdit == nullptr || passwordEdit == nullptr || quickRemotePathEdit == nullptr || saveButton == nullptr || remoteTabs == nullptr)
+        || userEdit == nullptr || passwordEdit == nullptr || quickRemotePathEdit == nullptr || saveButton == nullptr)
     {
-        QTextStream(stderr) << "Quick-save preservation prerequisites are incomplete" << Qt::endl;
+        QTextStream(stderr) << "Quick-save new-site prerequisites are incomplete" << Qt::endl;
         return false;
     }
 
@@ -741,12 +864,33 @@ bool checkQuickSavePreservesExistingSite(MainWindow &window)
     userEdit->setText("testuser");
     passwordEdit->setText("new-password");
     quickRemotePathEdit->setText("/home/testuser/remote_test");
+    bool dialogChecked = false;
+    QTimer::singleShot(0, [&]() {
+        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+        if (dialog == nullptr || dialog->objectName() != "siteProfileDialog")
+        {
+            return;
+        }
+        auto *nameEdit = dialog->findChild<QLineEdit *>("siteNameEdit");
+        auto *groupEdit = dialog->findChild<QLineEdit *>("siteGroupEdit");
+        auto *buttons = dialog->findChild<QDialogButtonBox *>();
+        if (nameEdit == nullptr || groupEdit == nullptr || buttons == nullptr
+            || buttons->button(QDialogButtonBox::Ok)->text() != "确定"
+            || buttons->button(QDialogButtonBox::Cancel)->text() != "取消")
+        {
+            return;
+        }
+        nameEdit->setText("SFTP_新增同IP");
+        groupEdit->setText("未分组");
+        dialogChecked = true;
+        buttons->button(QDialogButtonBox::Ok)->click();
+    });
     saveButton->click();
     QApplication::processEvents();
 
-    if (!waitForRemoteConnected(remoteTabs->currentWidget(), "/home/testuser/remote_test"))
+    if (!dialogChecked)
     {
-        QTextStream(stderr) << "Quick-save preservation connection did not complete" << Qt::endl;
+        QTextStream(stderr) << "Quick-save did not show a custom site dialog with Chinese buttons" << Qt::endl;
         return false;
     }
     if (!treeContainsText(sessionTree, "虚拟机测试") || !treeContainsText(sessionTree, "SFTP_192.168.8.128"))
@@ -754,15 +898,27 @@ bool checkQuickSavePreservesExistingSite(MainWindow &window)
         QTextStream(stderr) << "Quick-save changed the existing site name or group" << Qt::endl;
         return false;
     }
-    if (treeContainsText(sessionTree, "SFTP 192.168.8.128"))
+    if (!treeContainsText(sessionTree, "SFTP_新增同IP"))
     {
-        QTextStream(stderr) << "Quick-save created or exposed a generated ungrouped site name" << Qt::endl;
+        QTextStream(stderr) << "Quick-save did not create a separate same-host site" << Qt::endl;
         return false;
     }
 
-    const int connectedIndex = remoteTabs->currentIndex();
-    QMetaObject::invokeMethod(remoteTabs, "tabCloseRequested", Qt::DirectConnection, Q_ARG(int, connectedIndex));
-    QApplication::processEvents();
+    std::string createdSiteId;
+    QTreeWidgetItemIterator iterator(sessionTree);
+    while (*iterator != nullptr)
+    {
+        if ((*iterator)->text(0) == "SFTP_新增同IP")
+        {
+            createdSiteId = (*iterator)->data(0, Qt::UserRole + 2).toString().toStdString();
+            break;
+        }
+        ++iterator;
+    }
+    if (!createdSiteId.empty())
+    {
+        window.removeSiteForTesting(createdSiteId);
+    }
     window.removeSiteForTesting(existing.id);
     QApplication::processEvents();
     return true;
@@ -785,10 +941,9 @@ bool checkRemoteConnectionControlWorkflow(MainWindow &window)
     QLineEdit *quickRemotePathEdit = window.findChild<QLineEdit *>("quickRemotePathEdit");
     QPushButton *connectButton = window.findChild<QPushButton *>("quickConnectButton");
     QTabWidget *remoteTabs = window.findChild<QTabWidget *>("remoteTabs");
-    QAction *connectAction = findActionByText(window, "连接");
     if (protocolCombo == nullptr || hostEdit == nullptr || portEdit == nullptr || userEdit == nullptr
         || passwordEdit == nullptr || quickRemotePathEdit == nullptr || connectButton == nullptr
-        || remoteTabs == nullptr || connectAction == nullptr)
+        || remoteTabs == nullptr)
     {
         QTextStream(stderr) << "Remote connection-control prerequisites are incomplete" << Qt::endl;
         return false;
@@ -810,14 +965,6 @@ bool checkRemoteConnectionControlWorkflow(MainWindow &window)
         || !remoteStateLabel->text().contains("正在连接") || connectButton->text() != "取消")
     {
         QTextStream(stderr) << "Remote connection did not expose connecting state" << Qt::endl;
-        return false;
-    }
-
-    connectAction->trigger();
-    QApplication::processEvents();
-    if (remoteTabs->count() != initialTabCount + 1)
-    {
-        QTextStream(stderr) << "Duplicate connect should not create another remote tab" << Qt::endl;
         return false;
     }
 
@@ -1103,14 +1250,16 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
     }
     QTreeWidgetItem *uploadParent = findTopLevelTransferRow(transferTable, "dirbridge-folder", "上传", "已完成");
     QTreeWidgetItem *downloadParent = findTopLevelTransferRow(transferTable, "dirbridge-folder", "下载", "已完成");
-    if (uploadParent == nullptr || uploadParent->text(4) != "100%" || uploadParent->childCount() < 2
-        || uploadParent->isExpanded() || !hasProgressBar(transferTable, uploadParent))
+    if (uploadParent == nullptr || uploadParent->text(2) != "100%" || uploadParent->childCount() < 2
+        || uploadParent->isExpanded() || !hasProgressBar(transferTable, uploadParent)
+        || uploadParent->text(9).isEmpty())
     {
         QTextStream(stderr) << "Directory upload parent transfer row is incomplete" << Qt::endl;
         return false;
     }
-    if (downloadParent == nullptr || downloadParent->text(4) != "100%" || downloadParent->childCount() < 2
-        || downloadParent->isExpanded() || !hasProgressBar(transferTable, downloadParent))
+    if (downloadParent == nullptr || downloadParent->text(2) != "100%" || downloadParent->childCount() < 2
+        || downloadParent->isExpanded() || !hasProgressBar(transferTable, downloadParent)
+        || downloadParent->text(9).isEmpty())
     {
         QTextStream(stderr) << "Directory download parent transfer row is incomplete" << Qt::endl;
         return false;
@@ -1134,8 +1283,7 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
 
     remotePathEdit->setText("/home/testuser/remote_test/upload");
     QMetaObject::invokeMethod(remotePathEdit, "returnPressed", Qt::DirectConnection);
-    QApplication::processEvents();
-    if (findTableRowByName(remoteTable, "dirbridge-folder") >= 0)
+    if (!waitForTableRowAbsent(remoteTable, "dirbridge-folder"))
     {
         QTextStream(stderr) << "Recursive remote delete did not remove moved directory" << Qt::endl;
         return false;
@@ -1162,7 +1310,7 @@ bool checkRemoteUiWorkflow(MainWindow &window)
         {"download", "upload", "edit", "readme.txt"},
         true);
     return baseWorkflowOk
-        && checkQuickSavePreservesExistingSite(window)
+        && checkQuickSaveCreatesSeparateSite(window)
         && checkRemoteConnectionControlWorkflow(window)
         && checkSessionManagerWorkflow(window)
         && checkRemoteMultiSessionWorkflow(window)

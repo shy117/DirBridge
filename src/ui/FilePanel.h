@@ -3,6 +3,7 @@
 
 #include <QFileIconProvider>
 #include <QPoint>
+#include <QSet>
 #include <QStringList>
 #include <QWidget>
 
@@ -46,7 +47,7 @@ public:
     void setRemoteRemoveRequestedHandler(std::function<void(const QString &)> handler);
     void setRemoteRenameRequestedHandler(std::function<void(const QString &, const QString &)> handler);
     void setLocalUploadRequestedHandler(std::function<void(const QString &)> handler);
-    void setRemoteDownloadRequestedHandler(std::function<void(const QString &)> handler);
+    void setRemoteDownloadRequestedHandler(std::function<void(const QString &, bool)> handler);
     /**
      * @brief Sets the callback used when local files are dropped onto the remote panel.
      * @param handler Callback receiving local file paths to upload.
@@ -114,6 +115,7 @@ private:
     void createLocalDirectory();
     void createLocalFile();
     void removeLocalPath(const QString &path);
+    void finishLocalRemove(const QString &path, bool removed);
     void renameLocalPath(const QString &path);
     void showLocalProperties(const QString &path) const;
     void startDragFromSelection();
@@ -143,6 +145,7 @@ private:
     QFileIconProvider m_iconProvider;
     std::vector<FileItem> m_remoteItems;
     QStringList m_remoteKnownDirectories;
+    QSet<QString> m_pendingLocalDeletes;
     std::function<void(const QString &, bool)> m_remotePathRequested;
     std::function<void()> m_remoteRefreshRequested;
     std::function<void(const QString &)> m_remoteCreateDirectoryRequested;
@@ -150,7 +153,7 @@ private:
     std::function<void(const QString &)> m_remoteRemoveRequested;
     std::function<void(const QString &, const QString &)> m_remoteRenameRequested;
     std::function<void(const QString &)> m_localUploadRequested;
-    std::function<void(const QString &)> m_remoteDownloadRequested;
+    std::function<void(const QString &, bool)> m_remoteDownloadRequested;
     std::function<void(const QStringList &)> m_localFilesDroppedOnRemote;
     std::function<void(const QStringList &)> m_remoteFilesDroppedOnLocal;
     std::function<void(const QStringList &, const QString &)> m_remoteFilesDroppedOnRemote;

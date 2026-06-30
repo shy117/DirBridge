@@ -52,6 +52,11 @@ const TransferJob *TransferQueue::retry(const std::string &id, const std::string
     retryJob.id = retryId;
     retryJob.status = TransferStatus::Pending;
     retryJob.transferredBytes = 0;
+    retryJob.startedAtMs = 0;
+    retryJob.finishedAtMs = 0;
+    retryJob.lastProgressAtMs = 0;
+    retryJob.lastProgressBytes = 0;
+    retryJob.currentBytesPerSecond = 0.0;
     retryJob.errorMessage.clear();
     m_jobs.push_back(std::move(retryJob));
     return &m_jobs.back();

@@ -12,6 +12,7 @@ enum class TransferDirection
 
 enum class TransferStatus
 {
+    Preparing,
     Pending,
     Running,
     Completed,
@@ -40,6 +41,11 @@ struct TransferJob
     std::string sessionName;
     std::int64_t totalBytes = -1;
     std::int64_t transferredBytes = 0;
+    std::int64_t startedAtMs = 0;
+    std::int64_t finishedAtMs = 0;
+    std::int64_t lastProgressAtMs = 0;
+    std::int64_t lastProgressBytes = 0;
+    double currentBytesPerSecond = 0.0;
     int totalChildren = 0;
     int finishedChildren = 0;
     std::string errorMessage;

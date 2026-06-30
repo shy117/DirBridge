@@ -32,6 +32,8 @@ std::string toString(TransferStatus status)
 {
     switch (status)
     {
+    case TransferStatus::Preparing:
+        return "preparing";
     case TransferStatus::Pending:
         return "pending";
     case TransferStatus::Running:

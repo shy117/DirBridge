@@ -5,6 +5,8 @@
 #include <QClipboard>
 #include <QDateTime>
 #include <QDesktopServices>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDropEvent>
 #include <QDrag>
 #include <QDir>
@@ -21,13 +23,16 @@
 #include <QMenu>
 #include <QMimeData>
 #include <QMessageBox>
+#include <QMetaObject>
 #include <QMouseEvent>
+#include <QPointer>
 #include <QPushButton>
 #include <QStandardPaths>
 #include <QStyle>
 #include <QSplitter>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QThread>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QUrl>
@@ -65,6 +70,24 @@ QString fileItemTypeText(FileItemType type)
     }
 
     return "未知";
+}
+
+void showInformationDialog(QWidget *parent, const QString &title, const QString &message)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle(title);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *label = new QLabel(message, &dialog);
+    label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    label->setWordWrap(true);
+    layout->addWidget(label);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    buttons->button(QDialogButtonBox::Close)->setText("关闭");
+    layout->addWidget(buttons);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    dialog.exec();
 }
 
 QString formatFileSize(qint64 size)
@@ -257,7 +280,7 @@ void FilePanel::setLocalUploadRequestedHandler(std::function<void(const QString 
     m_localUploadRequested = std::move(handler);
 }
 
-void FilePanel::setRemoteDownloadRequestedHandler(std::function<void(const QString &)> handler)
+void FilePanel::setRemoteDownloadRequestedHandler(std::function<void(const QString &, bool)> handler)
 {
     m_remoteDownloadRequested = std::move(handler);
 }
@@ -809,9 +832,9 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
         if (isLocal)
         {
             uploadAction = menu.addAction(fluentIcon("arrow_right"), "上传");
-            uploadAction->setEnabled(!selectedIsDirectory && m_localUploadRequested != nullptr);
+            uploadAction->setEnabled(m_localUploadRequested != nullptr);
         }
-        else if (!selectedIsDirectory)
+        else
         {
             downloadAction = menu.addAction(fluentIcon("arrow_left"), "下载");
             downloadAction->setEnabled(m_remoteDownloadRequested != nullptr);
@@ -951,7 +974,7 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
 
     if (selectedAction == downloadAction && m_remoteDownloadRequested)
     {
-        m_remoteDownloadRequested(selectedPath);
+        m_remoteDownloadRequested(selectedPath, selectedIsDirectory);
         return;
     }
 
@@ -1048,7 +1071,7 @@ void FilePanel::showRemoteProperties(const QString &path) const
         break;
     }
 
-    QMessageBox::information(const_cast<FilePanel *>(this), "远程属性", lines.join('\n'));
+    showInformationDialog(const_cast<FilePanel *>(this), "远程属性", lines.join('\n'));
 }
 
 void FilePanel::createLocalDirectory()
@@ -1107,6 +1130,12 @@ void FilePanel::createLocalFile()
 
 void FilePanel::removeLocalPath(const QString &path)
 {
+    if (m_pendingLocalDeletes.contains(path))
+    {
+        showFileOperationWarning(this, "删除本地项目", "该项目正在删除，请等待完成。");
+        return;
+    }
+
     const QFileInfo info(path);
     if (!info.exists())
     {
@@ -1120,16 +1149,28 @@ void FilePanel::removeLocalPath(const QString &path)
         return;
     }
 
-    bool removed = false;
-    if (info.isDir())
-    {
-        removed = QDir(path).removeRecursively();
-    }
-    else
-    {
-        removed = QFile::remove(path);
-    }
+    m_pendingLocalDeletes.insert(path);
+    QPointer<FilePanel> panel(this);
+    QThread *thread = QThread::create([panel, path]() {
+        const QFileInfo info(path);
+        const bool removed = info.isDir() ? QDir(path).removeRecursively() : QFile::remove(path);
+        if (panel != nullptr)
+        {
+            QMetaObject::invokeMethod(panel.data(), [panel, path, removed]() {
+                if (panel != nullptr)
+                {
+                    panel->finishLocalRemove(path, removed);
+                }
+            }, Qt::QueuedConnection);
+        }
+    });
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
+}
 
+void FilePanel::finishLocalRemove(const QString &path, bool removed)
+{
+    m_pendingLocalDeletes.remove(path);
     if (!removed)
     {
         showFileOperationWarning(this, "删除本地项目失败", QString("无法删除：%1").arg(path));
@@ -1188,7 +1229,7 @@ void FilePanel::showLocalProperties(const QString &path) const
     lines << QString("修改时间：%1").arg(info.lastModified().toString("yyyy-MM-dd HH:mm:ss"));
     lines << QString("权限：%1").arg(info.permission(QFile::WriteUser) ? "可写" : "只读");
     lines << QString("所有者：%1").arg(info.owner());
-    QMessageBox::information(const_cast<FilePanel *>(this), "本地属性", lines.join('\n'));
+    showInformationDialog(const_cast<FilePanel *>(this), "本地属性", lines.join('\n'));
 }
 
 void FilePanel::startDragFromSelection()
