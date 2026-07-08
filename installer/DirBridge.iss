@@ -1,7 +1,7 @@
 #define AppName "DirBridge"
 
 #ifndef AppVersion
-#define AppVersion "0.5.5"
+#define AppVersion "0.5.6"
 #endif
 
 #ifndef ReleaseDir

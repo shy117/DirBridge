@@ -1,5 +1,7 @@
 #include "config/SiteProfile.h"
 
+#include "config/PasswordCrypto.h"
+
 #include <algorithm>
 #include <cctype>
 #include <stdexcept>
@@ -83,7 +85,8 @@ void to_json(nlohmann::json &json, const SiteProfile &profile)
         {"host", profile.host},
         {"port", profile.port},
         {"username", profile.username},
-        {"password", profile.password},
+        {"passwordStorage", passwordStorageScheme()},
+        {"passwordProtected", protectPassword(profile.password)},
         {"defaultRemotePath", profile.defaultRemotePath},
         {"encoding", profile.encoding}
     };
@@ -98,7 +101,14 @@ void from_json(const nlohmann::json &json, SiteProfile &profile)
     profile.host = json.value("host", "");
     profile.port = json.value("port", defaultPortForProtocol(profile.protocol));
     profile.username = json.value("username", "");
-    profile.password = json.value("password", "");
+    if (json.contains("passwordProtected"))
+    {
+        profile.password = unprotectPassword(json.value("passwordProtected", ""));
+    }
+    else
+    {
+        profile.password = json.value("password", "");
+    }
     profile.defaultRemotePath = json.value("defaultRemotePath", "/");
     profile.encoding = json.value("encoding", "UTF-8");
 }

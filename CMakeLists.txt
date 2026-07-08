@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(DirBridge
-    VERSION 0.5.5
+    VERSION 0.5.6
     LANGUAGES CXX
 )
 
@@ -21,6 +21,8 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Svg)
 add_library(DirBridgeCore STATIC
     src/config/SiteProfile.cpp
     src/config/SiteProfile.h
+    src/config/PasswordCrypto.cpp
+    src/config/PasswordCrypto.h
     src/config/SettingsStore.cpp
     src/config/SettingsStore.h
     src/config/SiteStore.cpp
@@ -60,6 +62,13 @@ target_link_libraries(DirBridgeCore
         nlohmann_json::nlohmann_json
         spdlog::spdlog_header_only
 )
+
+if(WIN32)
+    target_link_libraries(DirBridgeCore
+        PUBLIC
+            Crypt32
+    )
+endif()
 
 target_include_directories(DirBridgeCore
     PUBLIC

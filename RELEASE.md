@@ -4,7 +4,7 @@
 
 ## 当前版本
 
-- 版本：v0.5.5
+- 版本：v0.5.6
 - 平台：Windows x64
 - 状态：MVP 阶段预发布包
 
@@ -12,8 +12,8 @@
 
 建议同一版本同时提供：
 
-- `DirBridge-v0.5.5-win64.zip`：绿色压缩包，解压后运行 `DirBridge.exe`。
-- `DirBridge-v0.5.5-win64-setup.exe`：Inno Setup 安装包。
+- `DirBridge-v0.5.6-win64.zip`：绿色压缩包，解压后运行 `DirBridge.exe`。
+- `DirBridge-v0.5.6-win64-setup.exe`：Inno Setup 安装包。
 
 二进制产物生成在 `build/release/` 下，不提交到 Git。
 
@@ -44,7 +44,7 @@ powershell -ExecutionPolicy Bypass -File scripts\package_release.ps1
 在发布目录内运行：
 
 ```powershell
-Set-Location build\release\DirBridge-v0.5.5-win64
+Set-Location build\release\DirBridge-v0.5.6-win64
 .\DirBridge.exe --check-deps
 .\DirBridge.exe --smoke-test
 .\DirBridge.exe --ui-remote-smoke-test
@@ -52,6 +52,12 @@ Set-Location build\release\DirBridge-v0.5.5-win64
 ```
 
 真实 FTP/SFTP 验证需要在本机临时设置 `DIRBRIDGE_TEST_*` 环境变量后运行，不要把密码写入仓库或发布包。
+
+## v0.5.6 用户可见变化
+
+- 站点密码使用 Windows 当前用户 DPAPI 加密后保存，不再以明文写入 `config/sites.json`。
+- 旧版明文站点配置仍可读取，并会在下次保存时迁移为加密字段。
+- 状态栏启动信息改为面向用户的“就绪”或异常提示，依赖详情保留在日志中。
 
 ## v0.5.5 用户可见变化
 
@@ -75,4 +81,4 @@ Set-Location build\release\DirBridge-v0.5.5-win64
 
 - 连接取消目前是逻辑取消，不能强制中断已进入阻塞状态的底层 libcurl 调用。
 - 远程刷新和路径跳转仍是同步目录加载流程。
-- MVP 阶段仍明文保存站点密码，仅用于本地开发验证。
+- 加密后的站点密码绑定当前 Windows 用户和本机环境，复制到其他用户或机器后不能直接解密。

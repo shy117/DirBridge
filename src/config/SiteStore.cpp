@@ -1,5 +1,7 @@
 #include "config/SiteStore.h"
 
+#include "config/PasswordCrypto.h"
+
 #include <fstream>
 #include <stdexcept>
 
@@ -38,7 +40,7 @@ void SiteStore::save(const std::vector<SiteProfile> &sites) const
 
     nlohmann::json document;
     document["version"] = 1;
-    document["passwordStorage"] = "plain-text";
+    document["passwordStorage"] = passwordStorageScheme();
     document["sites"] = sites;
 
     std::ofstream output(m_path);

@@ -558,11 +558,12 @@ MainWindow::MainWindow(const DependencyCheckResult &dependencyCheck, QWidget *pa
         .arg(dependencyCheck.jsonReady ? "yes" : "no")
         .arg(dependencyCheck.loggingReady && dependencyCheck.siteStoreReady ? "yes" : "no"));
 
-    statusBar()->showMessage(
-        QString("libcurl ready=%1, JSON ready=%2, logging ready=%3")
-            .arg(dependencyCheck.curl.hasFtp && dependencyCheck.curl.hasSftp ? "yes" : "no")
-            .arg(dependencyCheck.jsonReady ? "yes" : "no")
-            .arg(dependencyCheck.loggingReady && dependencyCheck.siteStoreReady ? "yes" : "no"));
+    const bool startupReady = dependencyCheck.curl.hasFtp
+        && dependencyCheck.curl.hasSftp
+        && dependencyCheck.jsonReady
+        && dependencyCheck.loggingReady
+        && dependencyCheck.siteStoreReady;
+    statusBar()->showMessage(startupReady ? "就绪" : "启动检查发现异常，请查看日志。");
 }
 
 void MainWindow::setRemoteFileSystemForTesting(std::unique_ptr<RemoteFileSystem> remoteFileSystem)

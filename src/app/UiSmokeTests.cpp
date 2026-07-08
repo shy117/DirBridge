@@ -17,6 +17,7 @@
 #include <QDialogButtonBox>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QStatusBar>
 #include <QStringList>
 #include <QTableWidget>
 #include <QTimer>
@@ -105,6 +106,14 @@ bool checkRemoteUiObjects(MainWindow &window)
     if (remoteTabs != nullptr && !remoteTabs->isHidden())
     {
         QTextStream(stderr) << "Remote tabs should be hidden before the first remote session" << Qt::endl;
+        ok = false;
+    }
+    if (window.statusBar() == nullptr
+        || window.statusBar()->currentMessage().contains("libcurl")
+        || window.statusBar()->currentMessage().contains("JSON ready")
+        || window.statusBar()->currentMessage().contains("logging ready"))
+    {
+        QTextStream(stderr) << "Status bar should show user-facing startup text" << Qt::endl;
         ok = false;
     }
     if (findActionByText(window, "关于 DirBridge") == nullptr)

@@ -1,6 +1,7 @@
 #include "config/SettingsStore.h"
 #include "config/SiteProfile.h"
 #include "config/SiteStore.h"
+#include "config/PasswordCrypto.h"
 #include "config/UserSettings.h"
 #include "core/FakeRemoteFileSystem.h"
 #include "core/TransferJob.h"
@@ -10,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -402,20 +404,27 @@ void checkSiteProfileAndSettingsStore()
         {"host", "legacy.example.test"},
         {"port", 22},
         {"username", "tester"},
-        {"password", ""},
+        {"password", "legacy-secret"},
         {"defaultRemotePath", "/remote"},
         {"encoding", "UTF-8"}
     };
     const SiteProfile legacySite = legacySiteJson.get<SiteProfile>();
     require(legacySite.group.empty(), "legacy site without group should load with empty group");
+    require(legacySite.password == "legacy-secret", "legacy plain-text site password should load");
 
     SiteProfile groupedSite = legacySite;
     groupedSite.id = "grouped-site";
     groupedSite.group = "生产";
+    groupedSite.password = "stored-secret";
     nlohmann::json groupedJson = groupedSite;
     require(groupedJson.value("group", "") == "生产", "site group should serialize");
+    require(!groupedJson.contains("password"), "site profile should not serialize plain password");
+    require(groupedJson.value("passwordStorage", "") == passwordStorageScheme(), "site password storage scheme should serialize");
+    require(groupedJson.contains("passwordProtected"), "site profile should serialize protected password");
+    require(groupedJson.value("passwordProtected", "") != groupedSite.password, "protected password should not equal plain password");
     const SiteProfile roundTripSite = groupedJson.get<SiteProfile>();
     require(roundTripSite.group == "生产", "site group should round trip");
+    require(roundTripSite.password == groupedSite.password, "protected password should round trip");
 
     const std::filesystem::path tempRoot = std::filesystem::temp_directory_path() / "dirbridge-settings-checks";
     std::filesystem::remove_all(tempRoot);
@@ -423,9 +432,16 @@ void checkSiteProfileAndSettingsStore()
 
     SiteStore siteStore(tempRoot / "sites.json");
     siteStore.save({groupedSite});
+    {
+        std::ifstream savedSites(siteStore.path());
+        const std::string savedText((std::istreambuf_iterator<char>(savedSites)), std::istreambuf_iterator<char>());
+        require(savedText.find("stored-secret") == std::string::npos, "site store should not persist plain password");
+        require(savedText.find("passwordProtected") != std::string::npos, "site store should persist protected password");
+    }
     const std::vector<SiteProfile> loadedSites = siteStore.load();
     require(loadedSites.size() == 1, "site store should reload saved site");
     require(loadedSites.front().group == "生产", "site store should preserve group");
+    require(loadedSites.front().password == "stored-secret", "site store should decrypt saved password");
 
     SettingsStore settingsStore(tempRoot / "settings.json");
     UserSettings emptySettings = settingsStore.load();

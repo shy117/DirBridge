@@ -176,7 +176,7 @@ V1 本地和远程文件列表只使用“详细信息”显示方式，不提�
 
 - 使用 JSON 保存站点配置。
 - 使用 JSON 保存用户设置。
-- 第一阶段可先明文保存密码，文档和 UI 必须标注风险。
+- 站点密码使用 Windows 当前用户 DPAPI 加密后保存，旧版明文配置可兼容读取。
 
 当前站点配置文件：
 
@@ -192,12 +192,13 @@ config/sites.json
 - `host`
 - `port`
 - `username`
-- `password`
+- `passwordProtected`
+- `passwordStorage`
 - `defaultRemotePath`
 - `encoding`
 - `group`
 
-`passwordStorage` 当前为 `plain-text`，只用于本地开发验证。
+`passwordStorage` 当前为 `windows-dpapi-current-user`。旧版 `password` 明文字段仍可读取，并会在下次保存时迁移为加密字段。
 
 当前用户设置文件：
 
