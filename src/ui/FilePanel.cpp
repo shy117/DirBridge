@@ -616,7 +616,12 @@ bool FilePanel::eventFilter(QObject *watched, QEvent *event)
         auto *dropEvent = static_cast<QDropEvent *>(event);
         if (canAcceptTransferDrop(dropEvent->mimeData()))
         {
-            handleTransferDrop(dropEvent->mimeData(), dropEvent->position().toPoint());
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+            const QPoint dropPosition = dropEvent->position().toPoint();
+#else
+            const QPoint dropPosition = dropEvent->pos();
+#endif
+            handleTransferDrop(dropEvent->mimeData(), dropPosition);
             dropEvent->acceptProposedAction();
             return true;
         }

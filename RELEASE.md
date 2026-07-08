@@ -1,21 +1,25 @@
 # DirBridge Release Notes
 
-本文说明 DirBridge 当前版本的发布资产和验证方式。通用 Windows/Qt 打包方法论不放在本仓库；本文件只记录 DirBridge 项目发布所需事实。
+本文说明 DirBridge 当前版本的发布产物、生成命令和发布前验证步骤。
 
-## 当前版本
+## 发布版本
 
-- 版本：v0.5.6
+- 版本格式：`vX.Y.Z`
 - 平台：Windows x64
 - 状态：MVP 阶段预发布包
 
 ## 发布资产
 
-建议同一版本同时提供：
+本版本发布产物：
 
-- `DirBridge-v0.5.6-win64.zip`：绿色压缩包，解压后运行 `DirBridge.exe`。
-- `DirBridge-v0.5.6-win64-setup.exe`：Inno Setup 安装包。
+- `DirBridge-vX.Y.Z-win64.zip`：绿色压缩包，解压后运行 `DirBridge.exe`。
+- `DirBridge-vX.Y.Z-win64-setup.exe`：Inno Setup 安装包。
 
-二进制产物生成在 `build/release/` 下，不提交到 Git。
+默认输出目录：
+
+```text
+build/release/
+```
 
 ## 包内内容
 
@@ -44,7 +48,7 @@ powershell -ExecutionPolicy Bypass -File scripts\package_release.ps1
 在发布目录内运行：
 
 ```powershell
-Set-Location build\release\DirBridge-v0.5.6-win64
+Set-Location build\release\DirBridge-vX.Y.Z-win64
 .\DirBridge.exe --check-deps
 .\DirBridge.exe --smoke-test
 .\DirBridge.exe --ui-remote-smoke-test
@@ -53,32 +57,4 @@ Set-Location build\release\DirBridge-v0.5.6-win64
 
 真实 FTP/SFTP 验证需要在本机临时设置 `DIRBRIDGE_TEST_*` 环境变量后运行，不要把密码写入仓库或发布包。
 
-## v0.5.6 用户可见变化
-
-- 站点密码使用 Windows 当前用户 DPAPI 加密后保存，不再以明文写入 `config/sites.json`。
-- 旧版明文站点配置仍可读取，并会在下次保存时迁移为加密字段。
-- 状态栏启动信息改为面向用户的“就绪”或异常提示，依赖详情保留在日志中。
-
-## v0.5.5 用户可见变化
-
-- 目录上传和下载显示文件夹父任务，可展开查看子文件明细。
-- 上传和下载在后台执行，目录拖拽传输过程中主界面保持可操作。
-- 传输表使用进度条显示父任务总进度和子文件细节进度。
-- 传输表显示速度、估计剩余时间和经过时间。
-- 目录父任务默认折叠。
-- 目录拖拽上传/下载的递归枚举和目录准备进入后台准备阶段，降低主界面卡顿。
-- 本地和远程删除操作改为后台执行，减少删除文件夹时的界面卡顿。
-- 文件列表和传输表按 B / KB / MB / GB / TB 自动显示大小。
-- 传输成功、取消和常见失败消息改为中文展示。
-- 远程区域启动时不再显示“未连接”占位 Tab。
-- 无远程会话时本地面板占满文件区；连接远程后本地和远程平分显示。
-- 保存为站点会打开新建站点弹窗，允许同一 IP 另存为不同站点，不再静默覆盖已有站点。
-- 菜单栏收敛为文件、查看和帮助；远程会话 Tab 右键提供重连、断开和关闭会话。
-- 关于窗口显示版本、许可证、GitHub 仓库地址和作者信息，并改为无提示音的信息对话框。
-- 本地文件夹右键可上传，远程文件夹右键可下载。
-
-## 已知问题
-
-- 连接取消目前是逻辑取消，不能强制中断已进入阻塞状态的底层 libcurl 调用。
-- 远程刷新和路径跳转仍是同步目录加载流程。
-- 加密后的站点密码绑定当前 Windows 用户和本机环境，复制到其他用户或机器后不能直接解密。
+版本变化、修复内容和已知问题见 [CHANGELOG.md](CHANGELOG.md)。

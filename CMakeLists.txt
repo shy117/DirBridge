@@ -1,13 +1,39 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(DirBridge
-    VERSION 0.5.6
+    VERSION 0.5.7
     LANGUAGES CXX
 )
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(CMAKE_SIZEOF_VOID_P AND NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "DirBridge currently supports 64-bit Windows builds only.")
+endif()
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)
+    message(FATAL_ERROR "DirBridge requires C++17 std::filesystem support. GCC 7.x/8.x MinGW is not supported; use MinGW GCC 9 or newer.")
+endif()
+
+if(MSVC AND MSVC_VERSION LESS 1929)
+    message(FATAL_ERROR "DirBridge requires MSVC 19.29 or newer for the supported C++17 build baseline.")
+endif()
+
+include(CheckCXXSourceCompiles)
+check_cxx_source_compiles("
+    #include <filesystem>
+    int main()
+    {
+        const auto path = std::filesystem::current_path();
+        return path.empty() ? 1 : 0;
+    }
+" DIRBRIDGE_HAS_STD_FILESYSTEM)
+
+if(NOT DIRBRIDGE_HAS_STD_FILESYSTEM)
+    message(FATAL_ERROR "DirBridge requires a compiler and standard library with working C++17 <filesystem> support.")
+endif()
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)

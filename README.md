@@ -2,7 +2,7 @@
 
 DirBridge 是一个面向 Windows 桌面场景的远程文件管理工具，目标是提供类似 Xftp 的本地与远程双栏文件管理体验。
 
-当前项目仍处于 MVP 开发阶段，当前开发版本为 v0.5.6。
+当前项目仍处于 MVP 开发阶段，版本号格式为 `vX.Y.Z`。具体版本变化见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 当前能力
 
@@ -26,6 +26,38 @@ DirBridge 是一个面向 Windows 桌面场景的远程文件管理工具，目�
 - nlohmann/json
 - spdlog
 
+## 构建环境要求
+
+DirBridge 使用 C++17，并依赖标准库 `<filesystem>`。不建议为了兼容旧编译器降低 C++ 标准。
+
+最低要求：
+
+- 64 位 Windows。
+- CMake 3.24 或更新版本。
+- Qt 5 或 Qt 6，需包含 Widgets 和 Svg 模块。
+- 支持 C++17 `<filesystem>` 的编译器和标准库。
+
+当前建议的编译器基线：
+
+- MinGW GCC 9 或更新版本。
+- MSVC 19.29 或更新版本。
+
+不支持：
+
+- GCC 7.3 / 旧版 MinGW。该环境缺少可用的 `<filesystem>`，会导致构建失败。
+
+已验证环境：
+
+- Windows + Qt 6 + MinGW：主要开发和发布验证环境。
+- Windows + Visual Studio 2019 + Qt 5 MSVC + MSVC 19.29：已验证项目可编译，Core 检查通过。
+
+计划保持兼容但仍需补齐完整验证：
+
+- Qt 5 + MinGW。
+- Qt 6 + MSVC。
+
+注意：当前 `scripts/setup_third_party.ps1` 准备的是 Windows MinGW 版 libcurl 预编译包。MSVC 构建需要使用匹配 MSVC ABI 的 libcurl，或后续改用 vcpkg 等统一依赖方案。
+
 ## 快速开始
 
 准备第三方依赖：
@@ -37,7 +69,7 @@ DirBridge 是一个面向 Windows 桌面场景的远程文件管理工具，目�
     cmake --preset windows-mingw-debug
     cmake --build --preset windows-mingw-debug
 
-也可以按本机环境使用普通 CMake 命令构建。项目当前主要验证环境是 Windows + MinGW + Qt 6。
+也可以按本机环境使用普通 CMake 命令构建。项目当前主要验证环境是 Windows + MinGW + Qt 6；MSVC 构建请确保 Qt、libcurl 和编译器 ABI 一致。
 
 ## 运行检查
 
@@ -72,8 +104,22 @@ DirBridge 是一个面向 Windows 桌面场景的远程文件管理工具，目�
 ## 当前限制
 
 - 站点密码使用 Windows 当前用户 DPAPI 加密后保存，本机当前用户可解密。
+- 加密后的站点密码绑定当前 Windows 用户和本机环境，复制到其他用户或机器后不能直接解密。
 - 旧版明文站点配置可继续读取，并会在下次保存时迁移为加密字段。
-- v0.5.6 聚焦站点密码加密和状态栏信息用户化。
+
+## 参与贡献
+
+欢迎围绕构建兼容性、远程文件操作、传输队列和 UI 体验提交改进。提交前建议至少运行：
+
+    cmake --build .\build\codex-verify
+    .\build\codex-verify\DirBridgeCoreChecks.exe
+    .\build\codex-verify\DirBridge.exe --check-deps
+    .\build\codex-verify\DirBridge.exe --smoke-test
+
+如果修改 UI 或远程会话流程，请同时运行：
+
+    .\build\codex-verify\DirBridge.exe --ui-remote-smoke-test
+    .\build\codex-verify\DirBridge.exe --ui-remote-workflow-smoke-test
 
 ## 许可证
 

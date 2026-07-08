@@ -39,9 +39,19 @@ DirBridge
 
 本次只创建 `docs`，源码骨架在文档确认后再创建。
 
+## 编译器基线
+
+项目使用 C++17，并依赖标准库 `<filesystem>`。最低编译器要求以“可正常编译并链接 `<filesystem>`”为准：
+
+- MinGW GCC 9 或更新版本。
+- MSVC 19.29 或更新版本。
+- 64 位 Windows 构建。
+
+GCC 7.3 / 旧版 MinGW 不在支持范围内，因为该环境缺少可用的 `<filesystem>`。CMake 配置阶段应给出明确错误，而不是让用户在源码编译阶段遇到难以判断的头文件错误。
+
 ## Qt
 
-CMake 中优先支持 Qt 6，同时保留 Qt 5 兼容空间。
+CMake 中同时支持 Qt 5 和 Qt 6，不默认限定 Qt 6。
 
 推荐策略：
 
@@ -51,6 +61,8 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Svg)
 ```
 
 第一版使用 Qt Widgets，不引入 QML。应用图标和 Fluent SVG 图标通过 Qt 资源系统加载，因此需要显式接入 Qt Svg；Qt Svg 属于 Qt 自身模块，不是额外第三方依赖。
+
+Qt5/Qt6 的局部 API 差异优先在调用点使用条件编译处理。例如拖拽坐标在 Qt 6 使用 `QDropEvent::position()`，Qt 5 使用 `QDropEvent::pos()`。只有兼容判断扩散到多处重复时，再考虑建立统一兼容层。
 
 ## 三方依赖
 
@@ -110,6 +122,8 @@ CMake 只引用 `third_party/installed`，不直接引用 `_downloads` 或 `_sou
 - DLL、include、lib 路径容易漂移。
 - Debug/Release、x86/x64、MSVC/MinGW 混用风险高。
 - 不利于长期复现。
+
+当前 `scripts/setup_third_party.ps1` 准备的是 curl.se 的 Windows MinGW 预编译包，并复制 `libcurl.dll.a`。这适合 MinGW 构建，不适合作为 MSVC 的长期依赖方案。MSVC 构建应使用匹配 MSVC ABI 的 libcurl，或迁移到 vcpkg 统一管理。
 
 ## 运行目录
 
