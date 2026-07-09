@@ -14,6 +14,9 @@ third_party/
 *.user.*
 .vscode/
 
+# Local agent collaboration rules
+AGENTS.md
+
 # Windows runtime noise
 *.log
 *.tmp

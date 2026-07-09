@@ -1,6 +1,6 @@
 ﻿# CMake依赖方案
 
-关联：[总体技术方案](00-总体技术方案.md)、[三方库管理](三方库管理.md)、远程传输库技术选型历史归档
+关联：[总体技术方案](00-总体技术方案.md)、[三方库管理](三方库管理.md)
 
 ## 目标
 
@@ -30,14 +30,13 @@ DirBridge
 ├── docs
 ├── src
 │   ├── app
-│   ├── ui
+│   ├── config
 │   ├── core
-│   ├── backend
-│   └── platform
+│   ├── logging
+│   ├── protocol
+│   └── ui
 └── tests
 ```
-
-本次只创建 `docs`，源码骨架在文档确认后再创建。
 
 ## 编译器基线
 
@@ -63,6 +62,25 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Svg)
 第一版使用 Qt Widgets，不引入 QML。应用图标和 Fluent SVG 图标通过 Qt 资源系统加载，因此需要显式接入 Qt Svg；Qt Svg 属于 Qt 自身模块，不是额外第三方依赖。
 
 Qt5/Qt6 的局部 API 差异优先在调用点使用条件编译处理。例如拖拽坐标在 Qt 6 使用 `QDropEvent::position()`，Qt 5 使用 `QDropEvent::pos()`。只有兼容判断扩散到多处重复时，再考虑建立统一兼容层。
+
+## 图标与资源接入
+
+当前仓库的图标与资源接入使用两套入口：
+
+- `resources/resources.qrc`：负责 Qt 运行时资源，包含应用图标和已接入的 Fluent SVG 图标。
+- `resources/windows/dirbridge.rc`：负责 Windows 可执行文件图标。
+
+当前资源目录中的稳定结构包括：
+
+- `resources/icons/app/`：应用图标、Logo 和多尺寸位图资源。
+- `resources/icons/fluent/`：已接入的 Fluent UI System Icons SVG 资源。
+- `resources/licenses/`：第三方图标许可证文件。
+
+新增图标资源时，应同步检查：
+
+- `resources.qrc` 是否已加入资源清单。
+- Windows 下是否需要更新 `.rc` 入口。
+- 发布包和许可证说明是否需要同步补充。
 
 ## 三方依赖
 
@@ -109,6 +127,7 @@ CMake 只引用 `third_party/installed`，不直接引用 `_downloads` 或 `_sou
 
 - 需要确认 libcurl 的 SSH 支持是否启用。
 - 团队机器需要统一 vcpkg triplet。
+- MSVC 构建推荐使用 `curl[ssh]:x64-windows`，让 vcpkg 从源码生成匹配 MSVC ABI 的 `libcurl.lib` 及其依赖。
 
 ### 本地预编译包
 
@@ -123,7 +142,7 @@ CMake 只引用 `third_party/installed`，不直接引用 `_downloads` 或 `_sou
 - Debug/Release、x86/x64、MSVC/MinGW 混用风险高。
 - 不利于长期复现。
 
-当前 `scripts/setup_third_party.ps1` 准备的是 curl.se 的 Windows MinGW 预编译包，并复制 `libcurl.dll.a`。这适合 MinGW 构建，不适合作为 MSVC 的长期依赖方案。MSVC 构建应使用匹配 MSVC ABI 的 libcurl，或迁移到 vcpkg 统一管理。
+当前 `scripts/setup_third_party.ps1` 准备的是 curl.se 的 Windows MinGW 预编译包，并复制 `libcurl.dll.a`。这适合 MinGW 构建，不适合作为 MSVC 的依赖来源。MSVC 构建应使用匹配 MSVC ABI 的 libcurl，推荐通过仓库 `vcpkg.json` 声明的 `curl[ssh]` 从源码生成。
 
 ## 运行目录
 
@@ -151,17 +170,6 @@ CMake 配置阶段应检查：
 
 如果 FTP 或 SFTP 不可用，配置应失败，并提示用户更换 libcurl 构建。
 
-## 后续建议
-
-先实现最小 CMake 验证项目：
-
-- 能启动一个空 Qt Widgets 主窗口。
-- 能打印 libcurl 版本。
-- 能检查 libcurl protocol list 中包含 `ftp` 和 `sftp`。
-- 能通过 `--check-deps` 检查 libcurl、JSON 和日志。
-
-通过后再进入 FilePanel 和 TransferManager 实现。
-
 ## 当前验证方式
 
 仓库保留通用 `CMakePresets.json`，不写入个人机器上的 Qt / MinGW 绝对路径。
@@ -178,6 +186,29 @@ CMake 配置阶段应检查：
 - nlohmann/json：`third_party/installed/nlohmann_json`
 - spdlog：`third_party/installed/spdlog`
 - CMake preset：`windows-mingw-debug`
+
+MSVC 构建有两类 preset：
+
+- `windows-msvc-debug` / `windows-msvc-release`：使用手工准备的 MSVC ABI libcurl，默认查找 `third_party/installed/curl-msvc`。
+- `windows-msvc-vcpkg-debug` / `windows-msvc-vcpkg-release`：使用 `VCPKG_ROOT` 指向的 vcpkg，并通过 `vcpkg.json` 构建 `curl[ssh]`。
+
+MSVC + vcpkg 验证命令示例：
+
+```powershell
+$env:VCPKG_ROOT='<vcpkg 根目录>'
+cmake --preset windows-msvc-vcpkg-debug -DCMAKE_PREFIX_PATH=<Qt MSVC Kit 路径>
+cmake --build --preset windows-msvc-vcpkg-debug
+```
+
+运行 MSVC 构建产物前，需要把 vcpkg 和 Qt 的运行库目录加入 `PATH`：
+
+```powershell
+$env:PATH="build\windows-msvc-vcpkg-debug\vcpkg_installed\x64-windows\bin;<Qt MSVC Kit 路径>\bin;$env:PATH"
+.\build\windows-msvc-vcpkg-debug\DirBridgeCoreChecks.exe
+.\build\windows-msvc-vcpkg-debug\DirBridge.exe --check-deps
+```
+
+当前 MSVC 验证使用 Visual Studio 2022、Qt 6 MSVC Kit 和 vcpkg `curl[ssh]:x64-windows`。`--check-deps` 已确认 vcpkg 构建的 libcurl 支持 `ftp` 和 `sftp`。
 
 验证命令：
 

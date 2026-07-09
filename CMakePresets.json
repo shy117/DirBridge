@@ -26,6 +26,60 @@
         "DIRBRIDGE_JSON_ROOT": "${sourceDir}/third_party/installed/nlohmann_json",
         "DIRBRIDGE_SPDLOG_ROOT": "${sourceDir}/third_party/installed/spdlog"
       }
+    },
+    {
+      "name": "windows-msvc-debug",
+      "displayName": "Windows MSVC Debug",
+      "generator": "NMake Makefiles",
+      "binaryDir": "${sourceDir}/build/windows-msvc-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "DIRBRIDGE_THIRD_PARTY_ROOT": "${sourceDir}/third_party/installed",
+        "DIRBRIDGE_CURL_ROOT": "${sourceDir}/third_party/installed/curl-msvc",
+        "DIRBRIDGE_JSON_ROOT": "${sourceDir}/third_party/installed/nlohmann_json",
+        "DIRBRIDGE_SPDLOG_ROOT": "${sourceDir}/third_party/installed/spdlog"
+      }
+    },
+    {
+      "name": "windows-msvc-release",
+      "displayName": "Windows MSVC Release",
+      "generator": "NMake Makefiles",
+      "binaryDir": "${sourceDir}/build/windows-msvc-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "DIRBRIDGE_THIRD_PARTY_ROOT": "${sourceDir}/third_party/installed",
+        "DIRBRIDGE_CURL_ROOT": "${sourceDir}/third_party/installed/curl-msvc",
+        "DIRBRIDGE_JSON_ROOT": "${sourceDir}/third_party/installed/nlohmann_json",
+        "DIRBRIDGE_SPDLOG_ROOT": "${sourceDir}/third_party/installed/spdlog"
+      }
+    },
+    {
+      "name": "windows-msvc-vcpkg-debug",
+      "displayName": "Windows MSVC Debug (vcpkg)",
+      "generator": "NMake Makefiles",
+      "binaryDir": "${sourceDir}/build/windows-msvc-vcpkg-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "DIRBRIDGE_CURL_ROOT": "${sourceDir}/third_party/installed/curl-msvc",
+        "DIRBRIDGE_JSON_ROOT": "${sourceDir}/third_party/installed/nlohmann_json",
+        "DIRBRIDGE_SPDLOG_ROOT": "${sourceDir}/third_party/installed/spdlog"
+      }
+    },
+    {
+      "name": "windows-msvc-vcpkg-release",
+      "displayName": "Windows MSVC Release (vcpkg)",
+      "generator": "NMake Makefiles",
+      "binaryDir": "${sourceDir}/build/windows-msvc-vcpkg-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "DIRBRIDGE_CURL_ROOT": "${sourceDir}/third_party/installed/curl-msvc",
+        "DIRBRIDGE_JSON_ROOT": "${sourceDir}/third_party/installed/nlohmann_json",
+        "DIRBRIDGE_SPDLOG_ROOT": "${sourceDir}/third_party/installed/spdlog"
+      }
     }
   ],
   "buildPresets": [
@@ -36,6 +90,22 @@
     {
       "name": "windows-mingw-release",
       "configurePreset": "windows-mingw-release"
+    },
+    {
+      "name": "windows-msvc-debug",
+      "configurePreset": "windows-msvc-debug"
+    },
+    {
+      "name": "windows-msvc-release",
+      "configurePreset": "windows-msvc-release"
+    },
+    {
+      "name": "windows-msvc-vcpkg-debug",
+      "configurePreset": "windows-msvc-vcpkg-debug"
+    },
+    {
+      "name": "windows-msvc-vcpkg-release",
+      "configurePreset": "windows-msvc-vcpkg-release"
     }
   ]
 }

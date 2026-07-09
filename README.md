@@ -28,7 +28,7 @@ DirBridge 是一个面向 Windows 桌面场景的远程文件管理工具，目�
 
 ## 构建环境要求
 
-DirBridge 使用 C++17，并依赖标准库 `<filesystem>`。不建议为了兼容旧编译器降低 C++ 标准。
+DirBridge 使用 C++17，并依赖标准库 `<filesystem>`。不建议为了兼容旧编译器降低 C++ 标准。更完整的构建兼容性、ABI 差异和依赖准备方式见 [docs/CMake依赖方案.md](docs/CMake依赖方案.md)。
 
 最低要求：
 
@@ -49,14 +49,12 @@ DirBridge 使用 C++17，并依赖标准库 `<filesystem>`。不建议为了兼�
 已验证环境：
 
 - Windows + Qt 6 + MinGW：主要开发和发布验证环境。
+- Windows + Visual Studio 2022 + Qt 6 MSVC + vcpkg `curl[ssh]`：已验证可编译，Core 检查和依赖检查通过。
 - Windows + Visual Studio 2019 + Qt 5 MSVC + MSVC 19.29：已验证项目可编译，Core 检查通过。
 
 计划保持兼容但仍需补齐完整验证：
 
 - Qt 5 + MinGW。
-- Qt 6 + MSVC。
-
-注意：当前 `scripts/setup_third_party.ps1` 准备的是 Windows MinGW 版 libcurl 预编译包。MSVC 构建需要使用匹配 MSVC ABI 的 libcurl，或后续改用 vcpkg 等统一依赖方案。
 
 ## 快速开始
 
@@ -69,7 +67,14 @@ DirBridge 使用 C++17，并依赖标准库 `<filesystem>`。不建议为了兼�
     cmake --preset windows-mingw-debug
     cmake --build --preset windows-mingw-debug
 
-也可以按本机环境使用普通 CMake 命令构建。项目当前主要验证环境是 Windows + MinGW + Qt 6；MSVC 构建请确保 Qt、libcurl 和编译器 ABI 一致。
+项目当前主要验证环境是 Windows + MinGW + Qt 6。
+
+MSVC 构建推荐在 Visual Studio Developer PowerShell 中使用 vcpkg preset：
+
+    cmake --preset windows-msvc-vcpkg-debug
+    cmake --build --preset windows-msvc-vcpkg-debug
+
+MSVC 下的 libcurl ABI、vcpkg 依赖准备、运行时 PATH 和 `CMakeUserPresets.json` 细节见 [docs/CMake依赖方案.md](docs/CMake依赖方案.md)。
 
 ## 运行检查
 
@@ -101,25 +106,19 @@ DirBridge 使用 C++17，并依赖标准库 `<filesystem>`。不建议为了兼�
 - [运行环境说明](docs/运行环境说明.md)
 - [版本记录](CHANGELOG.md)
 
-## 当前限制
-
-- 站点密码使用 Windows 当前用户 DPAPI 加密后保存，本机当前用户可解密。
-- 加密后的站点密码绑定当前 Windows 用户和本机环境，复制到其他用户或机器后不能直接解密。
-- 旧版明文站点配置可继续读取，并会在下次保存时迁移为加密字段。
-
 ## 参与贡献
 
 欢迎围绕构建兼容性、远程文件操作、传输队列和 UI 体验提交改进。提交前建议至少运行：
 
-    cmake --build .\build\codex-verify
-    .\build\codex-verify\DirBridgeCoreChecks.exe
-    .\build\codex-verify\DirBridge.exe --check-deps
-    .\build\codex-verify\DirBridge.exe --smoke-test
+    cmake --build .\build\verify
+    .\build\verify\DirBridgeCoreChecks.exe
+    .\build\verify\DirBridge.exe --check-deps
+    .\build\verify\DirBridge.exe --smoke-test
 
 如果修改 UI 或远程会话流程，请同时运行：
 
-    .\build\codex-verify\DirBridge.exe --ui-remote-smoke-test
-    .\build\codex-verify\DirBridge.exe --ui-remote-workflow-smoke-test
+    .\build\verify\DirBridge.exe --ui-remote-smoke-test
+    .\build\verify\DirBridge.exe --ui-remote-workflow-smoke-test
 
 ## 许可证
 

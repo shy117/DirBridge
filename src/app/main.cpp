@@ -16,7 +16,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     app.setWindowIcon(QIcon(":/icons/app/dirbridge.ico"));
     QApplication::setApplicationName("DirBridge");
-    QApplication::setApplicationVersion("0.5.7");
+    QApplication::setApplicationVersion("0.5.8");
 
     QCommandLineParser parser;
     parser.setApplicationDescription("DirBridge remote folder manager");

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(DirBridge
-    VERSION 0.5.7
+    VERSION 0.5.8
     LANGUAGES CXX
 )
 
@@ -33,6 +33,10 @@ check_cxx_source_compiles("
 
 if(NOT DIRBRIDGE_HAS_STD_FILESYSTEM)
     message(FATAL_ERROR "DirBridge requires a compiler and standard library with working C++17 <filesystem> support.")
+endif()
+
+if(MSVC)
+    add_compile_options(/utf-8)
 endif()
 
 set(CMAKE_AUTOMOC ON)

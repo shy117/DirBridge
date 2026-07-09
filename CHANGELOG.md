@@ -2,6 +2,30 @@
 
 本文记录 DirBridge 的版本变化。用户发布说明应优先摘取“用户可见变化”“修复”“已知问题”，开发者内部信息保留在“开发者说明”。
 
+## v0.5.8 - 2026-07-08
+
+### 用户可见变化
+
+- 增加 MSVC 构建 preset，便于在 Visual Studio C++ 工具链下配置和构建。
+- 增加 vcpkg manifest，用于在 MSVC 环境下从源码构建 `curl[ssh]` 及其依赖。
+- 文档补充 MinGW 和 MSVC 的 libcurl ABI 差异，避免 MSVC 误用 MinGW 预编译包。
+- 收口 README 与项目文档的职责分工，移除公开仓库中的重复说明和独立图标方案文档。
+
+### 修复
+
+- 修复 MSVC 构建配置可能误指向 MinGW `libcurl.dll.a` 的问题。
+- 当 MSVC 下找不到兼容的 `libcurl.lib` 时，CMake 会给出明确提示。
+
+### 开发者说明
+
+- `CMakePresets.json` 新增 `windows-msvc-*` 和 `windows-msvc-vcpkg-*` preset。
+- `ThirdParty.cmake` 按编译器选择 libcurl import library：MinGW 使用 `.dll.a`，MSVC 使用 `.lib`。
+- `vcpkg.json` 声明 `curl[ssh]`，用于生成 MSVC ABI 的 libcurl 依赖。
+
+### 已知问题
+
+- MSVC 发布包打包流程仍未接入，当前 Release 打包脚本仍以 MinGW preset 为默认。
+
 ## v0.5.7 - 2026-07-08
 
 ### 用户可见变化
