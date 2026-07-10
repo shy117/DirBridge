@@ -40,8 +40,8 @@ public:
     void setRemoteRefreshRequestedHandler(std::function<void()> handler);
     void setRemoteCreateDirectoryRequestedHandler(std::function<void(const QString &)> handler);
     /**
-     * @brief Sets the callback used when the remote context menu requests a new empty file.
-     * @param handler Callback receiving the absolute remote file path.
+     * @brief 设置远程右键菜单请求新建空文件时使用的回调。
+     * @param handler 接收远程文件绝对路径的回调。
      */
     void setRemoteCreateFileRequestedHandler(std::function<void(const QString &)> handler);
     void setRemoteRemoveRequestedHandler(std::function<void(const QString &)> handler);
@@ -49,18 +49,18 @@ public:
     void setLocalUploadRequestedHandler(std::function<void(const QString &)> handler);
     void setRemoteDownloadRequestedHandler(std::function<void(const QString &, bool)> handler);
     /**
-     * @brief Sets the callback used when local files are dropped onto the remote panel.
-     * @param handler Callback receiving local file paths to upload.
+     * @brief 设置本地文件拖放到远程面板时使用的回调。
+     * @param handler 接收待上传本地文件路径的回调。
      */
     void setLocalFilesDroppedOnRemoteHandler(std::function<void(const QStringList &)> handler);
     /**
-     * @brief Sets the callback used when remote files are dropped onto the local panel.
-     * @param handler Callback receiving remote file paths to download.
+     * @brief 设置远程文件拖放到本地面板时使用的回调。
+     * @param handler 接收待下载远程文件路径的回调。
      */
     void setRemoteFilesDroppedOnLocalHandler(std::function<void(const QStringList &)> handler);
     /**
-     * @brief Sets the callback used when remote items are dropped onto a remote directory.
-     * @param handler Callback receiving source remote paths and target remote directory.
+     * @brief 设置远程项目拖放到远程目录时使用的回调。
+     * @param handler 接收远程源路径列表和目标远程目录的回调。
      */
     void setRemoteFilesDroppedOnRemoteHandler(std::function<void(const QStringList &, const QString &)> handler);
     QString currentPath() const;
@@ -68,25 +68,25 @@ public:
     void setRemoteKnownDirectories(const QStringList &directories);
     void setRemoteItems(const QString &path, const std::vector<FileItem> &items, const QString &status, bool addToHistory = true);
     /**
-     * @brief Shows the transient state used while a remote session is connecting.
-     * @param status User-facing connection progress text.
+     * @brief 显示远程会话连接过程中的过渡状态。
+     * @param status 面向用户的连接进度文本。
      */
     void setRemoteConnecting(const QString &status);
     void setRemoteDisconnected(const QString &status);
     void setRemoteError(const QString &status);
 
     /**
-     * @brief Navigates the local panel to a directory for automated tests.
-     * @param path Local directory path to use as the current panel path.
+     * @brief 在自动化测试中将本地面板切换到指定目录。
+     * @param path 作为当前面板路径使用的本地目录路径。
      */
     void setLocalPathForTesting(const QString &path);
 
 protected:
     /**
-     * @brief Handles table drag-and-drop events for file transfer gestures.
-     * @param watched Object receiving the event.
-     * @param event Event to inspect.
-     * @return true when the event was consumed.
+     * @brief 处理文件传输手势对应的表格拖拽事件。
+     * @param watched 接收事件的对象。
+     * @param event 待检查的事件。
+     * @return 事件已被消费时返回 true。
      */
     bool eventFilter(QObject *watched, QEvent *event) override;
 
@@ -103,13 +103,13 @@ private:
     void showRemoteContextMenu(const QPoint &position);
     void showUnifiedContextMenu(const QPoint &position);
     /**
-     * @brief Applies resource-manager style sorting to the remote table.
-     * @param column Header column selected by the user.
+     * @brief 对远程表格应用类似资源管理器的排序规则。
+     * @param column 用户点击的表头列。
      */
     void sortRemoteItemsByColumn(int column);
     /**
-     * @brief Shows a simple property dialog for a remote item or current directory.
-     * @param path Remote path whose properties should be displayed.
+     * @brief 为远程项目或当前目录显示简易属性对话框。
+     * @param path 要显示属性的远程路径。
      */
     void showRemoteProperties(const QString &path) const;
     void createLocalDirectory();

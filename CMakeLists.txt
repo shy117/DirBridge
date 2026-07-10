@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(DirBridge
-    VERSION 0.5.8
+    VERSION 0.5.9
     LANGUAGES CXX
 )
 
@@ -121,8 +121,17 @@ add_executable(DirBridge
     src/app/UiSmokeTests.h
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
+    src/ui/window_layout.cpp
+    src/ui/window_remote.cpp
+    src/ui/window_session.cpp
+    src/ui/window_transfer.cpp
     src/ui/FilePanel.cpp
     src/ui/FilePanel.h
+    src/ui/panel_menu.cpp
+    src/ui/panel_navigation.cpp
+    src/ui/panel_shared.cpp
+    src/ui/panel_shared.h
+    src/ui/panel_transfer.cpp
     ${DIRBRIDGE_RESOURCE_FILES}
 )
 

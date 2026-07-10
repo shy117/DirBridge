@@ -28,9 +28,9 @@ public:
     virtual std::vector<FileItem> listDirectory(const std::string &path) = 0;
 
     /**
-     * @brief Creates a directory on the remote filesystem.
-     * @param path Absolute remote directory path to create.
-     * @return Operation result with success state and backend message.
+     * @brief 在远程文件系统上创建目录。
+     * @param path 要创建的远程目录绝对路径。
+     * @return 包含成功状态和后端消息的操作结果。
      */
     virtual RemoteOperationResult createDirectory(const std::string &path)
     {
@@ -39,9 +39,9 @@ public:
     }
 
     /**
-     * @brief Creates an empty file on the remote filesystem.
-     * @param path Absolute remote file path to create.
-     * @return Operation result with success state and backend message.
+     * @brief 在远程文件系统上创建空文件。
+     * @param path 要创建的远程文件绝对路径。
+     * @return 包含成功状态和后端消息的操作结果。
      */
     virtual RemoteOperationResult createFile(const std::string &path)
     {

@@ -1,4 +1,4 @@
-﻿#include "app/UiSmokeTests.h"
+#include "app/UiSmokeTests.h"
 
 #include "config/SiteProfile.h"
 #include "core/FakeRemoteFileSystem.h"
@@ -36,10 +36,10 @@ QAction *findActionByText(MainWindow &window, const QString &text);
 bool checkAboutDialog(MainWindow &window);
 
 /**
- * @brief Finds a required child widget by object name and reports a smoke-test error when missing.
- * @param window Main window to search.
- * @param objectName Qt object name expected by the smoke test.
- * @return true when the child exists.
+ * @brief 按对象名查找必须存在的子控件，缺失时输出冒烟测试错误。
+ * @param window 要搜索的主窗口。
+ * @param objectName 冒烟测试期望存在的 Qt 对象名。
+ * @return 找到子控件时返回 true。
  */
 template <typename Widget>
 bool requireChild(MainWindow &window, const char *objectName)
@@ -54,9 +54,9 @@ bool requireChild(MainWindow &window, const char *objectName)
 }
 
 /**
- * @brief Verifies that remote workflow widgets and default quick-connect values exist.
- * @param window Main window under test.
- * @return true when all required UI objects and default values are present.
+ * @brief 验证远程工作流相关控件和快速连接默认值是否存在。
+ * @param window 待测试的主窗口。
+ * @return 所有必需 UI 对象和默认值都存在时返回 true。
  */
 bool checkRemoteUiObjects(MainWindow &window)
 {
@@ -241,10 +241,10 @@ bool checkRemoteUiObjects(MainWindow &window)
 }
 
 /**
- * @brief Pumps the Qt event loop until a remote panel reports the requested connected path.
- * @param remotePanel Panel widget that owns the remote path and state labels.
- * @param remotePath Expected connected remote path.
- * @return true when the panel reaches the connected state before the timeout.
+ * @brief 持续驱动 Qt 事件循环，直到远程面板显示目标已连接路径。
+ * @param remotePanel 持有远程路径框和状态标签的面板控件。
+ * @param remotePath 期望连接成功后的远程路径。
+ * @return 面板在超时前进入已连接状态时返回 true。
  */
 bool waitForRemoteConnected(QWidget *remotePanel, const QString &remotePath)
 {
@@ -266,9 +266,9 @@ bool waitForRemoteConnected(QWidget *remotePanel, const QString &remotePath)
 }
 
 /**
- * @brief Pumps the Qt event loop until a remote panel reports a disconnected or canceled state.
- * @param remotePanel Panel widget that owns the remote state label.
- * @return true when the panel leaves the connecting state before the timeout.
+ * @brief 持续驱动 Qt 事件循环，直到远程面板显示已断开或已取消状态。
+ * @param remotePanel 持有远程状态标签的面板控件。
+ * @return 面板在超时前退出连接中状态时返回 true。
  */
 bool waitForRemoteDisconnected(QWidget *remotePanel)
 {
@@ -306,10 +306,10 @@ public:
 };
 
 /**
- * @brief Checks whether a tree contains visible text.
- * @param tree Tree widget to scan.
- * @param text Text fragment to find.
- * @return true when any item contains the fragment.
+ * @brief 检查树控件中是否包含指定可见文本。
+ * @param tree 要扫描的树控件。
+ * @param text 要查找的文本片段。
+ * @return 任意节点包含该文本片段时返回 true。
  */
 bool treeContainsText(QTreeWidget *tree, const QString &text)
 {
@@ -331,10 +331,10 @@ bool treeContainsText(QTreeWidget *tree, const QString &text)
 }
 
 /**
- * @brief Finds a QAction by visible text, ignoring Qt mnemonic markers.
- * @param window Main window whose actions should be searched.
- * @param text Visible action text to match.
- * @return Matching action, or nullptr when not found.
+ * @brief 按可见文本查找 QAction，并忽略 Qt 助记符标记。
+ * @param window 要搜索动作的主窗口。
+ * @param text 要匹配的可见动作文本。
+ * @return 匹配到的动作；未找到时返回 nullptr。
  */
 QAction *findActionByText(MainWindow &window, const QString &text)
 {
@@ -351,10 +351,10 @@ QAction *findActionByText(MainWindow &window, const QString &text)
 }
 
 /**
- * @brief Finds a row in a remote file table by the display name column.
- * @param table Remote table widget.
- * @param name File or directory display name.
- * @return Zero-based row index, or -1 when absent.
+ * @brief 按显示名称列在远程文件表格中查找行。
+ * @param table 远程表格控件。
+ * @param name 文件或目录的显示名称。
+ * @return 从 0 开始的行索引；不存在时返回 -1。
  */
 int findTableRowByName(QTableWidget *table, const QString &name)
 {
@@ -395,12 +395,12 @@ bool remoteTreeContainsText(QTreeWidget *tree, const QString &text)
 }
 
 /**
- * @brief Checks whether the transfer table contains a row with the expected task state.
- * @param table Transfer queue table.
- * @param name Transfer task display name.
- * @param direction Localized direction text, such as 上传 or 下载.
- * @param status Localized status text, such as 已完成.
- * @return true when a matching transfer row exists.
+ * @brief 检查传输表格中是否存在符合预期状态的任务行。
+ * @param table 传输队列表格。
+ * @param name 传输任务显示名称。
+ * @param direction 本地化方向文本，例如“上传”或“下载”。
+ * @param status 本地化状态文本，例如“已完成”。
+ * @return 存在匹配的传输行时返回 true。
  */
 bool hasTransferRow(QTreeWidget *table, const QString &name, const QString &direction, const QString &status)
 {
@@ -504,10 +504,10 @@ bool checkAboutDialog(MainWindow &window)
 }
 
 /**
- * @brief Verifies that a file-panel navigation button is icon-only but still discoverable.
- * @param panel Panel that owns the button.
- * @param objectName Expected button object name.
- * @return true when the button keeps icon and tooltip while hiding text.
+ * @brief 验证文件面板导航按钮是否只显示图标但仍具备可发现性。
+ * @param panel 持有该按钮的面板。
+ * @param objectName 期望的按钮对象名。
+ * @return 按钮隐藏文本但保留图标和提示时返回 true。
  */
 bool checkIconOnlyNavigationButton(QWidget *panel, const char *objectName)
 {
@@ -587,10 +587,10 @@ void dumpTransferRows(QTreeWidget *table)
 }
 
 /**
- * @brief Reads an environment variable for integration smoke tests.
- * @param name Environment variable name.
- * @param required Whether missing values should be reported as test errors.
- * @return Variable value as UTF-8 text, or an empty string when absent.
+ * @brief 读取集成冒烟测试使用的环境变量。
+ * @param name 环境变量名称。
+ * @param required 缺失值时是否上报为测试错误。
+ * @return 变量的 UTF-8 文本值；不存在时返回空字符串。
  */
 QString environmentValue(const char *name, bool required = true)
 {
@@ -608,10 +608,10 @@ QString environmentValue(const char *name, bool required = true)
 }
 
 /**
- * @brief Joins a remote directory and child name for smoke-test path assertions.
- * @param directory Remote parent directory.
- * @param name Remote child item name.
- * @return Normalized remote child path.
+ * @brief 为冒烟测试路径断言拼接远程目录和子项名称。
+ * @param directory 远程父目录。
+ * @param name 远程子项名称。
+ * @return 规范化后的远程子路径。
  */
 QString joinRemotePathForCheck(QString directory, const QString &name)
 {
@@ -627,17 +627,17 @@ QString joinRemotePathForCheck(QString directory, const QString &name)
 }
 
 /**
- * @brief Drives the main window quick-connect workflow and validates navigation state.
- * @param window Main window under test.
- * @param protocol Protocol text selected in the quick-connect combo box.
- * @param host Remote host.
- * @param port Remote port.
- * @param user Remote username.
- * @param password Remote password.
- * @param remotePath Initial remote path to load.
- * @param expectedNames Expected entries in the remote table.
- * @param useFakeBackend Whether to inject the in-memory fake backend before connecting.
- * @return true when connection, navigation, and disconnect state checks pass.
+ * @brief 驱动主窗口的快速连接流程，并验证导航状态是否正确。
+ * @param window 待测试的主窗口。
+ * @param protocol 在快速连接协议下拉框中选择的协议文本。
+ * @param host 远程主机地址。
+ * @param port 远程端口。
+ * @param user 远程用户名。
+ * @param password 远程密码。
+ * @param remotePath 初始要加载的远程路径。
+ * @param expectedNames 远程表格中期望出现的条目列表。
+ * @param useFakeBackend 连接前是否注入内存假后端。
+ * @return 连接、导航和断开状态检查全部通过时返回 true。
  */
 bool checkRemoteUiWorkflow(
     MainWindow &window,
@@ -786,10 +786,10 @@ bool checkRemoteUiWorkflow(
 }
 
 /**
- * @brief Connects one fake remote session through the quick-connect controls.
- * @param window Main window under test.
- * @param remotePath Initial path to load in the new session.
- * @return true when the current remote tab reaches the requested path.
+ * @brief 通过快速连接控件建立一个假远程会话。
+ * @param window 待测试的主窗口。
+ * @param remotePath 新会话初始要加载的路径。
+ * @return 当前远程标签页到达目标路径时返回 true。
  */
 bool connectFakeRemoteSession(MainWindow &window, const QString &remotePath)
 {
@@ -934,9 +934,9 @@ bool checkQuickSaveCreatesSeparateSite(MainWindow &window)
 }
 
 /**
- * @brief Verifies connecting state, duplicate-connect prevention, and logical cancellation.
- * @param window Main window under test.
- * @return true when the UI exposes and clears an in-flight connection correctly.
+ * @brief 验证连接中状态、重复连接拦截和逻辑取消是否正常。
+ * @param window 待测试的主窗口。
+ * @return 界面能正确暴露并清理进行中的连接状态时返回 true。
  */
 bool checkRemoteConnectionControlWorkflow(MainWindow &window)
 {
@@ -988,9 +988,9 @@ bool checkRemoteConnectionControlWorkflow(MainWindow &window)
 }
 
 /**
- * @brief Verifies v0.5.0 session manager grouping and recent-session behavior.
- * @param window Main window under test.
- * @return true when saved sites, grouping, and recent sessions work with fake remote tabs.
+ * @brief 验证 v0.5.0 会话管理器的分组和最近会话行为。
+ * @param window 待测试的主窗口。
+ * @return 已保存站点、分组和最近会话能在假远程标签页下正常工作时返回 true。
  */
 bool checkSessionManagerWorkflow(MainWindow &window)
 {
@@ -1118,9 +1118,9 @@ bool checkSessionManagerWorkflow(MainWindow &window)
 }
 
 /**
- * @brief Verifies that multiple remote tabs keep independent state.
- * @param window Main window under test.
- * @return true when two additional fake sessions can coexist independently.
+ * @brief 验证多个远程标签页能否保持彼此独立的状态。
+ * @param window 待测试的主窗口。
+ * @return 两个额外的假远程会话能够独立共存时返回 true。
  */
 bool checkRemoteMultiSessionWorkflow(MainWindow &window)
 {
@@ -1185,9 +1185,9 @@ bool checkRemoteMultiSessionWorkflow(MainWindow &window)
 }
 
 /**
- * @brief Verifies directory upload/download, remote move, and recursive remote delete with the fake backend.
- * @param window Main window under test.
- * @return true when directory operations complete through normal MainWindow workflows.
+ * @brief 验证假后端下的目录上传/下载、远程移动和递归远程删除。
+ * @param window 待测试的主窗口。
+ * @return 目录操作能够通过正常的 MainWindow 工作流完成时返回 true。
  */
 bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
 {
@@ -1302,9 +1302,9 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
 }
 
 /**
- * @brief Runs the remote UI workflow smoke test against the in-memory fake backend.
- * @param window Main window under test.
- * @return true when the fake workflow passes.
+ * @brief 针对内存假后端运行远程 UI 工作流冒烟测试。
+ * @param window 待测试的主窗口。
+ * @return 假后端工作流通过时返回 true。
  */
 bool checkRemoteUiWorkflow(MainWindow &window)
 {
@@ -1327,9 +1327,9 @@ bool checkRemoteUiWorkflow(MainWindow &window)
 }
 
 /**
- * @brief Runs the remote UI workflow smoke test against a real FTP/SFTP server.
- * @param window Main window under test.
- * @return true when the live connection and navigation workflow passes.
+ * @brief 针对真实 FTP/SFTP 服务器运行远程 UI 工作流冒烟测试。
+ * @param window 待测试的主窗口。
+ * @return 真实连接与导航工作流通过时返回 true。
  */
 bool checkLiveRemoteUiWorkflow(MainWindow &window)
 {
@@ -1353,15 +1353,15 @@ bool checkLiveRemoteUiWorkflow(MainWindow &window)
 }
 
 /**
- * @brief Connects the main window to a real remote server through the quick-connect UI.
- * @param window Main window under test.
- * @param protocol Protocol text selected in the quick-connect combo box.
- * @param host Remote host.
- * @param port Remote port.
- * @param user Remote username.
- * @param password Remote password.
- * @param remotePath Initial remote path to load.
- * @return true when the remote panel reaches the connected state.
+ * @brief 通过快速连接 UI 将主窗口连接到真实远程服务器。
+ * @param window 待测试的主窗口。
+ * @param protocol 在快速连接协议下拉框中选择的协议文本。
+ * @param host 远程主机地址。
+ * @param port 远程端口。
+ * @param user 远程用户名。
+ * @param password 远程密码。
+ * @param remotePath 初始要加载的远程路径。
+ * @return 远程面板进入已连接状态时返回 true。
  */
 bool connectLiveRemoteUi(MainWindow &window, const QString &protocol, const QString &host, const QString &port, const QString &user, const QString &password, const QString &remotePath)
 {
@@ -1409,8 +1409,8 @@ bool connectLiveRemoteUi(MainWindow &window, const QString &protocol, const QStr
 }
 
 /**
- * @brief Builds a live-test site profile from environment variables.
- * @return Site profile for the current live FTP/SFTP smoke test.
+ * @brief 根据环境变量构建真实测试用站点配置。
+ * @return 当前真实 FTP/SFTP 冒烟测试使用的站点配置。
  */
 SiteProfile liveProfileFromEnvironment()
 {
@@ -1427,9 +1427,9 @@ SiteProfile liveProfileFromEnvironment()
 }
 
 /**
- * @brief Runs the live refresh smoke test by mutating the server outside the UI.
- * @param window Main window under test.
- * @return true when refresh shows external create and delete changes.
+ * @brief 通过在 UI 外部修改服务器状态来运行真实刷新冒烟测试。
+ * @param window 待测试的主窗口。
+ * @return 刷新能够显示外部创建和删除变化时返回 true。
  */
 bool checkLiveRemoteRefreshWorkflow(MainWindow &window)
 {
@@ -1505,9 +1505,9 @@ bool checkLiveRemoteRefreshWorkflow(MainWindow &window)
 }
 
 /**
- * @brief Runs the live upload/download smoke test through the main window transfer UI.
- * @param window Main window under test.
- * @return true when upload, download, transfer-table updates, and cleanup pass.
+ * @brief 通过主窗口传输 UI 运行真实上传/下载冒烟测试。
+ * @param window 待测试的主窗口。
+ * @return 上传、下载、传输表更新和清理全部通过时返回 true。
  */
 bool checkLiveRemoteTransferWorkflow(MainWindow &window)
 {

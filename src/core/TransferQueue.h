@@ -11,75 +11,75 @@ class TransferQueue
 {
 public:
     /**
-     * @brief Adds a transfer job to the end of the queue.
-     * @param job Job definition to enqueue.
-     * @return Enqueued job snapshot.
+     * @brief 将传输任务追加到队列末尾。
+     * @param job 要入队的任务定义。
+     * @return 入队后的任务快照引用。
      */
     const TransferJob &enqueue(TransferJob job);
 
     /**
-     * @brief Replaces an existing job with the same id.
-     * @param job Updated job snapshot.
-     * @return true when an existing job was updated.
+     * @brief 用相同 id 的新快照替换已有任务。
+     * @param job 更新后的任务快照。
+     * @return 成功更新已有任务时返回 true。
      */
     bool update(const TransferJob &job);
 
     /**
-     * @brief Marks a pending or running job as canceled.
-     * @param id Job id to cancel.
-     * @param message Optional cancellation reason.
-     * @return true when the job exists and can be canceled.
+     * @brief 将等待中或运行中的任务标记为已取消。
+     * @param id 要取消的任务 id。
+     * @param message 可选的取消原因。
+     * @return 任务存在且允许取消时返回 true。
      */
     bool cancel(const std::string &id, const std::string &message = {});
 
     /**
-     * @brief Enqueues a retry copy of a failed or canceled job.
-     * @param id Original job id to retry.
-     * @param retryId Unique id for the new retry job.
-     * @return Pointer to the new pending job, or nullptr when retry is not allowed.
+     * @brief 为失败或已取消的任务创建重试副本并重新入队。
+     * @param id 原始任务 id。
+     * @param retryId 新重试任务的唯一 id。
+     * @return 新等待任务的指针；不允许重试时返回 nullptr。
      */
     const TransferJob *retry(const std::string &id, const std::string &retryId);
 
     /**
-     * @brief Removes completed, failed, and canceled jobs from history.
-     * @return Number of jobs removed.
+     * @brief 从历史记录中移除已完成、失败和已取消的任务。
+     * @return 被移除的任务数量。
      */
     std::size_t clearFinished();
 
     /**
-     * @brief Finds a mutable job by id.
-     * @param id Job id to search.
-     * @return Pointer to the job, or nullptr when not found.
+     * @brief 按 id 查找可修改的任务。
+     * @param id 要查找的任务 id。
+     * @return 找到时返回任务指针；否则返回 nullptr。
      */
     TransferJob *find(const std::string &id);
 
     /**
-     * @brief Finds an immutable job by id.
-     * @param id Job id to search.
-     * @return Pointer to the job, or nullptr when not found.
+     * @brief 按 id 查找只读任务。
+     * @param id 要查找的任务 id。
+     * @return 找到时返回任务指针；否则返回 nullptr。
      */
     const TransferJob *find(const std::string &id) const;
 
     /**
-     * @brief Finds the next job waiting for execution.
-     * @return Pointer to the next pending job, or nullptr when the queue is idle.
+     * @brief 查找下一个等待执行的任务。
+     * @return 下一个等待任务的指针；队列空闲时返回 nullptr。
      */
     TransferJob *nextPending();
 
     /**
-     * @brief Counts executable file jobs currently in the running state.
-     * @return Number of running file jobs.
+     * @brief 统计当前处于运行状态的可执行文件任务数量。
+     * @return 正在运行的文件任务数。
      */
     std::size_t runningCount() const;
 
     /**
-     * @brief Returns all jobs in display order.
-     * @return Queue snapshots ordered by insertion.
+     * @brief 按展示顺序返回全部任务。
+     * @return 按插入顺序排列的任务快照集合。
      */
     const std::vector<TransferJob> &jobs() const;
 
     /**
-     * @brief Removes every job from the queue.
+     * @brief 清空队列中的全部任务。
      */
     void clear();
 

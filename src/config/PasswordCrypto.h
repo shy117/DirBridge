@@ -4,22 +4,22 @@
 #include <string>
 
 /**
- * @brief Returns the persisted password storage scheme used by this build.
- * @return Stable storage scheme name written to sites.json.
+ * @brief 返回当前构建使用的持久化密码存储方案名称。
+ * @return 写入 `sites.json` 的稳定存储方案标识。
  */
 std::string passwordStorageScheme();
 
 /**
- * @brief Encrypts a site password for local persistence.
- * @param password Plain password kept only in memory while the app is running.
- * @return Encoded encrypted password suitable for JSON storage.
+ * @brief 对站点密码进行加密，以便本地持久化保存。
+ * @param password 应用运行期间仅保存在内存中的明文密码。
+ * @return 适合写入 JSON 的已编码加密密码。
  */
 std::string protectPassword(const std::string &password);
 
 /**
- * @brief Decrypts a site password loaded from local persistence.
- * @param protectedPassword Encoded encrypted password from JSON storage.
- * @return Plain password for runtime connection use.
+ * @brief 解密从本地持久化存储中读取的站点密码。
+ * @param protectedPassword 从 JSON 存储中读取的已编码加密密码。
+ * @return 供运行时连接使用的明文密码。
  */
 std::string unprotectPassword(const std::string &protectedPassword);
 

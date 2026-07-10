@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.5.8",
+    [string]$Version = "0.5.9",
     [string]$BuildPreset = "windows-mingw-release",
     [string]$BuildDir = "build/windows-mingw-release",
     [string]$ReleaseDir = "build/release",
@@ -179,6 +179,7 @@ Write-Host "==> Deploying Qt runtime"
 foreach ($docName in @("README.md", "CHANGELOG.md", "RELEASE.md", "LICENSE", "THIRD_PARTY_NOTICES.md")) {
     Copy-IfExists -Source (Resolve-RepoPath $docName) -Destination (Join-Path $stageDir $docName)
 }
+Copy-IfExists -Source (Resolve-RepoPath "installer/LICENSE.zh-CN.txt") -Destination (Join-Path $stageDir "LICENSE.zh-CN.txt")
 
 $licenseDir = Join-Path $stageDir "licenses"
 New-Item -ItemType Directory -Force -Path $licenseDir | Out-Null

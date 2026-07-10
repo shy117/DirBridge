@@ -75,9 +75,9 @@ void ensureCurlInitialized()
 
 #ifdef _WIN32
 /**
- * @brief Converts a UTF-8 string into a Windows wide string.
- * @param value UTF-8 encoded text.
- * @return Wide string suitable for Win32 file APIs.
+ * @brief 将 UTF-8 字符串转换为 Windows 宽字符字符串。
+ * @param value UTF-8 编码文本。
+ * @return 适合 Win32 文件 API 使用的宽字符串。
  */
 std::wstring utf8ToWide(const std::string &value)
 {
@@ -103,10 +103,10 @@ std::wstring utf8ToWide(const std::string &value)
 #endif
 
 /**
- * @brief Opens a local file path using UTF-8 path semantics on every platform.
- * @param path UTF-8 encoded local file path.
- * @param mode Standard C file open mode.
- * @return Open FILE pointer, or nullptr when the file cannot be opened.
+ * @brief 在各平台上按 UTF-8 路径语义打开本地文件。
+ * @param path UTF-8 编码的本地文件路径。
+ * @param mode 标准 C 文件打开模式。
+ * @return 打开的 FILE 指针；无法打开时返回 nullptr。
  */
 FILE *openLocalFile(const std::string &path, const char *mode)
 {
@@ -120,9 +120,9 @@ FILE *openLocalFile(const std::string &path, const char *mode)
 }
 
 /**
- * @brief Converts a UTF-8 local path string into a filesystem path.
- * @param path UTF-8 encoded local file path.
- * @return std::filesystem path preserving non-ASCII characters.
+ * @brief 将 UTF-8 本地路径字符串转换为文件系统路径对象。
+ * @param path UTF-8 编码的本地文件路径。
+ * @return 可保留非 ASCII 字符的 `std::filesystem::path`。
  */
 std::filesystem::path localFilesystemPath(const std::string &path)
 {
@@ -130,8 +130,8 @@ std::filesystem::path localFilesystemPath(const std::string &path)
 }
 
 /**
- * @brief Creates an empty local temporary file used to emulate remote touch.
- * @return Path to an empty temporary file.
+ * @brief 创建一个用于模拟远程 touch 的本地空临时文件。
+ * @return 指向空临时文件的路径。
  */
 std::filesystem::path createEmptyTemporaryFile()
 {

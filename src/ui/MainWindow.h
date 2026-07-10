@@ -35,85 +35,85 @@ class MainWindow : public QMainWindow
 {
 public:
     /**
-     * @brief Constructs the main application window and initializes UI state.
-     * @param dependencyCheck Startup dependency check result used to show environment status.
-     * @param parent Optional Qt parent widget.
+     * @brief 构建主应用窗口并初始化界面状态。
+     * @param dependencyCheck 启动依赖检查结果，用于展示环境状态。
+     * @param parent 可选的 Qt 父部件。
      */
     explicit MainWindow(const DependencyCheckResult &dependencyCheck, QWidget *parent = nullptr);
 
     /**
-     * @brief Replaces the remote filesystem backend for automated UI tests.
-     * @param remoteFileSystem Backend instance to use for future remote operations.
+     * @brief 为自动化 UI 测试替换远程文件系统后端。
+     * @param remoteFileSystem 后续远程操作要使用的后端实例。
      */
     void setRemoteFileSystemForTesting(std::unique_ptr<RemoteFileSystem> remoteFileSystem);
 
     /**
-     * @brief Invokes the normal single-file upload workflow for automated UI tests.
-     * @param localPath Local file path to upload into the current remote directory.
+     * @brief 为自动化 UI 测试触发标准的单文件上传流程。
+     * @param localPath 要上传到当前远程目录的本地文件路径。
      */
     void uploadLocalFileForTesting(const QString &localPath);
 
     /**
-     * @brief Invokes the normal file-or-directory upload workflow for automated UI tests.
-     * @param localPath Local file or directory path to upload into the current remote directory.
+     * @brief 为自动化 UI 测试触发标准的文件或目录上传流程。
+     * @param localPath 要上传到当前远程目录的本地文件或目录路径。
      */
     void uploadLocalPathForTesting(const QString &localPath);
 
     /**
-     * @brief Invokes the normal single-file download workflow for automated UI tests.
-     * @param remotePath Remote file path to download into the current local directory.
+     * @brief 为自动化 UI 测试触发标准的单文件下载流程。
+     * @param remotePath 要下载到当前本地目录的远程文件路径。
      */
     void downloadRemoteFileForTesting(const QString &remotePath);
 
     /**
-     * @brief Invokes the normal file-or-directory download workflow for automated UI tests.
-     * @param remotePath Remote file or directory path to download into the current local directory.
+     * @brief 为自动化 UI 测试触发标准的文件或目录下载流程。
+     * @param remotePath 要下载到当前本地目录的远程文件或目录路径。
      */
     void downloadRemotePathForTesting(const QString &remotePath);
 
     /**
-     * @brief Invokes the normal remote remove workflow for automated UI cleanup.
-     * @param path Remote file or empty directory path to remove.
+     * @brief 为自动化 UI 清理触发标准的远程删除流程。
+     * @param path 要删除的远程文件或空目录路径。
      */
     void removeRemotePathForTesting(const QString &path);
 
     /**
-     * @brief Invokes the normal remote move workflow for automated UI tests.
-     * @param sourcePaths Source remote paths to move.
-     * @param targetDirectory Target remote directory.
+     * @brief 为自动化 UI 测试触发标准的远程移动流程。
+     * @param sourcePaths 待移动的远程源路径列表。
+     * @param targetDirectory 目标远程目录。
      */
     void moveRemotePathsForTesting(const QStringList &sourcePaths, const QString &targetDirectory);
 
     /**
-     * @brief Enables or disables modal message boxes during automated tests.
-     * @param suppressed true to suppress modal dialogs.
+     * @brief 在自动化测试期间启用或禁用模态消息框。
+     * @param suppressed 为 true 时抑制模态对话框。
      */
     void setDialogsSuppressedForTesting(bool suppressed);
 
     /**
-     * @brief Navigates the local file panel to a directory for automated tests.
-     * @param path Local directory path to use as the current download target.
+     * @brief 在自动化测试中将本地文件面板切换到指定目录。
+     * @param path 作为当前下载目标的本地目录路径。
      */
     void setLocalPathForTesting(const QString &path);
 
     /**
-     * @brief Saves or updates a site profile during automated UI tests.
-     * @param profile Site profile to add or replace by id.
+     * @brief 在自动化 UI 测试中保存或更新站点配置。
+     * @param profile 要新增或按 id 替换的站点配置。
      */
     void saveSiteForTesting(const SiteProfile &profile);
 
     /**
-     * @brief Removes a saved site during automated UI tests.
-     * @param siteId Stable site id to remove.
-     * @return true when a site was removed.
+     * @brief 在自动化 UI 测试中删除已保存站点。
+     * @param siteId 要删除的稳定站点 id。
+     * @return 删除成功时返回 true。
      */
     bool removeSiteForTesting(const std::string &siteId);
 
     /**
-     * @brief Renames a site group during automated UI tests.
-     * @param oldGroup Previous group name, or empty for ungrouped sites.
-     * @param newGroup New group name, or empty to move sites to ungrouped.
-     * @return true when at least one site was updated.
+     * @brief 在自动化 UI 测试中重命名站点分组。
+     * @param oldGroup 原分组名称；为空时表示未分组站点。
+     * @param newGroup 新分组名称；为空时表示移动到未分组。
+     * @return 至少更新了一个站点时返回 true。
      */
     bool renameSiteGroupForTesting(const QString &oldGroup, const QString &newGroup);
 
@@ -145,8 +145,8 @@ private:
     void populateSessionManager();
     void showSessionManagerContextMenu(const QPoint &position);
     /**
-     * @brief Installs the neutral close button used by remote session tabs.
-     * @param index Remote tab index that should receive the custom close button.
+     * @brief 为远程会话标签页安装统一风格的关闭按钮。
+     * @param index 需要安装自定义关闭按钮的远程标签页索引。
      */
     void installRemoteTabCloseButton(int index);
     void closeRemoteTab(int index);
@@ -154,16 +154,16 @@ private:
     void appendLog(const QString &level, const QString &message);
 
     /**
-     * @brief Shows or logs a warning message depending on automated-test dialog settings.
-     * @param title Message box title or log prefix.
-     * @param message User-facing warning text.
+     * @brief 根据自动化测试的对话框设置显示或记录警告消息。
+     * @param title 消息框标题或日志前缀。
+     * @param message 面向用户的警告文本。
      */
     void showWarningMessage(const QString &title, const QString &message);
 
     /**
-     * @brief Shows or logs a critical message depending on automated-test dialog settings.
-     * @param title Message box title or log prefix.
-     * @param message User-facing critical error text.
+     * @brief 根据自动化测试的对话框设置显示或记录严重错误消息。
+     * @param title 消息框标题或日志前缀。
+     * @param message 面向用户的严重错误文本。
      */
     void showCriticalMessage(const QString &title, const QString &message);
     SiteProfile profileFromQuickConnect() const;
@@ -174,29 +174,29 @@ private:
     RemoteSession *remoteSessionByPanel(FilePanel *panel) const;
     RemoteSession *remoteSessionById(const std::string &sessionId) const;
     /**
-     * @brief Checks whether any remote session is currently running its initial connection task.
-     * @return true when a connection attempt is in progress.
+     * @brief 检查是否有远程会话正在执行初始连接任务。
+     * @return 当前存在连接尝试时返回 true。
      */
     bool hasConnectingRemoteSession() const;
     /**
-     * @brief Starts the initial remote connection and default-directory load on a background thread.
-     * @param session Session that owns the pending connection state.
+     * @brief 在后台线程启动初始远程连接和默认目录加载。
+     * @param session 持有待连接状态的会话对象。
      */
     void startRemoteConnection(RemoteSession &session);
     /**
-     * @brief Applies the background connection result back on the UI thread.
-     * @param sessionId Session id captured when the task started.
-     * @param result Connection result and backend ownership returned by the worker.
+     * @brief 将后台连接结果回填到 UI 线程。
+     * @param sessionId 任务启动时捕获的会话 id。
+     * @param result 后台任务返回的连接结果和后端所有权。
      */
     void finishRemoteConnection(const QString &sessionId, const std::shared_ptr<RemoteConnectionResult> &result);
     /**
-     * @brief Requests logical cancellation of an in-flight remote connection.
-     * @param session Session whose connection attempt should be canceled.
+     * @brief 请求逻辑取消正在进行中的远程连接。
+     * @param session 需要取消连接尝试的会话。
      */
     void cancelRemoteConnection(RemoteSession &session);
     void reconnectRemoteSession(RemoteSession &session);
     /**
-     * @brief Updates menu and quick-connect controls for disconnected, connecting, and connected states.
+     * @brief 按未连接、连接中和已连接状态更新菜单与快速连接控件。
      */
     void updateRemoteConnectionActions();
     bool loadRemotePath(RemoteSession &session, const QString &path, bool addToHistory, QString *errorMessage = nullptr);
@@ -205,8 +205,8 @@ private:
     void disconnectRemote();
     void createRemoteDirectory(RemoteSession &session, const QString &path);
     /**
-     * @brief Creates an empty file on the connected remote filesystem.
-     * @param path Absolute remote file path to create.
+     * @brief 在已连接的远程文件系统上创建空文件。
+     * @param path 要创建的远程文件绝对路径。
      */
     void createRemoteFile(RemoteSession &session, const QString &path);
     void removeRemotePath(RemoteSession &session, const QString &path);
@@ -218,26 +218,26 @@ private:
     void setRemoteConnectionState(RemoteSession &session, bool connected, const QString &message);
     void updateFileSplitterLayout();
     /**
-     * @brief Adds a transfer job to the queue and refreshes the transfer table.
-     * @param job Pending transfer job to display and schedule.
+     * @brief 将传输任务加入队列并刷新传输表格。
+     * @param job 待显示和调度的传输任务。
      */
     void enqueueTransferJob(const TransferJob &job);
     /**
-     * @brief Updates aggregate directory transfer rows from their child file jobs.
+     * @brief 根据子文件任务状态更新目录传输的聚合行。
      */
     void updateDirectoryTransferParents();
     /**
-     * @brief Creates a visible parent row for a directory transfer.
-     * @param direction Upload or download direction.
-     * @param name Directory display name.
-     * @param localPath Local directory root.
-     * @param remotePath Remote directory root.
-     * @param session Current remote session.
-     * @return Generated parent transfer id.
+     * @brief 为目录传输创建可见的父任务行。
+     * @param direction 上传或下载方向。
+     * @param name 目录显示名称。
+     * @param localPath 本地目录根路径。
+     * @param remotePath 远程目录根路径。
+     * @param session 当前远程会话。
+     * @return 生成的父任务传输 id。
      */
     QString enqueueDirectoryTransferParent(TransferDirection direction, const QString &name, const QString &localPath, const QString &remotePath, const RemoteSession &session);
     /**
-     * @brief Runs pending transfer jobs through the core transfer manager.
+     * @brief 通过核心传输管理器执行等待中的传输任务。
      */
     void processTransferQueue();
     void handleTransferProgress(const QString &jobId, std::int64_t transferredBytes, std::int64_t totalBytes);

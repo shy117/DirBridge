@@ -1,7 +1,7 @@
 #define AppName "DirBridge"
 
 #ifndef AppVersion
-#define AppVersion "0.5.8"
+#define AppVersion "0.5.9"
 #endif
 
 #ifndef ReleaseDir
@@ -29,7 +29,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 SetupIconFile=..\resources\icons\app\dirbridge.ico
 UninstallDisplayIcon={app}\DirBridge.exe
-LicenseFile=..\LICENSE
+LicenseFile=..\installer\LICENSE.zh-CN.txt
 
 [Languages]
 Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"

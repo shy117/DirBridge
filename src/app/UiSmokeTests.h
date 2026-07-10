@@ -1,40 +1,40 @@
-﻿#ifndef DIRBRIDGE_APP_UISMOKETESTS_H
+#ifndef DIRBRIDGE_APP_UISMOKETESTS_H
 #define DIRBRIDGE_APP_UISMOKETESTS_H
 
 class MainWindow;
 
 /**
- * @brief Verifies remote UI object wiring and default state.
- * @param window Main window under test.
- * @return true when the UI objects are present and correctly initialized.
+ * @brief 验证远程 UI 对象连线和默认状态是否正确。
+ * @param window 待测试的主窗口。
+ * @return 界面对象存在且初始化正确时返回 true。
  */
 bool checkRemoteUiObjects(MainWindow &window);
 
 /**
- * @brief Runs the fake-backend remote UI workflow smoke test.
- * @param window Main window under test.
- * @return true when the fake workflow passes.
+ * @brief 运行基于假后端的远程 UI 工作流冒烟测试。
+ * @param window 待测试的主窗口。
+ * @return 假后端工作流通过时返回 true。
  */
 bool checkRemoteUiWorkflow(MainWindow &window);
 
 /**
- * @brief Runs the live remote connection and navigation smoke test.
- * @param window Main window under test.
- * @return true when the live workflow passes.
+ * @brief 运行真实远程连接与导航冒烟测试。
+ * @param window 待测试的主窗口。
+ * @return 真实工作流通过时返回 true。
  */
 bool checkLiveRemoteUiWorkflow(MainWindow &window);
 
 /**
- * @brief Runs the live remote refresh smoke test.
- * @param window Main window under test.
- * @return true when refresh detects external server-side changes.
+ * @brief 运行真实远程刷新冒烟测试。
+ * @param window 待测试的主窗口。
+ * @return 刷新能够检测到服务端外部变化时返回 true。
  */
 bool checkLiveRemoteRefreshWorkflow(MainWindow &window);
 
 /**
- * @brief Runs the live upload/download transfer UI smoke test.
- * @param window Main window under test.
- * @return true when transfer UI workflow passes.
+ * @brief 运行真实上传/下载传输 UI 冒烟测试。
+ * @param window 待测试的主窗口。
+ * @return 传输 UI 工作流通过时返回 true。
  */
 bool checkLiveRemoteTransferWorkflow(MainWindow &window);
 
