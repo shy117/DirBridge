@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.5.9",
+    [string]$Version = "",
     [string]$BuildPreset = "windows-mingw-release",
     [string]$BuildDir = "build/windows-mingw-release",
     [string]$ReleaseDir = "build/release",
@@ -12,6 +12,42 @@ $ErrorActionPreference = "Stop"
 function Resolve-RepoPath {
     param([string]$RelativePath)
     return Join-Path $script:RepoRoot $RelativePath
+}
+
+function Get-ProjectVersionFromCMake {
+    $cmakeFile = Resolve-RepoPath "CMakeLists.txt"
+    $content = Get-Content -LiteralPath $cmakeFile -Raw -Encoding utf8
+    $match = [regex]::Match($content, 'project\s*\(\s*DirBridge\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if (-not $match.Success) {
+        throw "Failed to read project version from CMakeLists.txt."
+    }
+
+    return $match.Groups[1].Value
+}
+
+function Sync-VcpkgManifestVersion {
+    param([string]$ProjectVersion)
+
+    $manifestPath = Resolve-RepoPath "vcpkg.json"
+    $content = Get-Content -LiteralPath $manifestPath -Raw -Encoding utf8
+    $versionMatch = [regex]::Match($content, '"version-string"\s*:\s*"([^"]+)"', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if (-not $versionMatch.Success) {
+        throw "Failed to locate version-string in vcpkg.json."
+    }
+
+    if ($versionMatch.Groups[1].Value -eq $ProjectVersion) {
+        return
+    }
+
+    $updated = [regex]::Replace(
+        $content,
+        '"version-string"\s*:\s*"[^"]+"',
+        ('"version-string": "{0}"' -f $ProjectVersion),
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+    )
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($manifestPath, $updated, $utf8NoBom)
 }
 
 function Copy-IfExists {
@@ -133,6 +169,12 @@ function Invoke-PackagedCheck {
 
 $script:RepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 Set-Location $script:RepoRoot
+
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $Version = Get-ProjectVersionFromCMake
+}
+
+Sync-VcpkgManifestVersion -ProjectVersion $Version
 
 $releaseRoot = Resolve-RepoPath $ReleaseDir
 $packageName = "DirBridge-v$Version-win64"

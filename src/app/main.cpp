@@ -5,6 +5,7 @@
 #include <QTextStream>
 #include <QTimer>
 
+#include "AppVersion.h"
 #include "app/UiSmokeTests.h"
 #include "core/CurlProtocolCheck.h"
 #include "core/DependencyCheck.h"
@@ -16,7 +17,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     app.setWindowIcon(QIcon(":/icons/app/dirbridge.ico"));
     QApplication::setApplicationName("DirBridge");
-    QApplication::setApplicationVersion("0.5.9");
+    QApplication::setApplicationVersion(DIRBRIDGE_APP_VERSION);
 
     QCommandLineParser parser;
     parser.setApplicationDescription("DirBridge remote folder manager");

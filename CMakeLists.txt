@@ -5,6 +5,13 @@ project(DirBridge
     LANGUAGES CXX
 )
 
+set(DIRBRIDGE_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+configure_file(
+    src/app/AppVersion.h.in
+    "${DIRBRIDGE_GENERATED_DIR}/AppVersion.h"
+    @ONLY
+)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -156,6 +163,7 @@ target_compile_definitions(DirBridge
 target_include_directories(DirBridge
     PRIVATE
         src
+        "${DIRBRIDGE_GENERATED_DIR}"
 )
 
 add_executable(DirBridgeCoreChecks

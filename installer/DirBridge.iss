@@ -1,7 +1,7 @@
 #define AppName "DirBridge"
 
 #ifndef AppVersion
-#define AppVersion "0.5.9"
+#error AppVersion must be passed by scripts/package_release.ps1
 #endif
 
 #ifndef ReleaseDir
