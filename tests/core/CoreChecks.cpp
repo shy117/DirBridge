@@ -3,7 +3,9 @@
 #include "config/SiteStore.h"
 #include "config/PasswordCrypto.h"
 #include "config/UserSettings.h"
+#include "core/ExternalEditDocument.h"
 #include "core/FakeRemoteFileSystem.h"
+#include "core/FileCache.h"
 #include "core/TransferJob.h"
 #include "core/TransferManager.h"
 #include "core/TransferQueue.h"
@@ -183,6 +185,98 @@ void checkFakeRemoteFileSystem()
     require(!result.success, "upload after disconnect should fail");
     result = remote.downloadFile("/home/testuser/remote_test/upload.txt", (tempRoot / "after-disconnect.txt").string());
     require(!result.success, "download after disconnect should fail");
+}
+
+void checkExternalEditDocumentAndFileCache()
+{
+    const std::filesystem::path tempRoot = std::filesystem::temp_directory_path() / "dirbridge-external-edit-checks";
+    std::filesystem::remove_all(tempRoot);
+
+    FileCache cache(tempRoot);
+    const FileCacheEntry firstEntry = cache.createEntry("session-a", "/remote/settings.json");
+    const FileCacheEntry sameEntry = cache.createEntry("session-a", "/remote/settings.json");
+    const FileCacheEntry sameNameDifferentPath = cache.createEntry("session-a", "/other/settings.json");
+    const FileCacheEntry differentSession = cache.createEntry("session-b", "/remote/settings.json");
+
+    require(firstEntry.documentId == sameEntry.documentId, "same external edit document should reuse cache key");
+    require(firstEntry.directory != sameNameDifferentPath.directory, "same-name remote files need isolated cache directories");
+    require(firstEntry.directory != differentSession.directory, "different sessions need isolated cache directories");
+    require(firstEntry.workingFilePath.filename() == "settings.json", "editor cache working file should preserve the remote filename");
+    require(firstEntry.workingFilePath.extension() == ".json", "cache working file should preserve a safe extension");
+
+    const FileCacheEntry reservedNameEntry = cache.createEntry("session-a", "/remote/CON.txt");
+    const FileCacheEntry invalidNameEntry = cache.createEntry("session-a", "/remote/a?b.cpp ");
+    require(reservedNameEntry.workingFilePath.filename() == "content.txt", "Windows reserved editor cache filename should fall back safely");
+    require(invalidNameEntry.workingFilePath.filename() == "a_b.cpp", "invalid editor cache filename characters and trailing spaces should be sanitized");
+
+    FileCacheResult cacheResult = cache.prepareEntry(firstEntry);
+    require(cacheResult.success, "external edit cache directory should be prepared");
+    {
+        std::ofstream temporaryFile(firstEntry.downloadTemporaryPath, std::ios::binary);
+        temporaryFile << "first version";
+    }
+    cacheResult = cache.commitDownloadedFile(firstEntry);
+    require(cacheResult.success, "downloaded editor cache file should commit safely");
+    require(!std::filesystem::exists(firstEntry.downloadTemporaryPath), "committed temporary editor cache file should be moved");
+
+    std::filesystem::path firstSnapshot;
+    cacheResult = cache.createUploadSnapshot(firstEntry, 1, firstSnapshot);
+    require(cacheResult.success, "first editor upload snapshot should be created");
+    {
+        std::ifstream snapshot(firstSnapshot, std::ios::binary);
+        std::string content((std::istreambuf_iterator<char>(snapshot)), std::istreambuf_iterator<char>());
+        require(content == "first version", "editor upload snapshot content mismatch");
+    }
+    {
+        std::ofstream workingFile(firstEntry.workingFilePath, std::ios::binary | std::ios::trunc);
+        workingFile << "second version";
+    }
+    {
+        std::ifstream snapshot(firstSnapshot, std::ios::binary);
+        std::string content((std::istreambuf_iterator<char>(snapshot)), std::istreambuf_iterator<char>());
+        require(content == "first version", "editor upload snapshot should remain immutable after a later save");
+    }
+    std::filesystem::path retriedSnapshot;
+    cacheResult = cache.createUploadSnapshot(firstEntry, 1, retriedSnapshot);
+    require(cacheResult.success && retriedSnapshot == firstSnapshot, "failed editor upload should be able to refresh the same snapshot version");
+    {
+        std::ifstream snapshot(retriedSnapshot, std::ios::binary);
+        std::string content((std::istreambuf_iterator<char>(snapshot)), std::istreambuf_iterator<char>());
+        require(content == "second version", "refreshed editor upload snapshot should contain retry content");
+    }
+
+    ExternalEditDocument document("session-a", "/remote/settings.json", firstEntry);
+    const RemoteFileRevision originalRevision{13, "2026-07-11 16:30:00", true};
+    document.completeDownload(originalRevision);
+    require(document.state() == ExternalEditState::EditingClean, "downloaded external edit document should be clean");
+
+    document.markLocalFileChanged();
+    const std::optional<std::uint64_t> firstUploadVersion = document.beginUpload();
+    require(firstUploadVersion.has_value() && *firstUploadVersion == 1, "first changed external edit document should start upload version one");
+    document.markLocalFileChanged();
+    require(document.state() == ExternalEditState::Uploading, "new save during upload should keep visible uploading state");
+    require(document.completeUpload(*firstUploadVersion, {14, "2026-07-11 16:31:00", true}), "first external edit upload should complete");
+    require(document.state() == ExternalEditState::PendingUpload, "later save must remain pending after an older upload succeeds");
+
+    const std::optional<std::uint64_t> secondUploadVersion = document.beginUpload();
+    require(secondUploadVersion.has_value() && *secondUploadVersion == 2, "second external edit upload should use latest version");
+    require(document.completeUpload(*secondUploadVersion, {15, "2026-07-11 16:32:00", true}), "second external edit upload should complete");
+    require(document.state() == ExternalEditState::EditingClean, "latest external edit upload should become clean");
+
+    document.markLocalFileChanged();
+    const std::optional<std::uint64_t> failedUploadVersion = document.beginUpload();
+    require(failedUploadVersion.has_value(), "changed external edit document should start a retryable upload");
+    require(document.failUpload(*failedUploadVersion), "external edit upload failure should be accepted for active version");
+    require(document.state() == ExternalEditState::UploadFailed && document.hasPendingUpload(), "failed external edit upload must preserve pending local content");
+    document.markConflict();
+    require(!document.beginUpload().has_value(), "conflicted external edit document must not auto-upload");
+    document.resolveConflictForOverwrite();
+    require(document.beginUpload().has_value(), "explicit conflict overwrite should make upload available again");
+
+    cacheResult = cache.removeEntry(firstEntry);
+    require(cacheResult.success, "cleaned external edit cache entry should remove safely");
+    require(!std::filesystem::exists(firstEntry.directory), "removed external edit cache directory should not remain");
+    std::filesystem::remove_all(tempRoot);
 }
 
 void checkTransferJob()
@@ -468,6 +562,7 @@ int main()
     try
     {
         checkFakeRemoteFileSystem();
+        checkExternalEditDocumentAndFileCache();
         checkTransferJob();
         checkTransferQueueAndManager();
         checkSiteProfileAndSettingsStore();

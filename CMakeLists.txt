@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(DirBridge
-    VERSION 0.5.10
+    VERSION 0.6.0
     LANGUAGES CXX
 )
 
@@ -74,6 +74,10 @@ add_library(DirBridgeCore STATIC
     src/core/DependencyCheck.h
     src/core/FakeRemoteFileSystem.cpp
     src/core/FakeRemoteFileSystem.h
+    src/core/ExternalEditDocument.cpp
+    src/core/ExternalEditDocument.h
+    src/core/FileCache.cpp
+    src/core/FileCache.h
     src/core/FileItem.cpp
     src/core/FileItem.h
     src/core/RemoteFileSystem.h
@@ -130,6 +134,10 @@ add_executable(DirBridge
     src/app/UiSmokeTests.h
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
+    src/ui/FileChangeMonitor.cpp
+    src/ui/FileChangeMonitor.h
+    src/ui/ExternalEditManager.cpp
+    src/ui/ExternalEditManager.h
     src/ui/window_layout.cpp
     src/ui/window_remote.cpp
     src/ui/window_session.cpp

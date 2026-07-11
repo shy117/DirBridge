@@ -10,12 +10,14 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QShortcut>
 #include <QSplitter>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QUrl>
+#include <QKeySequence>
 #include <QVBoxLayout>
 
 #include <utility>
@@ -127,6 +129,25 @@ void FilePanel::setLocalUploadRequestedHandler(std::function<void(const QString 
 void FilePanel::setRemoteDownloadRequestedHandler(std::function<void(const QString &, bool)> handler)
 {
     m_remoteDownloadRequested = std::move(handler);
+}
+
+/**
+ * @brief 设置远程文件外部编辑请求回调。
+ * @param handler 接收远程文件绝对路径的回调。
+ */
+void FilePanel::setRemoteEditRequestedHandler(std::function<void(const QString &)> handler)
+{
+    m_remoteEditRequested = std::move(handler);
+}
+
+void FilePanel::setRemoteEditActiveQuery(std::function<bool(const QString &)> query)
+{
+    m_remoteEditActiveQuery = std::move(query);
+}
+
+void FilePanel::setRemoteEditCloseRequestedHandler(std::function<void(const QString &)> handler)
+{
+    m_remoteEditCloseRequested = std::move(handler);
 }
 
 /**
@@ -362,6 +383,12 @@ void FilePanel::setupUi()
 
     m_contentSplitter->addWidget(m_table);
     m_table->viewport()->installEventFilter(this);
+    auto *renameShortcut = new QShortcut(QKeySequence(Qt::Key_F2), m_table);
+    renameShortcut->setObjectName(objectPrefix + "RenameShortcut");
+    renameShortcut->setContext(Qt::WidgetShortcut);
+    connect(renameShortcut, &QShortcut::activated, this, [this]() {
+        renameSelectedEntry();
+    });
     m_contentSplitter->setStretchFactor(0, 0);
     m_contentSplitter->setStretchFactor(1, 1);
     m_contentSplitter->setSizes({220, 620});
@@ -657,4 +684,3 @@ void FilePanel::updateRemoteNavigationButtons()
     m_pathEdit->setEnabled(hasPath);
     m_refreshButton->setEnabled(hasPath);
 }
-

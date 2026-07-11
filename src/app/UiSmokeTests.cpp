@@ -4,6 +4,7 @@
 #include "core/DependencyCheck.h"
 #include "core/FakeRemoteFileSystem.h"
 #include "protocol/CurlRemoteFileSystem.h"
+#include "ui/FileChangeMonitor.h"
 #include "ui/MainWindow.h"
 
 #include <QAction>
@@ -16,12 +17,15 @@
 #include <QMetaObject>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QEventLoop>
 #include <QProgressBar>
 #include <QPointer>
 #include <QPushButton>
+#include <QSaveFile>
 #include <QStatusBar>
 #include <QStringList>
 #include <QTableWidget>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QTabWidget>
 #include <QTextStream>
@@ -63,6 +67,84 @@ bool requireChild(MainWindow &window, const char *objectName)
 bool checkRemoteUiObjects(MainWindow &window)
 {
     bool ok = true;
+    {
+        QTemporaryDir temporaryDirectory;
+        if (!temporaryDirectory.isValid())
+        {
+            QTextStream(stderr) << "Unable to create temporary directory for external edit monitor smoke test" << Qt::endl;
+            ok = false;
+        }
+        else
+        {
+            const QString filePath = temporaryDirectory.filePath("remote-edit.json");
+            {
+                QSaveFile initialFile(filePath);
+                if (!initialFile.open(QIODevice::WriteOnly) || initialFile.write("{\"version\":0}") < 0 || !initialFile.commit())
+                {
+                    QTextStream(stderr) << "Unable to prepare external edit monitor smoke file" << Qt::endl;
+                    ok = false;
+                }
+            }
+
+            if (ok)
+            {
+                FileChangeMonitor monitor;
+                int stableChangeCount = 0;
+                QEventLoop loop;
+                QTimer timeout;
+                timeout.setSingleShot(true);
+                QObject::connect(&monitor, &FileChangeMonitor::stableFileChanged, &loop, [&](const QString &changedPath) {
+                    if (changedPath == filePath)
+                    {
+                        ++stableChangeCount;
+                    }
+                });
+                QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+                monitor.startMonitoring(filePath);
+
+                const auto replaceFile = [filePath](const QByteArray &content) {
+                    QSaveFile replacement(filePath);
+                    return replacement.open(QIODevice::WriteOnly)
+                        && replacement.write(content) == content.size()
+                        && replacement.commit();
+                };
+                QTimer::singleShot(0, &loop, [replaceFile]() {
+                    replaceFile("{\"version\":1}");
+                });
+                QTimer::singleShot(100, &loop, [replaceFile]() {
+                    replaceFile("{\"version\":2}");
+                });
+                timeout.start(1800);
+                loop.exec();
+                if (stableChangeCount != 1)
+                {
+                    QTextStream(stderr) << "External edit monitor should coalesce atomic saves into one stable change" << Qt::endl;
+                    ok = false;
+                }
+
+                stableChangeCount = 0;
+                QEventLoop unrelatedChangeLoop;
+                QTimer unrelatedChangeTimeout;
+                unrelatedChangeTimeout.setSingleShot(true);
+                QObject::connect(&unrelatedChangeTimeout, &QTimer::timeout, &unrelatedChangeLoop, &QEventLoop::quit);
+                QTimer::singleShot(0, &unrelatedChangeLoop, [&temporaryDirectory]() {
+                    QSaveFile unrelatedFile(temporaryDirectory.filePath("upload-snapshot.tmp"));
+                    if (unrelatedFile.open(QIODevice::WriteOnly))
+                    {
+                        unrelatedFile.write("snapshot");
+                        unrelatedFile.commit();
+                    }
+                });
+                unrelatedChangeTimeout.start(900);
+                unrelatedChangeLoop.exec();
+                if (stableChangeCount != 0)
+                {
+                    QTextStream(stderr) << "External edit monitor should ignore unrelated cache-directory changes" << Qt::endl;
+                    ok = false;
+                }
+            }
+        }
+    }
     ok = requireChild<QComboBox>(window, "quickProtocolCombo") && ok;
     ok = requireChild<QLineEdit>(window, "quickHostEdit") && ok;
     ok = requireChild<QLineEdit>(window, "quickPortEdit") && ok;
@@ -629,6 +711,124 @@ QString joinRemotePathForCheck(QString directory, const QString &name)
 }
 
 /**
+ * @brief 验证远程文件外部编辑的下载、监听和自动上传闭环。
+ * @param window 已连接到假远程后端的主窗口。
+ * @param remotePath 当前远程目录。
+ * @param remoteTable 当前远程文件表格。
+ * @return 自动上传后远程文件大小更新且不产生普通传输任务时返回 true。
+ */
+bool checkExternalEditWorkflow(MainWindow &window,
+                               const QString &remotePath,
+                               QTableWidget *remoteTable)
+{
+    if (remoteTable == nullptr)
+    {
+        QTextStream(stderr) << "External edit smoke UI objects are missing" << Qt::endl;
+        return false;
+    }
+
+    const int readmeRow = findTableRowByName(remoteTable, "readme.txt");
+    if (remoteTable->columnCount() != 6 || readmeRow < 0 || remoteTable->item(readmeRow, 1) == nullptr)
+    {
+        QTextStream(stderr) << "External edit smoke source file or table layout is unexpected" << Qt::endl;
+        return false;
+    }
+
+    bool editMenuChecked = false;
+    const QPoint contextMenuPosition = remoteTable->visualItemRect(remoteTable->item(readmeRow, 0)).center();
+    QTimer::singleShot(50, remoteTable, [&editMenuChecked]() {
+        auto *contextMenu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+        if (contextMenu == nullptr)
+        {
+            return;
+        }
+
+        QStringList actionTexts;
+        for (QAction *action : contextMenu->actions())
+        {
+            if (action != nullptr)
+            {
+                actionTexts.append(action->text());
+            }
+        }
+        editMenuChecked = actionTexts.contains("编辑")
+            && !actionTexts.contains("重新同步")
+            && !actionTexts.contains("保存本地副本")
+            && !actionTexts.contains("结束编辑");
+        contextMenu->close();
+    });
+    QMetaObject::invokeMethod(
+        remoteTable,
+        "customContextMenuRequested",
+        Qt::DirectConnection,
+        Q_ARG(QPoint, contextMenuPosition));
+    if (!editMenuChecked)
+    {
+        QTextStream(stderr) << "External edit context menu still contains obsolete actions" << Qt::endl;
+        return false;
+    }
+
+    const QString originalSize = remoteTable->item(readmeRow, 1)->text();
+    QString openedCachePath;
+    window.setExternalEditorLauncherForTesting([&openedCachePath](const QString &filePath) {
+        openedCachePath = filePath;
+        return QFileInfo::exists(filePath);
+    });
+
+    window.editRemoteFileForTesting(joinRemotePathForCheck(remotePath, "readme.txt"));
+    const auto openDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+    while (openedCachePath.isEmpty() && std::chrono::steady_clock::now() < openDeadline)
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    if (openedCachePath.isEmpty())
+    {
+        QTextStream(stderr) << "External edit smoke did not launch the cached file" << Qt::endl;
+        return false;
+    }
+
+    const QByteArray editedContent("external edit smoke updated content\n");
+    QSaveFile editedFile(openedCachePath);
+    if (!editedFile.open(QIODevice::WriteOnly)
+        || editedFile.write(editedContent) != editedContent.size()
+        || !editedFile.commit())
+    {
+        QTextStream(stderr) << "External edit smoke could not save the cached file" << Qt::endl;
+        return false;
+    }
+
+    const auto uploadDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    bool uploaded = false;
+    while (std::chrono::steady_clock::now() < uploadDeadline)
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        const int refreshedRow = findTableRowByName(remoteTable, "readme.txt");
+        if (refreshedRow >= 0
+            && remoteTable->item(refreshedRow, 1) != nullptr
+            && remoteTable->item(refreshedRow, 1)->text() != originalSize)
+        {
+            uploaded = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    }
+    if (!uploaded)
+    {
+        QTextStream(stderr) << "External edit smoke did not synchronize the changed file" << Qt::endl;
+        return false;
+    }
+
+    QTreeWidget *transferTable = window.findChild<QTreeWidget *>("transferTable");
+    if (transferTable == nullptr || transferTable->topLevelItemCount() != 0)
+    {
+        QTextStream(stderr) << "External edit smoke should not create ordinary transfer queue rows" << Qt::endl;
+        return false;
+    }
+    return true;
+}
+
+/**
  * @brief 驱动主窗口的快速连接流程，并验证导航状态是否正确。
  * @param window 待测试的主窗口。
  * @param protocol 在快速连接协议下拉框中选择的协议文本。
@@ -724,6 +924,11 @@ bool checkRemoteUiWorkflow(
             QTextStream(stderr) << "Remote tree does not show expected sibling directory: " << name << Qt::endl;
             ok = false;
         }
+    }
+
+    if (useFakeBackend)
+    {
+        ok = checkExternalEditWorkflow(window, remotePath, remoteTable) && ok;
     }
 
     const QString directoryName = expectedNames.isEmpty() ? QString() : expectedNames.first();
@@ -1430,6 +1635,65 @@ bool checkLiveRemoteUiWorkflow(MainWindow &window)
         : expectedCsv.split(',', Qt::SkipEmptyParts);
 
     return checkRemoteUiWorkflow(window, protocol, host, port, user, password, remotePath, expectedNames, false);
+}
+
+/**
+ * @brief 使用站点管理器中已保存的凭据验证真实远程连接。
+ * @param window 待测试的主窗口。
+ * @param siteName 已保存站点的显示名称。
+ * @return 成功加载远程目录时返回 true。
+ */
+bool checkSavedSiteRemoteUiWorkflow(MainWindow &window, const QString &siteName)
+{
+    QTreeWidget *sessionTree = window.findChild<QTreeWidget *>("sessionManagerTree");
+    QTabWidget *remoteTabs = window.findChild<QTabWidget *>("remoteTabs");
+    if (sessionTree == nullptr || remoteTabs == nullptr)
+    {
+        QTextStream(stderr) << "Saved-site smoke UI objects are missing" << Qt::endl;
+        return false;
+    }
+
+    QTreeWidgetItem *siteItem = nullptr;
+    QTreeWidgetItemIterator iterator(sessionTree);
+    while (*iterator != nullptr)
+    {
+        if ((*iterator)->text(0) == siteName)
+        {
+            siteItem = *iterator;
+            break;
+        }
+        ++iterator;
+    }
+    if (siteItem == nullptr)
+    {
+        QTextStream(stderr) << "Saved site is not present in session manager: " << siteName << Qt::endl;
+        return false;
+    }
+
+    QMetaObject::invokeMethod(
+        sessionTree,
+        "itemDoubleClicked",
+        Qt::DirectConnection,
+        Q_ARG(QTreeWidgetItem *, siteItem),
+        Q_ARG(int, 0));
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        QApplication::processEvents();
+        QWidget *remotePanel = remoteTabs->currentWidget();
+        QLineEdit *remotePathEdit = remotePanel == nullptr ? nullptr : remotePanel->findChild<QLineEdit *>("remotePathEdit");
+        QLabel *remoteStateLabel = remotePanel == nullptr ? nullptr : remotePanel->findChild<QLabel *>("remoteStateLabel");
+        if (remotePathEdit != nullptr && !remotePathEdit->text().isEmpty()
+            && remoteStateLabel != nullptr && remoteStateLabel->text().contains("个项目"))
+        {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    QTextStream(stderr) << "Saved site did not connect and load its remote directory: " << siteName << Qt::endl;
+    return false;
 }
 
 /**

@@ -48,6 +48,9 @@ public:
     void setRemoteRenameRequestedHandler(std::function<void(const QString &, const QString &)> handler);
     void setLocalUploadRequestedHandler(std::function<void(const QString &)> handler);
     void setRemoteDownloadRequestedHandler(std::function<void(const QString &, bool)> handler);
+    void setRemoteEditRequestedHandler(std::function<void(const QString &)> handler);
+    void setRemoteEditActiveQuery(std::function<bool(const QString &)> query);
+    void setRemoteEditCloseRequestedHandler(std::function<void(const QString &)> handler);
     /**
      * @brief 设置本地文件拖放到远程面板时使用的回调。
      * @param handler 接收待上传本地文件路径的回调。
@@ -117,6 +120,7 @@ private:
     void removeLocalPath(const QString &path);
     void finishLocalRemove(const QString &path, bool removed);
     void renameLocalPath(const QString &path);
+    void renameSelectedEntry();
     void showLocalProperties(const QString &path) const;
     void startDragFromSelection();
     bool canAcceptTransferDrop(const QMimeData *mimeData) const;
@@ -154,6 +158,9 @@ private:
     std::function<void(const QString &, const QString &)> m_remoteRenameRequested;
     std::function<void(const QString &)> m_localUploadRequested;
     std::function<void(const QString &, bool)> m_remoteDownloadRequested;
+    std::function<void(const QString &)> m_remoteEditRequested;
+    std::function<bool(const QString &)> m_remoteEditActiveQuery;
+    std::function<void(const QString &)> m_remoteEditCloseRequested;
     std::function<void(const QStringList &)> m_localFilesDroppedOnRemote;
     std::function<void(const QStringList &)> m_remoteFilesDroppedOnLocal;
     std::function<void(const QStringList &, const QString &)> m_remoteFilesDroppedOnRemote;

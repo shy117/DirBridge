@@ -1,6 +1,8 @@
 #ifndef DIRBRIDGE_APP_UISMOKETESTS_H
 #define DIRBRIDGE_APP_UISMOKETESTS_H
 
+#include <QString>
+
 class MainWindow;
 
 /**
@@ -23,6 +25,14 @@ bool checkRemoteUiWorkflow(MainWindow &window);
  * @return 真实工作流通过时返回 true。
  */
 bool checkLiveRemoteUiWorkflow(MainWindow &window);
+
+/**
+ * @brief 使用当前配置中已保存的站点运行真实连接冒烟测试。
+ * @param window 待测试的主窗口。
+ * @param siteName 已保存站点的显示名称。
+ * @return 站点连接并成功加载远程目录时返回 true。
+ */
+bool checkSavedSiteRemoteUiWorkflow(MainWindow &window, const QString &siteName);
 
 /**
  * @brief 运行真实远程刷新冒烟测试。

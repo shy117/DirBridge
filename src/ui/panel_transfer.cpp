@@ -603,5 +603,3 @@ QTableWidgetItem *FilePanel::createItem(const QString &text, const QIcon &icon) 
     item->setToolTip(text);
     return item;
 }
-
-
