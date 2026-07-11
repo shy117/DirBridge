@@ -30,6 +30,7 @@ int main(int argc, char *argv[])
     QCommandLineOption uiRemoteSmokeTestOption("ui-remote-smoke-test", "Check remote UI object wiring and exit.");
     QCommandLineOption uiRemoteWorkflowSmokeTestOption("ui-remote-workflow-smoke-test", "Check remote UI state workflow with fake backend and exit.");
     QCommandLineOption uiRemoteLiveSmokeTestOption("ui-remote-live-smoke-test", "Check remote UI state workflow with a real FTP/SFTP server and exit.");
+    QCommandLineOption uiSavedSiteSmokeTestOption("ui-saved-site-smoke-test", "Check a saved site connection without exposing its password.", "site-name");
     QCommandLineOption uiRemoteLiveRefreshSmokeTestOption("ui-remote-live-refresh-smoke-test", "Check remote UI refresh with a real FTP/SFTP server and exit.");
     QCommandLineOption uiRemoteLiveTransferSmokeTestOption("ui-remote-live-transfer-smoke-test", "Check upload/download transfer UI workflow with a real FTP/SFTP server and exit.");
     parser.addOption(checkCurlOption);
@@ -38,6 +39,7 @@ int main(int argc, char *argv[])
     parser.addOption(uiRemoteSmokeTestOption);
     parser.addOption(uiRemoteWorkflowSmokeTestOption);
     parser.addOption(uiRemoteLiveSmokeTestOption);
+    parser.addOption(uiSavedSiteSmokeTestOption);
     parser.addOption(uiRemoteLiveRefreshSmokeTestOption);
     parser.addOption(uiRemoteLiveTransferSmokeTestOption);
     parser.process(app);
@@ -89,6 +91,14 @@ int main(int argc, char *argv[])
         const bool ok = checkLiveRemoteUiWorkflow(window);
         AppLogger::shutdown();
         return ok ? 0 : 6;
+    }
+
+    if (parser.isSet(uiSavedSiteSmokeTestOption))
+    {
+        window.setDialogsSuppressedForTesting(true);
+        const bool ok = checkSavedSiteRemoteUiWorkflow(window, parser.value(uiSavedSiteSmokeTestOption));
+        AppLogger::shutdown();
+        return ok ? 0 : 9;
     }
 
     if (parser.isSet(uiRemoteLiveRefreshSmokeTestOption))

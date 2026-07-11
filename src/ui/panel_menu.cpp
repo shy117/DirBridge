@@ -73,6 +73,8 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
     QAction *enterAction = nullptr;
     QAction *uploadAction = nullptr;
     QAction *downloadAction = nullptr;
+    QAction *editAction = nullptr;
+    QAction *closeEditAction = nullptr;
     QAction *renameAction = nullptr;
     QAction *removeAction = nullptr;
     QAction *copyPathAction = nullptr;
@@ -106,6 +108,16 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
         {
             downloadAction = menu.addAction(fluentIcon("arrow_left"), "下载");
             downloadAction->setEnabled(m_remoteDownloadRequested != nullptr);
+            if (!selectedIsDirectory)
+            {
+                editAction = menu.addAction(fluentIcon("edit"), "编辑");
+                editAction->setEnabled(m_remoteEditRequested != nullptr);
+                if (m_remoteEditActiveQuery && m_remoteEditActiveQuery(selectedPath))
+                {
+                    closeEditAction = menu.addAction(fluentIcon("dismiss_circle"), "关闭编辑");
+                    closeEditAction->setEnabled(m_remoteEditCloseRequested != nullptr);
+                }
+            }
         }
         renameAction = menu.addAction(fluentIcon("edit"), "重命名");
         removeAction = menu.addAction(fluentIcon("delete"), "删除");
@@ -246,6 +258,18 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
         return;
     }
 
+    if (selectedAction == editAction && m_remoteEditRequested)
+    {
+        m_remoteEditRequested(selectedPath);
+        return;
+    }
+
+    if (selectedAction == closeEditAction && m_remoteEditCloseRequested)
+    {
+        m_remoteEditCloseRequested(selectedPath);
+        return;
+    }
+
     if (selectedAction == removeAction)
     {
         if (isLocal)
@@ -268,32 +292,47 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
 
     if (selectedAction == renameAction)
     {
-        if (isLocal)
-        {
-            renameLocalPath(selectedPath);
-            return;
-        }
+        renameSelectedEntry();
+    }
+}
 
-        if (!m_remoteRenameRequested)
-        {
-            return;
-        }
-        const QFileInfo info(selectedPath);
-        bool ok = false;
-        const QString newName = QInputDialog::getText(this, "重命名远程项目", "新名称：", QLineEdit::Normal, info.fileName(), &ok).trimmed();
-        if (!ok)
-        {
-            return;
-        }
-        if (!isValidRemoteName(newName))
-        {
-            showInvalidRemoteNameWarning(this);
-            return;
-        }
-        if (newName != info.fileName())
-        {
-            m_remoteRenameRequested(selectedPath, remoteSiblingPath(selectedPath, newName));
-        }
+/**
+ * @brief 对文件表格当前选中的本地或远程项目执行重命名。
+ */
+void FilePanel::renameSelectedEntry()
+{
+    const QString selectedPath = selectedEntryPath();
+    if (selectedPath.isEmpty())
+    {
+        return;
+    }
+
+    if (m_mode == Mode::Local)
+    {
+        renameLocalPath(selectedPath);
+        return;
+    }
+
+    if (!m_remoteRenameRequested)
+    {
+        return;
+    }
+
+    const QFileInfo info(selectedPath);
+    bool ok = false;
+    const QString newName = QInputDialog::getText(this, "重命名远程项目", "新名称：", QLineEdit::Normal, info.fileName(), &ok).trimmed();
+    if (!ok)
+    {
+        return;
+    }
+    if (!isValidRemoteName(newName))
+    {
+        showInvalidRemoteNameWarning(this);
+        return;
+    }
+    if (newName != info.fileName())
+    {
+        m_remoteRenameRequested(selectedPath, remoteSiblingPath(selectedPath, newName));
     }
 }
 
@@ -559,4 +598,3 @@ QString FilePanel::selectedEntryPath() const
 
     return nameItem->data(Qt::UserRole).toString();
 }
-

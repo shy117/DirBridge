@@ -41,7 +41,7 @@ build/release/
 powershell -ExecutionPolicy Bypass -File scripts\package_release.ps1
 ```
 
-脚本默认使用 `windows-mingw-release` preset 构建并生成绿色包；如果找到 `ISCC.exe`，会继续生成安装包。如果 `ISCC.exe` 不在 `PATH` 或常见安装目录中，可通过 `-InnoCompiler` 显式指定。
+脚本默认使用 `windows-mingw-release` preset 构建并生成绿色包；如果 `ISCC.exe` 已加入 `PATH`，会继续生成安装包。修改环境变量后需重新打开 PowerShell；也可通过 `-InnoCompiler` 显式指定编译器路径。
 
 ## 发布前验证
 

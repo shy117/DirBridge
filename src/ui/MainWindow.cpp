@@ -3,6 +3,7 @@
 #include "logging/AppLogger.h"
 #include "protocol/CurlRemoteFileSystem.h"
 #include "core/TransferManager.h"
+#include "ui/ExternalEditManager.h"
 #include "ui/FilePanel.h"
 #include "ui/window_shared.h"
 
@@ -21,6 +22,7 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QComboBox>
+#include <QCloseEvent>
 #include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -46,9 +48,11 @@
 #include <QProgressBar>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QStandardPaths>
 #include <QTabWidget>
 #include <QTabBar>
 #include <QThread>
+#include <QTimer>
 #include <QToolBar>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -508,6 +512,35 @@ bool editSiteProfileDialog(QWidget *parent, SiteProfile &profile)
 
 using namespace window_shared;
 
+namespace
+{
+QString externalEditStateLabel(ExternalEditState state)
+{
+    switch (state)
+    {
+    case ExternalEditState::Downloading:
+        return "正在准备编辑";
+    case ExternalEditState::DownloadFailed:
+        return "下载失败";
+    case ExternalEditState::OpenFailed:
+        return "无法打开编辑器";
+    case ExternalEditState::EditingClean:
+        return "正在编辑（已同步）";
+    case ExternalEditState::PendingUpload:
+        return "等待同步";
+    case ExternalEditState::Uploading:
+        return "正在同步";
+    case ExternalEditState::UploadFailed:
+        return "同步失败";
+    case ExternalEditState::Conflict:
+        return "远程文件已变化";
+    case ExternalEditState::Closed:
+        return "已停止编辑";
+    }
+    return {};
+}
+}
+
 MainWindow::MainWindow(const DependencyCheckResult &dependencyCheck, QWidget *parent)
     : QMainWindow(parent)
     , m_siteStore(dependencyCheck.siteConfigPath.empty() ? std::filesystem::path("config") / "sites.json" : dependencyCheck.siteConfigPath)
@@ -520,6 +553,44 @@ MainWindow::MainWindow(const DependencyCheckResult &dependencyCheck, QWidget *pa
     loadSites();
     loadSettings();
     setupCentralWorkspace(dependencyCheck);
+    ExternalEditManager::Callbacks externalEditCallbacks;
+    externalEditCallbacks.resolveFileSystem = [this](const QString &sessionId) {
+        RemoteSession *session = remoteSessionById(sessionId.toStdString());
+        return session != nullptr && session->connected ? session->fileSystem : std::shared_ptr<RemoteFileSystem>();
+    };
+    externalEditCallbacks.canStartRemoteOperation = [this](const QString &sessionId) {
+        RemoteSession *session = remoteSessionById(sessionId.toStdString());
+        return !m_closePending
+            && session != nullptr
+            && session->connected
+            && session->fileSystem != nullptr
+            && !hasRunningTransferForSession(session->id);
+    };
+    externalEditCallbacks.beginBackgroundTask = [this]() {
+        beginBackgroundTask();
+    };
+    externalEditCallbacks.finishBackgroundTask = [this]() {
+        finishBackgroundTask();
+    };
+    externalEditCallbacks.showWarning = [this](const QString &title, const QString &message) {
+        showWarningMessage(title, message);
+    };
+    externalEditCallbacks.stateChanged = [this](const QString &sessionId, const QString &remotePath, ExternalEditState state) {
+        appendLog("INFO", QString("远程编辑状态：[%1] %2 — %3")
+            .arg(sessionId, remotePath, externalEditStateLabel(state)));
+    };
+    externalEditCallbacks.remoteFileSynchronized = [this](const QString &sessionId, const QString &) {
+        RemoteSession *session = remoteSessionById(sessionId.toStdString());
+        if (session != nullptr && session->connected && !session->currentPath.isEmpty())
+        {
+            loadRemotePath(*session, session->currentPath, false);
+        }
+    };
+    const QString editorCacheRoot = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    m_externalEditManager = std::make_unique<ExternalEditManager>(
+        std::filesystem::path((editorCacheRoot.isEmpty() ? QDir::homePath() : editorCacheRoot).toStdWString()) / "editor-cache",
+        std::move(externalEditCallbacks),
+        this);
     setupMenuBar();
     setupToolBar();
     setupQuickConnectBar();
@@ -540,6 +611,78 @@ MainWindow::MainWindow(const DependencyCheckResult &dependencyCheck, QWidget *pa
         && dependencyCheck.loggingReady
         && dependencyCheck.siteStoreReady;
     statusBar()->showMessage(startupReady ? "就绪" : "启动检查发现异常，请查看日志。");
+}
+
+MainWindow::~MainWindow() = default;
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    if (m_closeReady)
+    {
+        event->accept();
+        return;
+    }
+
+    if (!m_closePending)
+    {
+        m_closePending = true;
+        setEnabled(false);
+        cancelActiveTransfersForClose();
+        statusBar()->showMessage("正在停止后台任务后退出…");
+    }
+
+    if (m_activeBackgroundTaskCount > 0)
+    {
+        event->ignore();
+        return;
+    }
+
+    m_closeReady = true;
+    event->accept();
+}
+
+void MainWindow::beginBackgroundTask()
+{
+    ++m_activeBackgroundTaskCount;
+}
+
+void MainWindow::finishBackgroundTask()
+{
+    if (m_activeBackgroundTaskCount <= 0)
+    {
+        return;
+    }
+
+    --m_activeBackgroundTaskCount;
+    if (m_closePending && m_activeBackgroundTaskCount == 0)
+    {
+        QTimer::singleShot(0, this, [this]() {
+            close();
+        });
+    }
+}
+
+void MainWindow::cancelActiveTransfersForClose()
+{
+    for (const auto &[jobId, cancelFlag] : m_transferCancelFlags)
+    {
+        Q_UNUSED(jobId);
+        if (cancelFlag != nullptr)
+        {
+            cancelFlag->store(true);
+        }
+    }
+
+    for (const TransferJob &job : m_transferQueue.jobs())
+    {
+        if (job.status == TransferStatus::Preparing
+            || job.status == TransferStatus::Pending
+            || job.status == TransferStatus::Running)
+        {
+            m_transferQueue.cancel(job.id, "应用正在退出");
+        }
+    }
+    refreshTransferTable();
 }
 
 void MainWindow::setRemoteFileSystemForTesting(std::unique_ptr<RemoteFileSystem> remoteFileSystem)
@@ -639,6 +782,23 @@ void MainWindow::setLocalPathForTesting(const QString &path)
     if (m_localPanel != nullptr)
     {
         m_localPanel->setLocalPathForTesting(path);
+    }
+}
+
+void MainWindow::editRemoteFileForTesting(const QString &remotePath)
+{
+    RemoteSession *session = currentRemoteSession();
+    if (session != nullptr && m_externalEditManager != nullptr)
+    {
+        m_externalEditManager->openRemoteFile(session->id, remotePath);
+    }
+}
+
+void MainWindow::setExternalEditorLauncherForTesting(std::function<bool(const QString &)> launcher)
+{
+    if (m_externalEditManager != nullptr)
+    {
+        m_externalEditManager->setExternalFileLauncher(std::move(launcher));
     }
 }
 

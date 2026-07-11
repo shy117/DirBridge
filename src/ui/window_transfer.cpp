@@ -31,6 +31,11 @@ using namespace window_shared;
  */
 void MainWindow::enqueueTransferJob(const TransferJob &job)
 {
+    if (m_closePending)
+    {
+        return;
+    }
+
     m_transferQueue.enqueue(job);
     refreshTransferTable();
 }
@@ -196,6 +201,12 @@ void MainWindow::updateDirectoryTransferParents()
  */
 void MainWindow::processTransferQueue()
 {
+    if (m_closePending)
+    {
+        refreshTransferTable();
+        return;
+    }
+
     if (m_transferWorkerRunning)
     {
         return;
@@ -232,7 +243,7 @@ void MainWindow::processTransferQueue()
     m_transferWorkerRunning = true;
     refreshTransferTable();
 
-    RemoteFileSystem *fileSystem = session->fileSystem.get();
+    const std::shared_ptr<RemoteFileSystem> fileSystem = session->fileSystem;
     QPointer<MainWindow> window(this);
     QThread *thread = QThread::create([window, fileSystem, jobSnapshot, cancelFlag]() {
         auto lastProgressAt = std::chrono::steady_clock::now() - std::chrono::milliseconds(250);
@@ -287,6 +298,10 @@ void MainWindow::processTransferQueue()
         }
     });
     m_transferThread = thread;
+    beginBackgroundTask();
+    connect(thread, &QThread::finished, this, [this]() {
+        finishBackgroundTask();
+    });
     connect(thread, &QThread::finished, thread, &QObject::deleteLater);
     thread->start();
 }
@@ -878,7 +893,7 @@ void MainWindow::startSingleFileUploadPreparation(RemoteSession &session, const 
         return;
     }
 
-    RemoteFileSystem *fileSystem = session.fileSystem.get();
+    const std::shared_ptr<RemoteFileSystem> fileSystem = session.fileSystem;
     const QString remotePath = QString::fromStdString(job->remotePath);
     QPointer<MainWindow> window(this);
     QThread *thread = QThread::create([window, fileSystem, jobId, remotePath]() {
@@ -916,6 +931,10 @@ void MainWindow::startSingleFileUploadPreparation(RemoteSession &session, const 
                 }
             }, Qt::QueuedConnection);
         }
+    });
+    beginBackgroundTask();
+    connect(thread, &QThread::finished, this, [this]() {
+        finishBackgroundTask();
     });
     connect(thread, &QThread::finished, thread, &QObject::deleteLater);
     thread->start();
@@ -990,7 +1009,7 @@ void MainWindow::finishSingleFileUploadPreparation(const QString &jobId, bool ex
         return;
     }
 
-    RemoteFileSystem *fileSystem = session->fileSystem.get();
+    const std::shared_ptr<RemoteFileSystem> fileSystem = session->fileSystem;
     const std::string jobIdString = job->id;
     QPointer<MainWindow> window(this);
     QThread *thread = QThread::create([window, fileSystem, jobIdString, remotePath]() {
@@ -1046,6 +1065,10 @@ void MainWindow::finishSingleFileUploadPreparation(const QString &jobId, bool ex
                 window->processTransferQueue();
             }, Qt::QueuedConnection);
         }
+    });
+    beginBackgroundTask();
+    connect(thread, &QThread::finished, this, [this]() {
+        finishBackgroundTask();
     });
     connect(thread, &QThread::finished, thread, &QObject::deleteLater);
     thread->start();
@@ -1122,7 +1145,7 @@ void MainWindow::startLocalDirectoryUploadPreparation(RemoteSession &session, co
         return;
     }
 
-    RemoteFileSystem *fileSystem = session.fileSystem.get();
+    const std::shared_ptr<RemoteFileSystem> fileSystem = session.fileSystem;
     const QString sessionId = session.id;
     const QString sessionName = session.displayName;
     QPointer<MainWindow> window(this);
@@ -1210,6 +1233,10 @@ void MainWindow::startLocalDirectoryUploadPreparation(RemoteSession &session, co
                 }
             }, Qt::QueuedConnection);
         }
+    });
+    beginBackgroundTask();
+    connect(thread, &QThread::finished, this, [this]() {
+        finishBackgroundTask();
     });
     connect(thread, &QThread::finished, thread, &QObject::deleteLater);
     thread->start();
@@ -1456,7 +1483,7 @@ void MainWindow::startRemoteDirectoryDownloadPreparation(RemoteSession &session,
         return;
     }
 
-    RemoteFileSystem *fileSystem = session.fileSystem.get();
+    const std::shared_ptr<RemoteFileSystem> fileSystem = session.fileSystem;
     const QString sessionId = session.id;
     const QString sessionName = session.displayName;
     QPointer<MainWindow> window(this);
@@ -1532,6 +1559,10 @@ void MainWindow::startRemoteDirectoryDownloadPreparation(RemoteSession &session,
             }, Qt::QueuedConnection);
         }
     });
+    beginBackgroundTask();
+    connect(thread, &QThread::finished, this, [this]() {
+        finishBackgroundTask();
+    });
     connect(thread, &QThread::finished, thread, &QObject::deleteLater);
     thread->start();
 }
@@ -1544,7 +1575,8 @@ void MainWindow::startRemoteDirectoryDownloadPreparation(RemoteSession &session,
  */
 void MainWindow::handlePreparedDirectoryTransfer(const QString &parentJobId, const std::vector<TransferJob> &jobs, const QString &errorMessage)
 {
-    TransferJob *parent = m_transferQueue.find(parentJobId.toStdString());
+    const std::string parentJobIdString = parentJobId.toStdString();
+    TransferJob *parent = m_transferQueue.find(parentJobIdString);
     if (parent == nullptr
         || parent->status == TransferStatus::Canceled
         || parent->status == TransferStatus::Canceling)
@@ -1567,6 +1599,12 @@ void MainWindow::handlePreparedDirectoryTransfer(const QString &parentJobId, con
         m_transferQueue.enqueue(job);
     }
 
+    parent = m_transferQueue.find(parentJobIdString);
+    if (parent == nullptr)
+    {
+        refreshTransferTable();
+        return;
+    }
     parent->status = jobs.empty() ? TransferStatus::Completed : TransferStatus::Pending;
     parent->errorMessage = jobs.empty() ? "0 / 0 个文件" : std::string();
     refreshTransferTable();
@@ -1651,7 +1689,5 @@ bool MainWindow::enqueueRemoteDirectoryDownload(RemoteSession &session, const QS
 
     return true;
 }
-
-
 
 

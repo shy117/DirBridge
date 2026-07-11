@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <atomic>
+#include <functional>
 #include <map>
 #include <set>
 #include <vector>
@@ -24,11 +25,13 @@ class QFileInfo;
 class QLineEdit;
 class QPushButton;
 class QAction;
+class QCloseEvent;
 class QSplitter;
 class QTabWidget;
 class QThread;
 class QTreeWidget;
 class QTreeWidgetItem;
+class ExternalEditManager;
 class FilePanel;
 
 class MainWindow : public QMainWindow
@@ -40,6 +43,7 @@ public:
      * @param parent 可选的 Qt 父部件。
      */
     explicit MainWindow(const DependencyCheckResult &dependencyCheck, QWidget *parent = nullptr);
+    ~MainWindow() override;
 
     /**
      * @brief 为自动化 UI 测试替换远程文件系统后端。
@@ -70,6 +74,18 @@ public:
      * @param remotePath 要下载到当前本地目录的远程文件或目录路径。
      */
     void downloadRemotePathForTesting(const QString &remotePath);
+
+    /**
+     * @brief 为自动化 UI 测试触发远程文件外部编辑流程。
+     * @param remotePath 当前会话中的远程文件绝对路径。
+     */
+    void editRemoteFileForTesting(const QString &remotePath);
+
+    /**
+     * @brief 为自动化 UI 测试替换外部编辑器启动行为。
+     * @param launcher 接收缓存文件路径并返回是否成功打开的回调。
+     */
+    void setExternalEditorLauncherForTesting(std::function<bool(const QString &)> launcher);
 
     /**
      * @brief 为自动化 UI 清理触发标准的远程删除流程。
@@ -117,6 +133,9 @@ public:
      */
     bool renameSiteGroupForTesting(const QString &oldGroup, const QString &newGroup);
 
+protected:
+    void closeEvent(QCloseEvent *event) override;
+
 private:
     struct RemoteConnectionResult;
 
@@ -124,7 +143,7 @@ private:
     {
         QString id;
         SiteProfile profile;
-        std::unique_ptr<RemoteFileSystem> fileSystem;
+        std::shared_ptr<RemoteFileSystem> fileSystem;
         FilePanel *panel = nullptr;
         QString currentPath;
         bool connected = false;
@@ -152,6 +171,9 @@ private:
     void closeRemoteTab(int index);
     void showRemoteTabContextMenu(const QPoint &position);
     void appendLog(const QString &level, const QString &message);
+    void beginBackgroundTask();
+    void finishBackgroundTask();
+    void cancelActiveTransfersForClose();
 
     /**
      * @brief 根据自动化测试的对话框设置显示或记录警告消息。
@@ -292,9 +314,13 @@ private:
     std::vector<SiteProfile> m_sites;
     UserSettings m_settings;
     std::unique_ptr<RemoteFileSystem> m_testingRemoteFileSystem;
+    std::unique_ptr<ExternalEditManager> m_externalEditManager;
     bool m_dialogsSuppressedForTesting = false;
     std::vector<std::unique_ptr<RemoteSession>> m_remoteSessions;
     TransferQueue m_transferQueue;
+    int m_activeBackgroundTaskCount = 0;
+    bool m_closePending = false;
+    bool m_closeReady = false;
     bool m_transferWorkerRunning = false;
     QString m_runningTransferJobId;
     QThread *m_transferThread = nullptr;

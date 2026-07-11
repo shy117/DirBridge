@@ -1,5 +1,7 @@
 #include "ui/MainWindow.h"
 
+#include "ui/ExternalEditManager.h"
+
 #include "logging/AppLogger.h"
 #include "ui/FilePanel.h"
 #include "ui/window_shared.h"
@@ -14,6 +16,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QUuid>
 #include <QStatusBar>
 #include <QTabBar>
 #include <QTabWidget>
@@ -277,6 +280,10 @@ void MainWindow::closeRemoteTab(int index)
             showWarningMessage("无法关闭会话", "当前远程会话仍有传输任务正在运行，请等待完成或先取消传输。");
             return;
         }
+        if (m_externalEditManager != nullptr)
+        {
+            m_externalEditManager->closeSessionDocuments(session->id);
+        }
         if (session->fileSystem != nullptr && session->connected)
         {
             session->fileSystem->disconnect();
@@ -364,9 +371,10 @@ MainWindow::RemoteSession *MainWindow::createRemoteSession(const SiteProfile &pr
     }
 
     auto session = std::make_unique<RemoteSession>();
-    session->id = QString("%1-%2").arg(QString::fromStdString(profile.id)).arg(m_remoteSessions.size() + 1);
+    session->id = QString("%1-%2")
+        .arg(QString::fromStdString(profile.id), QUuid::createUuid().toString(QUuid::WithoutBraces));
     session->profile = profile;
-    session->fileSystem = std::move(fileSystem);
+    session->fileSystem = std::shared_ptr<RemoteFileSystem>(std::move(fileSystem));
     session->connectionCanceled = std::make_shared<std::atomic_bool>(false);
     session->displayName = siteDisplayName(profile);
     session->panel = new FilePanel(FilePanel::Mode::RemotePlaceholder, m_remoteTabs);
@@ -400,6 +408,22 @@ MainWindow::RemoteSession *MainWindow::createRemoteSession(const SiteProfile &pr
             return;
         }
         downloadRemoteFile(*sessionPtr, remotePath);
+    });
+    sessionPtr->panel->setRemoteEditRequestedHandler([this, sessionPtr](const QString &remotePath) {
+        if (m_externalEditManager != nullptr)
+        {
+            m_externalEditManager->openRemoteFile(sessionPtr->id, remotePath);
+        }
+    });
+    sessionPtr->panel->setRemoteEditActiveQuery([this, sessionPtr](const QString &remotePath) {
+        return m_externalEditManager != nullptr
+            && m_externalEditManager->isDocumentOpen(sessionPtr->id, remotePath);
+    });
+    sessionPtr->panel->setRemoteEditCloseRequestedHandler([this, sessionPtr](const QString &remotePath) {
+        if (m_externalEditManager != nullptr)
+        {
+            m_externalEditManager->closeDocument(sessionPtr->id, remotePath);
+        }
     });
     sessionPtr->panel->setLocalFilesDroppedOnRemoteHandler([this, sessionPtr](const QStringList &localPaths) {
         for (const QString &localPath : localPaths)

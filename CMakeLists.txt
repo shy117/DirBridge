@@ -1,9 +1,11 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(DirBridge
-    VERSION 0.5.9
+    VERSION 0.6.0
     LANGUAGES CXX
 )
+
+include(CTest)
 
 set(DIRBRIDGE_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 configure_file(
@@ -72,6 +74,10 @@ add_library(DirBridgeCore STATIC
     src/core/DependencyCheck.h
     src/core/FakeRemoteFileSystem.cpp
     src/core/FakeRemoteFileSystem.h
+    src/core/ExternalEditDocument.cpp
+    src/core/ExternalEditDocument.h
+    src/core/FileCache.cpp
+    src/core/FileCache.h
     src/core/FileItem.cpp
     src/core/FileItem.h
     src/core/RemoteFileSystem.h
@@ -128,6 +134,10 @@ add_executable(DirBridge
     src/app/UiSmokeTests.h
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
+    src/ui/FileChangeMonitor.cpp
+    src/ui/FileChangeMonitor.h
+    src/ui/ExternalEditManager.cpp
+    src/ui/ExternalEditManager.h
     src/ui/window_layout.cpp
     src/ui/window_remote.cpp
     src/ui/window_session.cpp
@@ -183,6 +193,10 @@ target_include_directories(DirBridgeCoreChecks
 add_executable(DirBridgeRemoteCheck
     tests/integration/RemoteCheck.cpp
 )
+
+if(BUILD_TESTING)
+    add_test(NAME DirBridgeCoreChecks COMMAND DirBridgeCoreChecks)
+endif()
 
 target_link_libraries(DirBridgeRemoteCheck
     PRIVATE

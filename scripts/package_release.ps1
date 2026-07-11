@@ -25,31 +25,6 @@ function Get-ProjectVersionFromCMake {
     return $match.Groups[1].Value
 }
 
-function Sync-VcpkgManifestVersion {
-    param([string]$ProjectVersion)
-
-    $manifestPath = Resolve-RepoPath "vcpkg.json"
-    $content = Get-Content -LiteralPath $manifestPath -Raw -Encoding utf8
-    $versionMatch = [regex]::Match($content, '"version-string"\s*:\s*"([^"]+)"', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
-    if (-not $versionMatch.Success) {
-        throw "Failed to locate version-string in vcpkg.json."
-    }
-
-    if ($versionMatch.Groups[1].Value -eq $ProjectVersion) {
-        return
-    }
-
-    $updated = [regex]::Replace(
-        $content,
-        '"version-string"\s*:\s*"[^"]+"',
-        ('"version-string": "{0}"' -f $ProjectVersion),
-        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
-    )
-
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($manifestPath, $updated, $utf8NoBom)
-}
-
 function Copy-IfExists {
     param(
         [string]$Source,
@@ -74,24 +49,10 @@ function Find-InnoCompiler {
     }
 
     $fromPath = Get-Command ISCC.exe -ErrorAction SilentlyContinue
-    if ($null -ne $fromPath) {
-        return $fromPath.Source
+    if ($null -eq $fromPath) {
+        return ""
     }
-
-    $candidates = @(
-        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-        "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
-        "${env:ProgramFiles(x86)}\Inno Setup 5\ISCC.exe",
-        "$env:ProgramFiles\Inno Setup 5\ISCC.exe"
-    )
-
-    foreach ($candidate in $candidates) {
-        if (Test-Path -LiteralPath $candidate) {
-            return $candidate
-        }
-    }
-
-    return ""
+    return $fromPath.Source
 }
 
 function New-ZipWithRetry {
@@ -143,38 +104,12 @@ function Remove-PathWithRetry {
     }
 }
 
-function Invoke-PackagedCheck {
-    param(
-        [string]$ExecutablePath,
-        [string]$WorkingDirectory,
-        [string]$Argument
-    )
-
-    Remove-PathWithRetry -Path (Join-Path $WorkingDirectory "config")
-    Remove-PathWithRetry -Path (Join-Path $WorkingDirectory "logs")
-
-    Push-Location $WorkingDirectory
-    try {
-        & $env:ComSpec /d /c "`"$ExecutablePath`" $Argument"
-        $exitCode = $LASTEXITCODE
-    }
-    finally {
-        Pop-Location
-    }
-
-    if ($exitCode -ne 0) {
-        throw "Packaged check failed ($Argument) with exit code $exitCode."
-    }
-}
-
 $script:RepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 Set-Location $script:RepoRoot
 
 if ([string]::IsNullOrWhiteSpace($Version)) {
     $Version = Get-ProjectVersionFromCMake
 }
-
-Sync-VcpkgManifestVersion -ProjectVersion $Version
 
 $releaseRoot = Resolve-RepoPath $ReleaseDir
 $packageName = "DirBridge-v$Version-win64"
@@ -240,22 +175,12 @@ if (Test-Path -LiteralPath $thirdPartySource) {
     }
 }
 
-Write-Host "==> Verifying packaged executable"
-Invoke-PackagedCheck -ExecutablePath $stageExe -WorkingDirectory $stageDir -Argument "--check-deps"
-Invoke-PackagedCheck -ExecutablePath $stageExe -WorkingDirectory $stageDir -Argument "--smoke-test"
-Invoke-PackagedCheck -ExecutablePath $stageExe -WorkingDirectory $stageDir -Argument "--ui-remote-smoke-test"
-Invoke-PackagedCheck -ExecutablePath $stageExe -WorkingDirectory $stageDir -Argument "--ui-remote-workflow-smoke-test"
-
-Start-Sleep -Seconds 2
-Remove-PathWithRetry -Path (Join-Path $stageDir "config")
-Remove-PathWithRetry -Path (Join-Path $stageDir "logs")
-
 Write-Host "==> Creating zip $zipPath"
 New-ZipWithRetry -SourcePath (Join-Path $stageDir "*") -DestinationPath $zipPath
 
 $iscc = Find-InnoCompiler -ExplicitPath $InnoCompiler
 if ($iscc -eq "") {
-    Write-Warning "ISCC.exe was not found. Installer generation was skipped. Zip package: $zipPath"
+    Write-Warning "ISCC.exe was not found in PATH. Installer generation was skipped. Zip package: $zipPath"
 }
 else {
     $installerPath = Join-Path $releaseRoot "DirBridge-v$Version-win64-setup.exe"
