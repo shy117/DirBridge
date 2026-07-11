@@ -1,6 +1,7 @@
 #include "app/UiSmokeTests.h"
 
 #include "config/SiteProfile.h"
+#include "core/DependencyCheck.h"
 #include "core/FakeRemoteFileSystem.h"
 #include "protocol/CurlRemoteFileSystem.h"
 #include "ui/MainWindow.h"
@@ -16,6 +17,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QProgressBar>
+#include <QPointer>
 #include <QPushButton>
 #include <QStatusBar>
 #include <QStringList>
@@ -988,6 +990,83 @@ bool checkRemoteConnectionControlWorkflow(MainWindow &window)
 }
 
 /**
+ * @brief 验证窗口关闭会等待使用远程后端的准备任务安全结束。
+ * @return 关闭请求不会提前销毁仍有后台任务的主窗口时返回 true。
+ */
+bool checkWindowCloseDuringUploadPreparation()
+{
+    auto *window = new MainWindow(DependencyCheckResult{});
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->setDialogsSuppressedForTesting(true);
+    window->setRemoteFileSystemForTesting(std::make_unique<SlowFakeRemoteFileSystem>());
+
+    QComboBox *protocolCombo = window->findChild<QComboBox *>("quickProtocolCombo");
+    QLineEdit *hostEdit = window->findChild<QLineEdit *>("quickHostEdit");
+    QLineEdit *portEdit = window->findChild<QLineEdit *>("quickPortEdit");
+    QLineEdit *userEdit = window->findChild<QLineEdit *>("quickUserEdit");
+    QLineEdit *remotePathEdit = window->findChild<QLineEdit *>("quickRemotePathEdit");
+    QPushButton *connectButton = window->findChild<QPushButton *>("quickConnectButton");
+    QTabWidget *remoteTabs = window->findChild<QTabWidget *>("remoteTabs");
+    if (protocolCombo == nullptr || hostEdit == nullptr || portEdit == nullptr || userEdit == nullptr
+        || remotePathEdit == nullptr || connectButton == nullptr || remoteTabs == nullptr)
+    {
+        delete window;
+        QTextStream(stderr) << "Close-lifecycle smoke prerequisites are incomplete" << Qt::endl;
+        return false;
+    }
+
+    protocolCombo->setCurrentText("SFTP");
+    hostEdit->setText("close-lifecycle-host");
+    portEdit->setText("22");
+    userEdit->setText("testuser");
+    remotePathEdit->setText("/home/testuser/remote_test");
+    connectButton->click();
+    if (!waitForRemoteConnected(remoteTabs->currentWidget(), "/home/testuser/remote_test"))
+    {
+        delete window;
+        QTextStream(stderr) << "Close-lifecycle smoke could not connect fake remote session" << Qt::endl;
+        return false;
+    }
+
+    const std::filesystem::path tempRoot = std::filesystem::temp_directory_path() / "dirbridge-close-lifecycle-smoke";
+    const std::filesystem::path localFile = tempRoot / "upload.txt";
+    std::filesystem::create_directories(tempRoot);
+    {
+        std::ofstream output(localFile, std::ios::binary | std::ios::trunc);
+        output << "close lifecycle smoke";
+    }
+
+    window->uploadLocalFileForTesting(QString::fromStdString(localFile.string()));
+    QApplication::processEvents();
+
+    QPointer<MainWindow> guardedWindow(window);
+    window->close();
+    QApplication::processEvents();
+    if (guardedWindow == nullptr)
+    {
+        std::filesystem::remove_all(tempRoot);
+        QTextStream(stderr) << "Window closed before upload preparation completed" << Qt::endl;
+        return false;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (guardedWindow != nullptr && std::chrono::steady_clock::now() < deadline)
+    {
+        QApplication::processEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    std::filesystem::remove_all(tempRoot);
+    if (guardedWindow != nullptr)
+    {
+        delete guardedWindow.data();
+        QTextStream(stderr) << "Window did not finish close-lifecycle coordination" << Qt::endl;
+        return false;
+    }
+
+    return true;
+}
+
+/**
  * @brief 验证 v0.5.0 会话管理器的分组和最近会话行为。
  * @param window 待测试的主窗口。
  * @return 已保存站点、分组和最近会话能在假远程标签页下正常工作时返回 true。
@@ -1323,7 +1402,8 @@ bool checkRemoteUiWorkflow(MainWindow &window)
         && checkRemoteConnectionControlWorkflow(window)
         && checkSessionManagerWorkflow(window)
         && checkRemoteMultiSessionWorkflow(window)
-        && checkRemoteDirectoryOperationWorkflow(window);
+        && checkRemoteDirectoryOperationWorkflow(window)
+        && checkWindowCloseDuringUploadPreparation();
 }
 
 /**
@@ -1585,4 +1665,3 @@ bool checkLiveRemoteTransferWorkflow(MainWindow &window)
 
     return true;
 }
-

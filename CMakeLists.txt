@@ -1,9 +1,11 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(DirBridge
-    VERSION 0.5.9
+    VERSION 0.5.10
     LANGUAGES CXX
 )
+
+include(CTest)
 
 set(DIRBRIDGE_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 configure_file(
@@ -183,6 +185,10 @@ target_include_directories(DirBridgeCoreChecks
 add_executable(DirBridgeRemoteCheck
     tests/integration/RemoteCheck.cpp
 )
+
+if(BUILD_TESTING)
+    add_test(NAME DirBridgeCoreChecks COMMAND DirBridgeCoreChecks)
+endif()
 
 target_link_libraries(DirBridgeRemoteCheck
     PRIVATE

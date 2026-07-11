@@ -33,7 +33,7 @@ struct MainWindow::RemoteConnectionResult
     QString detail;
     QStringList knownDirectories;
     std::vector<FileItem> items;
-    std::unique_ptr<RemoteFileSystem> fileSystem;
+    std::shared_ptr<RemoteFileSystem> fileSystem;
     bool canceled = false;
     bool connected = false;
     bool loaded = false;
@@ -130,6 +130,11 @@ void MainWindow::connectQuickProfile(bool saveProfile)
  */
 void MainWindow::showRemoteProfile(const SiteProfile &profile, const QString &initialRemotePath)
 {
+    if (m_closePending)
+    {
+        return;
+    }
+
     if (hasConnectingRemoteSession())
     {
         const QString message = "已有远程连接正在进行，请等待完成或先取消当前连接。";
@@ -186,7 +191,7 @@ void MainWindow::startRemoteConnection(RemoteSession &session)
     const QString sessionId = session.id;
     const SiteProfile profile = session.profile;
     const QString defaultRemotePath = QString::fromStdString(profile.defaultRemotePath.empty() ? "/" : profile.defaultRemotePath);
-    std::unique_ptr<RemoteFileSystem> fileSystem = std::move(session.fileSystem);
+    const std::shared_ptr<RemoteFileSystem> fileSystem = session.fileSystem;
 
     session.panel->setRemoteConnecting(QString("正在连接：%1").arg(siteDisplayName(profile)));
     if (m_remoteTabs != nullptr && session.panel != nullptr)
@@ -200,11 +205,12 @@ void MainWindow::startRemoteConnection(RemoteSession &session)
 
     const std::shared_ptr<std::atomic_bool> canceled = session.connectionCanceled;
     QPointer<MainWindow> window(this);
-    std::thread([window, sessionId, profile, defaultRemotePath, canceled, fileSystem = std::move(fileSystem)]() mutable {
+    beginBackgroundTask();
+    std::thread([window, sessionId, profile, defaultRemotePath, canceled, fileSystem]() {
         auto result = std::make_shared<RemoteConnectionResult>();
         result->profile = profile;
         result->requestedPath = defaultRemotePath;
-        result->fileSystem = std::move(fileSystem);
+        result->fileSystem = fileSystem;
 
         if (canceled->load())
         {
@@ -298,6 +304,7 @@ void MainWindow::startRemoteConnection(RemoteSession &session)
  */
 void MainWindow::finishRemoteConnection(const QString &sessionId, const std::shared_ptr<RemoteConnectionResult> &result)
 {
+    finishBackgroundTask();
     RemoteSession *session = remoteSessionById(sessionId.toStdString());
     if (session == nullptr || result == nullptr)
     {
@@ -325,7 +332,7 @@ void MainWindow::finishRemoteConnection(const QString &sessionId, const std::sha
         return;
     }
 
-    session->fileSystem = std::move(result->fileSystem);
+    session->fileSystem = result->fileSystem;
     session->connected = true;
     session->currentPath = result->requestedPath;
     session->panel->setRemoteKnownDirectories(result->knownDirectories);
@@ -382,8 +389,8 @@ void MainWindow::reconnectRemoteSession(RemoteSession &session)
     }
 
     session.fileSystem = m_testingRemoteFileSystem != nullptr
-        ? std::move(m_testingRemoteFileSystem)
-        : std::make_unique<CurlRemoteFileSystem>();
+        ? std::shared_ptr<RemoteFileSystem>(std::move(m_testingRemoteFileSystem))
+        : std::make_shared<CurlRemoteFileSystem>();
     session.currentPath.clear();
     session.connected = false;
     appendLog("INFO", QString("正在重连远程会话：%1").arg(session.displayName));
@@ -639,7 +646,7 @@ void MainWindow::removeRemotePath(RemoteSession &session, const QString &path)
     }
 
     m_pendingRemoteDeletes.insert(deleteKey);
-    RemoteFileSystem *fileSystem = session.fileSystem.get();
+    const std::shared_ptr<RemoteFileSystem> fileSystem = session.fileSystem;
     const QString sessionId = session.id;
     QPointer<MainWindow> window(this);
     QThread *thread = QThread::create([window, fileSystem, sessionId, path]() {
@@ -686,6 +693,10 @@ void MainWindow::removeRemotePath(RemoteSession &session, const QString &path)
                 }
             }, Qt::QueuedConnection);
         }
+    });
+    beginBackgroundTask();
+    connect(thread, &QThread::finished, this, [this]() {
+        finishBackgroundTask();
     });
     connect(thread, &QThread::finished, thread, &QObject::deleteLater);
     thread->start();
@@ -893,7 +904,6 @@ void MainWindow::finishRemoteRemove(const QString &sessionId, const QString &pat
     appendLog("INFO", QString("远程项目已删除：%1").arg(path));
     loadRemotePath(*session, session->currentPath, false);
 }
-
 
 
 

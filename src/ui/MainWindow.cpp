@@ -21,6 +21,7 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QComboBox>
+#include <QCloseEvent>
 #include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -49,6 +50,7 @@
 #include <QTabWidget>
 #include <QTabBar>
 #include <QThread>
+#include <QTimer>
 #include <QToolBar>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -540,6 +542,76 @@ MainWindow::MainWindow(const DependencyCheckResult &dependencyCheck, QWidget *pa
         && dependencyCheck.loggingReady
         && dependencyCheck.siteStoreReady;
     statusBar()->showMessage(startupReady ? "就绪" : "启动检查发现异常，请查看日志。");
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    if (m_closeReady)
+    {
+        event->accept();
+        return;
+    }
+
+    if (!m_closePending)
+    {
+        m_closePending = true;
+        setEnabled(false);
+        cancelActiveTransfersForClose();
+        statusBar()->showMessage("正在停止后台任务后退出…");
+    }
+
+    if (m_activeBackgroundTaskCount > 0)
+    {
+        event->ignore();
+        return;
+    }
+
+    m_closeReady = true;
+    event->accept();
+}
+
+void MainWindow::beginBackgroundTask()
+{
+    ++m_activeBackgroundTaskCount;
+}
+
+void MainWindow::finishBackgroundTask()
+{
+    if (m_activeBackgroundTaskCount <= 0)
+    {
+        return;
+    }
+
+    --m_activeBackgroundTaskCount;
+    if (m_closePending && m_activeBackgroundTaskCount == 0)
+    {
+        QTimer::singleShot(0, this, [this]() {
+            close();
+        });
+    }
+}
+
+void MainWindow::cancelActiveTransfersForClose()
+{
+    for (const auto &[jobId, cancelFlag] : m_transferCancelFlags)
+    {
+        Q_UNUSED(jobId);
+        if (cancelFlag != nullptr)
+        {
+            cancelFlag->store(true);
+        }
+    }
+
+    for (const TransferJob &job : m_transferQueue.jobs())
+    {
+        if (job.status == TransferStatus::Preparing
+            || job.status == TransferStatus::Pending
+            || job.status == TransferStatus::Running)
+        {
+            m_transferQueue.cancel(job.id, "应用正在退出");
+        }
+    }
+    refreshTransferTable();
 }
 
 void MainWindow::setRemoteFileSystemForTesting(std::unique_ptr<RemoteFileSystem> remoteFileSystem)

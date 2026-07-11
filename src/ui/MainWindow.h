@@ -24,6 +24,7 @@ class QFileInfo;
 class QLineEdit;
 class QPushButton;
 class QAction;
+class QCloseEvent;
 class QSplitter;
 class QTabWidget;
 class QThread;
@@ -117,6 +118,9 @@ public:
      */
     bool renameSiteGroupForTesting(const QString &oldGroup, const QString &newGroup);
 
+protected:
+    void closeEvent(QCloseEvent *event) override;
+
 private:
     struct RemoteConnectionResult;
 
@@ -124,7 +128,7 @@ private:
     {
         QString id;
         SiteProfile profile;
-        std::unique_ptr<RemoteFileSystem> fileSystem;
+        std::shared_ptr<RemoteFileSystem> fileSystem;
         FilePanel *panel = nullptr;
         QString currentPath;
         bool connected = false;
@@ -152,6 +156,9 @@ private:
     void closeRemoteTab(int index);
     void showRemoteTabContextMenu(const QPoint &position);
     void appendLog(const QString &level, const QString &message);
+    void beginBackgroundTask();
+    void finishBackgroundTask();
+    void cancelActiveTransfersForClose();
 
     /**
      * @brief 根据自动化测试的对话框设置显示或记录警告消息。
@@ -295,6 +302,9 @@ private:
     bool m_dialogsSuppressedForTesting = false;
     std::vector<std::unique_ptr<RemoteSession>> m_remoteSessions;
     TransferQueue m_transferQueue;
+    int m_activeBackgroundTaskCount = 0;
+    bool m_closePending = false;
+    bool m_closeReady = false;
     bool m_transferWorkerRunning = false;
     QString m_runningTransferJobId;
     QThread *m_transferThread = nullptr;

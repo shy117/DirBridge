@@ -366,7 +366,7 @@ MainWindow::RemoteSession *MainWindow::createRemoteSession(const SiteProfile &pr
     auto session = std::make_unique<RemoteSession>();
     session->id = QString("%1-%2").arg(QString::fromStdString(profile.id)).arg(m_remoteSessions.size() + 1);
     session->profile = profile;
-    session->fileSystem = std::move(fileSystem);
+    session->fileSystem = std::shared_ptr<RemoteFileSystem>(std::move(fileSystem));
     session->connectionCanceled = std::make_shared<std::atomic_bool>(false);
     session->displayName = siteDisplayName(profile);
     session->panel = new FilePanel(FilePanel::Mode::RemotePlaceholder, m_remoteTabs);
