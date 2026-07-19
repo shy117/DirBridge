@@ -16,6 +16,11 @@ third_party/
 
 # Local agent collaboration rules
 AGENTS.md
+/.codex/
+
+# Local Graphify temporary ignore file and generated output
+/.graphifyignore
+/graphify-out/
 
 # Windows runtime noise
 *.log

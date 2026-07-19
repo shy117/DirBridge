@@ -1,0 +1,28 @@
+# Generated build and dependency directories
+/build/
+/out/
+/third_party/
+
+# Runtime data and local-only configuration
+/logs/
+/config/
+CMakeUserPresets.json
+*.log
+*.tmp
+
+# Documentation and media are searched directly, not through Graphify
+*.md
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+
+# Non-C++ project tooling and configuration
+*.ps1
+*.py
+*.json
+
+# Graphify's own output
+/graphify-out/
