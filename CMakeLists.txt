@@ -7,6 +7,12 @@ project(DirBridge
 
 include(CTest)
 
+option(
+    DIRBRIDGE_BUILD_SSH_TERMINAL_PROTOTYPE
+    "Build the Windows ConPTY lifecycle validation prototype."
+    OFF
+)
+
 set(DIRBRIDGE_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 configure_file(
     src/app/AppVersion.h.in
@@ -193,6 +199,52 @@ target_include_directories(DirBridgeCoreChecks
 add_executable(DirBridgeRemoteCheck
     tests/integration/RemoteCheck.cpp
 )
+
+if(DIRBRIDGE_BUILD_SSH_TERMINAL_PROTOTYPE)
+    if(NOT WIN32)
+        message(FATAL_ERROR "DIRBRIDGE_BUILD_SSH_TERMINAL_PROTOTYPE is only supported on Windows.")
+    endif()
+
+    add_executable(DirBridgeConPtyTestChild
+        tests/terminal/ConPtyTestChild.cpp
+        tests/terminal/ConPtyTestProtocol.h
+    )
+
+    add_executable(DirBridgeConPtyChecks
+        tests/terminal/ConPtyChecks.cpp
+        tests/terminal/ConPtyTestProtocol.h
+    )
+
+    set_target_properties(
+        DirBridgeConPtyTestChild
+        DirBridgeConPtyChecks
+        PROPERTIES
+            AUTOMOC OFF
+            AUTOUIC OFF
+            AUTORCC OFF
+    )
+
+    target_link_libraries(DirBridgeConPtyChecks
+        PRIVATE
+            Bcrypt
+            Shell32
+    )
+
+    target_link_libraries(DirBridgeConPtyTestChild
+        PRIVATE
+            Shell32
+    )
+
+    if(BUILD_TESTING)
+        add_test(
+            NAME DirBridgeConPtySmoke
+            COMMAND DirBridgeConPtyChecks
+                --child "$<TARGET_FILE:DirBridgeConPtyTestChild>"
+                --suite smoke
+        )
+        set_tests_properties(DirBridgeConPtySmoke PROPERTIES TIMEOUT 60)
+    endif()
+endif()
 
 if(BUILD_TESTING)
     add_test(NAME DirBridgeCoreChecks COMMAND DirBridgeCoreChecks)
