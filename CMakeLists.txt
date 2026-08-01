@@ -212,12 +212,25 @@ if(DIRBRIDGE_BUILD_SSH_TERMINAL_PROTOTYPE)
 
     add_executable(DirBridgeConPtyChecks
         tests/terminal/ConPtyChecks.cpp
+        tests/terminal/ConPtyBrokerProtocol.h
         tests/terminal/ConPtyTestProtocol.h
+    )
+
+    add_executable(DirBridgeConPtyBrokerPrototype
+        tests/terminal/ConPtyChecks.cpp
+        tests/terminal/ConPtyBrokerProtocol.h
+        tests/terminal/ConPtyTestProtocol.h
+    )
+
+    target_compile_definitions(DirBridgeConPtyBrokerPrototype
+        PRIVATE
+            DIRBRIDGE_CONPTY_BROKER_EXECUTABLE=1
     )
 
     set_target_properties(
         DirBridgeConPtyTestChild
         DirBridgeConPtyChecks
+        DirBridgeConPtyBrokerPrototype
         PROPERTIES
             AUTOMOC OFF
             AUTOUIC OFF
@@ -225,6 +238,12 @@ if(DIRBRIDGE_BUILD_SSH_TERMINAL_PROTOTYPE)
     )
 
     target_link_libraries(DirBridgeConPtyChecks
+        PRIVATE
+            Bcrypt
+            Shell32
+    )
+
+    target_link_libraries(DirBridgeConPtyBrokerPrototype
         PRIVATE
             Bcrypt
             Shell32
@@ -243,6 +262,18 @@ if(DIRBRIDGE_BUILD_SSH_TERMINAL_PROTOTYPE)
                 --suite smoke
         )
         set_tests_properties(DirBridgeConPtySmoke PROPERTIES TIMEOUT 60)
+
+        add_test(
+            NAME DirBridgeConPtyBrokerIpcSmoke
+            COMMAND DirBridgeConPtyChecks
+                --child "$<TARGET_FILE:DirBridgeConPtyTestChild>"
+                --broker "$<TARGET_FILE:DirBridgeConPtyBrokerPrototype>"
+                --suite broker-ipc-diagnostic
+        )
+        set_tests_properties(
+            DirBridgeConPtyBrokerIpcSmoke
+            PROPERTIES TIMEOUT 120
+        )
     endif()
 endif()
 

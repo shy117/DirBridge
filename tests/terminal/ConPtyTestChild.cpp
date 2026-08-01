@@ -43,6 +43,42 @@ bool writeText(std::string_view text)
     return writeBytes(text.data(), text.size());
 }
 
+bool writeUtf8(std::wstring_view text)
+{
+    if (text.empty()) {
+        return true;
+    }
+
+    const int inputSize = static_cast<int>(text.size());
+    const int outputSize = WideCharToMultiByte(
+        CP_UTF8,
+        WC_ERR_INVALID_CHARS,
+        text.data(),
+        inputSize,
+        nullptr,
+        0,
+        nullptr,
+        nullptr);
+    if (outputSize <= 0) {
+        return false;
+    }
+
+    std::string output(static_cast<std::size_t>(outputSize), '\0');
+    if (WideCharToMultiByte(
+            CP_UTF8,
+            WC_ERR_INVALID_CHARS,
+            text.data(),
+            inputSize,
+            output.data(),
+            outputSize,
+            nullptr,
+            nullptr)
+        != outputSize) {
+        return false;
+    }
+    return writeBytes(output.data(), output.size());
+}
+
 bool configureUtf8Console()
 {
     HANDLE input = CreateFileW(
@@ -138,11 +174,11 @@ int runUtf8Echo()
         return 2;
     }
 
-    std::string received;
-    std::array<char, 256> buffer{};
+    std::wstring received;
+    std::array<wchar_t, 256> buffer{};
     for (;;) {
         DWORD read = 0;
-        if (!ReadFile(
+        if (!ReadConsoleW(
                 GetStdHandle(STD_INPUT_HANDLE),
                 buffer.data(),
                 static_cast<DWORD>(buffer.size()),
@@ -154,10 +190,11 @@ int runUtf8Echo()
             continue;
         }
         received.append(buffer.data(), read);
-        if (!writeBytes(buffer.data(), read)) {
+        if (!writeUtf8(std::wstring_view(buffer.data(), read))) {
             return 4;
         }
-        if (received.find("__DIRBRIDGE_ECHO_END__") != std::string::npos) {
+        if (received.find(L"__DIRBRIDGE_ECHO_END__")
+            != std::wstring::npos) {
             return 0;
         }
     }
