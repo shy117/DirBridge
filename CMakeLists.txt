@@ -102,6 +102,8 @@ add_library(DirBridgeCore STATIC
 if(WIN32)
     add_library(DirBridgeTerminal STATIC
         src/terminal/AskPassProtocol.h
+        src/terminal/ConPtyProcess.cpp
+        src/terminal/ConPtyProcess.h
         src/terminal/OpenSshLauncher.cpp
         src/terminal/OpenSshLauncher.h
         src/terminal/OpenSshLaunchSpec.h
@@ -110,12 +112,26 @@ if(WIN32)
         src/terminal/StoredPasswordChannel.h
         src/terminal/StoredPasswordLease.cpp
         src/terminal/StoredPasswordLease.h
+        src/terminal/TerminalBrokerProtocol.cpp
+        src/terminal/TerminalBrokerProtocol.h
+        src/terminal/TerminalBrokerStart.cpp
+        src/terminal/TerminalBrokerStart.h
     )
 
     add_executable(DirBridgeSshAskPass
         src/terminal/AskPassProtocol.h
         src/terminal/SshAskPassMain.cpp
         src/terminal/StoredPasswordLease.h
+    )
+
+    add_executable(DirBridgeTerminalBroker
+        src/terminal/TerminalBrokerMain.cpp
+    )
+
+    target_link_libraries(DirBridgeTerminalBroker
+        PRIVATE
+            DirBridgeTerminal
+            Shell32
     )
 
     target_include_directories(DirBridgeTerminal
@@ -129,7 +145,11 @@ if(WIN32)
             Bcrypt
     )
 
-    set_target_properties(DirBridgeTerminal DirBridgeSshAskPass PROPERTIES
+    set_target_properties(
+        DirBridgeTerminal
+        DirBridgeSshAskPass
+        DirBridgeTerminalBroker
+        PROPERTIES
         AUTOMOC OFF
         AUTOUIC OFF
         AUTORCC OFF
@@ -246,6 +266,36 @@ add_executable(DirBridgeRemoteCheck
     tests/integration/RemoteCheck.cpp
 )
 
+if(WIN32)
+    add_executable(DirBridgeSshTerminalVerticalCheck
+        tests/integration/SshTerminalVerticalCheck.cpp
+    )
+
+    target_link_libraries(DirBridgeSshTerminalVerticalCheck
+        PRIVATE
+            DirBridgeCore
+            DirBridgeTerminal
+            Shell32
+    )
+
+    target_include_directories(DirBridgeSshTerminalVerticalCheck
+        PRIVATE
+            src
+    )
+
+    add_dependencies(
+        DirBridgeSshTerminalVerticalCheck
+        DirBridgeSshAskPass
+        DirBridgeTerminalBroker
+    )
+
+    set_target_properties(DirBridgeSshTerminalVerticalCheck PROPERTIES
+        AUTOMOC OFF
+        AUTOUIC OFF
+        AUTORCC OFF
+    )
+endif()
+
 if(DIRBRIDGE_BUILD_SSH_TERMINAL_PROTOTYPE)
     if(NOT WIN32)
         message(FATAL_ERROR "DIRBRIDGE_BUILD_SSH_TERMINAL_PROTOTYPE is only supported on Windows.")
@@ -324,6 +374,18 @@ if(DIRBRIDGE_BUILD_SSH_TERMINAL_PROTOTYPE)
 endif()
 
 if(WIN32 AND BUILD_TESTING)
+    add_executable(DirBridgeConPtyEchoChild
+        tests/terminal/ConPtyEchoChild.cpp
+    )
+
+    add_executable(DirBridgeConPtyProcessChecks
+        tests/terminal/ConPtyProcessChecks.cpp
+    )
+
+    add_executable(DirBridgeTerminalBrokerProtocolChecks
+        tests/terminal/TerminalBrokerProtocolChecks.cpp
+    )
+
     add_executable(DirBridgeAskPassChecks
         tests/terminal/AskPassChecks.cpp
     )
@@ -338,6 +400,19 @@ if(WIN32 AND BUILD_TESTING)
             Shell32
     )
 
+    target_link_libraries(DirBridgeConPtyProcessChecks
+        PRIVATE
+            DirBridgeTerminal
+            Shell32
+    )
+
+    add_dependencies(DirBridgeConPtyProcessChecks DirBridgeConPtyEchoChild)
+
+    target_link_libraries(DirBridgeTerminalBrokerProtocolChecks
+        PRIVATE
+            DirBridgeTerminal
+    )
+
     add_dependencies(DirBridgeAskPassChecks DirBridgeSshAskPass)
 
     target_link_libraries(DirBridgeOpenSshLauncherChecks
@@ -348,7 +423,10 @@ if(WIN32 AND BUILD_TESTING)
 
     set_target_properties(
         DirBridgeAskPassChecks
+        DirBridgeConPtyEchoChild
+        DirBridgeConPtyProcessChecks
         DirBridgeOpenSshLauncherChecks
+        DirBridgeTerminalBrokerProtocolChecks
         PROPERTIES
         AUTOMOC OFF
         AUTOUIC OFF
@@ -361,6 +439,22 @@ if(WIN32 AND BUILD_TESTING)
             "$<TARGET_FILE:DirBridgeSshAskPass>"
     )
     set_tests_properties(DirBridgeAskPassChecks PROPERTIES TIMEOUT 20)
+
+    add_test(
+        NAME DirBridgeConPtyProcessChecks
+        COMMAND DirBridgeConPtyProcessChecks
+            "$<TARGET_FILE:DirBridgeConPtyEchoChild>"
+    )
+    set_tests_properties(DirBridgeConPtyProcessChecks PROPERTIES TIMEOUT 20)
+
+    add_test(
+        NAME DirBridgeTerminalBrokerProtocolChecks
+        COMMAND DirBridgeTerminalBrokerProtocolChecks
+    )
+    set_tests_properties(
+        DirBridgeTerminalBrokerProtocolChecks
+        PROPERTIES TIMEOUT 15
+    )
 
     add_test(
         NAME DirBridgeOpenSshLauncherChecks

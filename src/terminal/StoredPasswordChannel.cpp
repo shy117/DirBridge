@@ -404,4 +404,24 @@ bool StoredPasswordChannel::serveOnce(std::string &error)
     return sent;
 }
 
+void StoredPasswordChannel::cancel() noexcept
+{
+    if (impl_->served && impl_->pipe.get() == INVALID_HANDLE_VALUE)
+    {
+        return;
+    }
+    HANDLE client = CreateFileW(
+        impl_->endpoint.pipeName.c_str(),
+        GENERIC_READ | GENERIC_WRITE,
+        0,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (client != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(client);
+    }
+}
+
 } // namespace dirbridge::terminal

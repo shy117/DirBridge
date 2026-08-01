@@ -31,6 +31,7 @@ public:
 
     const StoredPasswordEndpoint &endpoint() const noexcept;
     bool serveOnce(std::string &error);
+    void cancel() noexcept;
 
 private:
     struct Impl;
