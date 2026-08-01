@@ -4,8 +4,7 @@
 #include <shellapi.h>
 
 #include "config/SiteStore.h"
-#include "terminal/TerminalBrokerProtocol.h"
-#include "terminal/TerminalBrokerStart.h"
+#include "terminal/TerminalBrokerClient.h"
 
 #include <algorithm>
 #include <array>
@@ -13,112 +12,14 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
-#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
-
-#ifndef PROC_THREAD_ATTRIBUTE_HANDLE_LIST
-#define PROC_THREAD_ATTRIBUTE_HANDLE_LIST 0x00020002
-#endif
 
 namespace {
 
 using namespace dirbridge::terminal;
 using namespace dirbridge::terminal::broker;
-
-class Handle
-{
-public:
-    explicit Handle(HANDLE value = nullptr) : value_(value) {}
-    ~Handle() { reset(); }
-    Handle(const Handle &) = delete;
-    Handle &operator=(const Handle &) = delete;
-    HANDLE get() const noexcept { return value_; }
-    explicit operator bool() const noexcept
-    {
-        return value_ != nullptr && value_ != INVALID_HANDLE_VALUE;
-    }
-    void reset(HANDLE value = nullptr) noexcept
-    {
-        if (*this)
-        {
-            CloseHandle(value_);
-        }
-        value_ = value;
-    }
-
-private:
-    HANDLE value_ = nullptr;
-};
-
-std::wstring quote(const std::wstring &value)
-{
-    std::wstring result = L"\"";
-    std::size_t slashes = 0;
-    for (wchar_t character : value)
-    {
-        if (character == L'\\')
-        {
-            ++slashes;
-        }
-        else if (character == L'\"')
-        {
-            result.append(slashes * 2 + 1, L'\\');
-            result.push_back(character);
-            slashes = 0;
-        }
-        else
-        {
-            result.append(slashes, L'\\');
-            slashes = 0;
-            result.push_back(character);
-        }
-    }
-    result.append(slashes * 2, L'\\');
-    result.push_back(L'\"');
-    return result;
-}
-
-bool writeAll(HANDLE handle, const std::vector<std::uint8_t> &bytes)
-{
-    std::size_t offset = 0;
-    while (offset < bytes.size())
-    {
-        DWORD written = 0;
-        const DWORD size = static_cast<DWORD>(std::min<std::size_t>(
-            bytes.size() - offset,
-            std::numeric_limits<DWORD>::max()));
-        if (!WriteFile(handle, bytes.data() + offset, size, &written, nullptr)
-            || written == 0)
-        {
-            return false;
-        }
-        offset += written;
-    }
-    return true;
-}
-
-bool readExact(HANDLE handle, std::uint8_t *bytes, std::size_t size)
-{
-    std::size_t offset = 0;
-    while (offset < size)
-    {
-        DWORD read = 0;
-        if (!ReadFile(
-                handle,
-                bytes + offset,
-                static_cast<DWORD>(size - offset),
-                &read,
-                nullptr)
-            || read == 0)
-        {
-            return false;
-        }
-        offset += read;
-    }
-    return true;
-}
 
 std::uint32_t read32(const std::uint8_t *bytes)
 {
@@ -126,37 +27,6 @@ std::uint32_t read32(const std::uint8_t *bytes)
         | (static_cast<std::uint32_t>(bytes[1]) << 8U)
         | (static_cast<std::uint32_t>(bytes[2]) << 16U)
         | (static_cast<std::uint32_t>(bytes[3]) << 24U);
-}
-
-bool readEventFrame(HANDLE handle, Frame &frame, std::string &error)
-{
-    std::array<std::uint8_t, FrameHeaderSize> header{};
-    if (!readExact(handle, header.data(), header.size()))
-    {
-        error = "failed to read broker event header";
-        return false;
-    }
-    const std::uint32_t payloadSize = read32(header.data() + 20);
-    if (payloadSize > MaximumPayloadSize)
-    {
-        error = "broker event payload exceeded limit";
-        return false;
-    }
-    std::vector<std::uint8_t> encoded(header.begin(), header.end());
-    encoded.resize(FrameHeaderSize + payloadSize);
-    if (payloadSize > 0
-        && !readExact(handle, encoded.data() + FrameHeaderSize, payloadSize))
-    {
-        error = "failed to read broker event payload";
-        return false;
-    }
-    std::vector<Frame> decoded;
-    if (!decodeFrames(encoded, decoded, error) || decoded.size() != 1)
-    {
-        return false;
-    }
-    frame = std::move(decoded.front());
-    return true;
 }
 
 std::optional<std::wstring> argument(
@@ -212,122 +82,18 @@ int run(
     start.workingDirectory = std::filesystem::current_path();
     start.askPassHelper = askPass;
 
-    constexpr std::uint32_t Generation = 1;
-    Frame startFrame{FrameType::Start, Generation, 1, encodeStartRequest(start)};
-    Frame secretFrame{
-        FrameType::AuthSecret,
-        Generation,
-        2,
-        std::vector<std::uint8_t>(site->password.begin(), site->password.end())};
+    TerminalBrokerClient client;
+    StoredPasswordLease password(site->password);
     SecureZeroMemory(site->password.data(), site->password.size());
     site->password.clear();
-    std::vector<std::uint8_t> commands;
-    for (const Frame *frame : {&startFrame, &secretFrame})
+    if (!client.start(broker, start, std::move(password)))
     {
-        const auto encoded = encodeFrame(*frame);
-        commands.insert(commands.end(), encoded.begin(), encoded.end());
-    }
-    SecureZeroMemory(secretFrame.payload.data(), secretFrame.payload.size());
-    secretFrame.payload.clear();
-
-    SECURITY_ATTRIBUTES inheritable{};
-    inheritable.nLength = sizeof(inheritable);
-    inheritable.bInheritHandle = TRUE;
-    HANDLE commandReadRaw = nullptr;
-    HANDLE commandWriteRaw = nullptr;
-    HANDLE eventReadRaw = nullptr;
-    HANDLE eventWriteRaw = nullptr;
-    if (!CreatePipe(
-            &commandReadRaw, &commandWriteRaw, &inheritable, 0)
-        || !CreatePipe(
-            &eventReadRaw, &eventWriteRaw, &inheritable, 0))
-    {
-        SecureZeroMemory(commands.data(), commands.size());
+        std::cerr << client.error() << '\n';
         return 4;
     }
-    Handle commandRead(commandReadRaw);
-    Handle commandWrite(commandWriteRaw);
-    Handle eventRead(eventReadRaw);
-    Handle eventWrite(eventWriteRaw);
-    SetHandleInformation(commandWrite.get(), HANDLE_FLAG_INHERIT, 0);
-    SetHandleInformation(eventRead.get(), HANDLE_FLAG_INHERIT, 0);
 
-    Handle job(CreateJobObjectW(nullptr, nullptr));
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limit{};
-    limit.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if (!job || !SetInformationJobObject(
-            job.get(), JobObjectExtendedLimitInformation, &limit, sizeof(limit)))
-    {
-        SecureZeroMemory(commands.data(), commands.size());
-        return 5;
-    }
-
-    SIZE_T attributeSize = 0;
-    InitializeProcThreadAttributeList(nullptr, 1, 0, &attributeSize);
-    std::vector<std::uint8_t> storage(attributeSize);
-    auto *attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
-    if (!InitializeProcThreadAttributeList(attributes, 1, 0, &attributeSize))
-    {
-        SecureZeroMemory(commands.data(), commands.size());
-        return 6;
-    }
-    struct Guard
-    {
-        LPPROC_THREAD_ATTRIBUTE_LIST value;
-        ~Guard() { DeleteProcThreadAttributeList(value); }
-    } guard{attributes};
-    HANDLE inherited[] = {commandRead.get(), eventWrite.get()};
-    if (!UpdateProcThreadAttribute(
-            attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-            inherited, sizeof(inherited), nullptr, nullptr))
-    {
-        SecureZeroMemory(commands.data(), commands.size());
-        return 7;
-    }
-
-    std::wstring commandLine = quote(broker.wstring())
-        + L" --command-handle "
-        + std::to_wstring(reinterpret_cast<std::uintptr_t>(commandRead.get()))
-        + L" --event-handle "
-        + std::to_wstring(reinterpret_cast<std::uintptr_t>(eventWrite.get()));
-    std::vector<wchar_t> mutableCommand(commandLine.begin(), commandLine.end());
-    mutableCommand.push_back(L'\0');
-    STARTUPINFOEXW startup{};
-    startup.StartupInfo.cb = sizeof(startup);
-    startup.lpAttributeList = attributes;
-    PROCESS_INFORMATION process{};
-    if (!CreateProcessW(
-            broker.c_str(), mutableCommand.data(), nullptr, nullptr, TRUE,
-            CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT
-                | EXTENDED_STARTUPINFO_PRESENT,
-            nullptr, nullptr, &startup.StartupInfo, &process))
-    {
-        SecureZeroMemory(commands.data(), commands.size());
-        return 8;
-    }
-    Handle processHandle(process.hProcess);
-    Handle threadHandle(process.hThread);
-    if (!AssignProcessToJobObject(job.get(), processHandle.get())
-        || ResumeThread(threadHandle.get()) == static_cast<DWORD>(-1))
-    {
-        TerminateJobObject(job.get(), 9);
-        SecureZeroMemory(commands.data(), commands.size());
-        return 9;
-    }
-    threadHandle.reset();
-    commandRead.reset();
-    eventWrite.reset();
-    const bool written = writeAll(commandWrite.get(), commands);
-    SecureZeroMemory(commands.data(), commands.size());
-    if (!written)
-    {
-        TerminateJobObject(job.get(), 10);
-        return 10;
-    }
     std::vector<Frame> events;
     std::vector<std::uint8_t> output;
-    std::string error;
-    std::uint32_t expectedEventSequence = 1;
     bool sentRuntimeCommands = false;
     bool sentClose = false;
     bool brokerError = false;
@@ -339,46 +105,22 @@ int run(
     while (!stopped && std::chrono::steady_clock::now() < deadline)
     {
         Frame frame;
-        if (!readEventFrame(eventRead.get(), frame, error)
-            || frame.generation != Generation
-            || frame.sequence != expectedEventSequence++)
+        if (client.readEvent(frame) != EventReadResult::Event)
         {
-            std::cerr << (error.empty()
-                ? "invalid broker event sequence"
-                : error) << '\n';
-            TerminateJobObject(job.get(), 12);
-            return 12;
+            std::cerr << client.error() << '\n';
+            return 5;
         }
         events.push_back(frame);
         if (frame.type == FrameType::Ready && !sentRuntimeCommands)
         {
-            Frame resize{
-                FrameType::Resize,
-                Generation,
-                3,
-                {120, 0, 40, 0}};
             const std::string input =
                 "printf 'DIRBRIDGE_SSH_UBUNTU_OK:%s\\n' \"$(uname -s)\"\r";
-            Frame inputFrame{
-                FrameType::Input,
-                Generation,
-                4,
-                std::vector<std::uint8_t>(input.begin(), input.end())};
-            const auto resizeBytes = encodeFrame(resize);
-            const auto inputBytes = encodeFrame(inputFrame);
-            if (!writeAll(commandWrite.get(), resizeBytes))
+            if (!client.resize(120, 40)
+                || !client.sendInput(std::vector<std::uint8_t>(
+                    input.begin(), input.end())))
             {
-                std::cerr << "failed to write Resize frame: "
-                          << GetLastError() << '\n';
-                brokerError = true;
-                commandWrite.reset();
-            }
-            else if (!writeAll(commandWrite.get(), inputBytes))
-            {
-                std::cerr << "failed to write Input frame: "
-                          << GetLastError() << '\n';
-                brokerError = true;
-                commandWrite.reset();
+                std::cerr << client.error() << '\n';
+                return 6;
             }
             sentRuntimeCommands = true;
         }
@@ -397,18 +139,10 @@ int run(
                     output.begin(), output.end(), marker.begin(), marker.end())
                     != output.end())
             {
-                const Frame close{FrameType::Close, Generation, 5, {}};
-                if (!writeAll(commandWrite.get(), encodeFrame(close)))
+                if (!client.close())
                 {
-                    const DWORD code = GetLastError();
-                    if (code != ERROR_BROKEN_PIPE && code != ERROR_NO_DATA)
-                    {
-                        std::cerr << "failed to write Close frame: "
-                                  << code << '\n';
-                        TerminateJobObject(job.get(), 13);
-                        return 13;
-                    }
-                    commandWrite.reset();
+                    std::cerr << client.error() << '\n';
+                    return 7;
                 }
                 sentClose = true;
             }
@@ -426,22 +160,25 @@ int run(
             stopped = true;
         }
     }
-    commandWrite.reset();
-    if (!stopped || WaitForSingleObject(processHandle.get(), 5000) != WAIT_OBJECT_0)
+
+    std::uint32_t brokerExitCode = 0;
+    if (!stopped || !client.waitForBroker(
+            std::chrono::seconds(5), brokerExitCode))
     {
-        TerminateJobObject(job.get(), 14);
-        return 14;
+        std::cerr << client.error() << '\n';
+        return 8;
     }
     const std::string marker = "DIRBRIDGE_SSH_UBUNTU_OK:Linux";
     const bool connected = std::search(
         output.begin(), output.end(), marker.begin(), marker.end()) != output.end();
     const bool passed = connected && sentClose && exited && stopped && !brokerError;
     std::cout << (passed ? "[PASS] " : "[FAIL] ")
-              << "Broker + ConPTY + OpenSSH + Ubuntu\n";
+              << "Broker client + ConPTY + OpenSSH + Ubuntu\n";
     std::cout << "[SUMMARY] events=" << events.size()
               << " output_bytes=" << output.size()
-              << " ssh_exit_code=" << sshExitCode << '\n';
-    return passed ? 0 : 14;
+              << " ssh_exit_code=" << sshExitCode
+              << " broker_exit_code=" << brokerExitCode << '\n';
+    return passed ? 0 : 9;
 }
 
 } // namespace

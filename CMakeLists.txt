@@ -114,6 +114,8 @@ if(WIN32)
         src/terminal/StoredPasswordLease.h
         src/terminal/TerminalBrokerProtocol.cpp
         src/terminal/TerminalBrokerProtocol.h
+        src/terminal/TerminalBrokerClient.cpp
+        src/terminal/TerminalBrokerClient.h
         src/terminal/TerminalBrokerStart.cpp
         src/terminal/TerminalBrokerStart.h
     )
@@ -386,6 +388,10 @@ if(WIN32 AND BUILD_TESTING)
         tests/terminal/TerminalBrokerProtocolChecks.cpp
     )
 
+    add_executable(DirBridgeTerminalBrokerClientChecks
+        tests/terminal/TerminalBrokerClientChecks.cpp
+    )
+
     add_executable(DirBridgeAskPassChecks
         tests/terminal/AskPassChecks.cpp
     )
@@ -413,6 +419,12 @@ if(WIN32 AND BUILD_TESTING)
             DirBridgeTerminal
     )
 
+    target_link_libraries(DirBridgeTerminalBrokerClientChecks
+        PRIVATE
+            DirBridgeTerminal
+            Shell32
+    )
+
     add_dependencies(DirBridgeAskPassChecks DirBridgeSshAskPass)
 
     target_link_libraries(DirBridgeOpenSshLauncherChecks
@@ -427,6 +439,7 @@ if(WIN32 AND BUILD_TESTING)
         DirBridgeConPtyProcessChecks
         DirBridgeOpenSshLauncherChecks
         DirBridgeTerminalBrokerProtocolChecks
+        DirBridgeTerminalBrokerClientChecks
         PROPERTIES
         AUTOMOC OFF
         AUTOUIC OFF
@@ -453,6 +466,15 @@ if(WIN32 AND BUILD_TESTING)
     )
     set_tests_properties(
         DirBridgeTerminalBrokerProtocolChecks
+        PROPERTIES TIMEOUT 15
+    )
+
+    add_test(
+        NAME DirBridgeTerminalBrokerClientChecks
+        COMMAND DirBridgeTerminalBrokerClientChecks
+    )
+    set_tests_properties(
+        DirBridgeTerminalBrokerClientChecks
         PROPERTIES TIMEOUT 15
     )
 
