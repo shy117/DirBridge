@@ -99,6 +99,48 @@ add_library(DirBridgeCore STATIC
     src/protocol/CurlRemoteFileSystem.h
 )
 
+if(WIN32)
+    add_library(DirBridgeTerminal STATIC
+        src/terminal/AskPassProtocol.h
+        src/terminal/OpenSshLauncher.cpp
+        src/terminal/OpenSshLauncher.h
+        src/terminal/OpenSshLaunchSpec.h
+        src/terminal/SshLaunchRequest.h
+        src/terminal/StoredPasswordChannel.cpp
+        src/terminal/StoredPasswordChannel.h
+        src/terminal/StoredPasswordLease.cpp
+        src/terminal/StoredPasswordLease.h
+    )
+
+    add_executable(DirBridgeSshAskPass
+        src/terminal/AskPassProtocol.h
+        src/terminal/SshAskPassMain.cpp
+        src/terminal/StoredPasswordLease.h
+    )
+
+    target_include_directories(DirBridgeTerminal
+        PUBLIC
+            src
+    )
+
+    target_link_libraries(DirBridgeTerminal
+        PRIVATE
+            Advapi32
+            Bcrypt
+    )
+
+    set_target_properties(DirBridgeTerminal DirBridgeSshAskPass PROPERTIES
+        AUTOMOC OFF
+        AUTOUIC OFF
+        AUTORCC OFF
+    )
+
+    target_include_directories(DirBridgeSshAskPass
+        PRIVATE
+            src
+    )
+endif()
+
 set_target_properties(DirBridgeCore PROPERTIES
     AUTOMOC OFF
     AUTOUIC OFF
@@ -170,6 +212,10 @@ target_link_libraries(DirBridge
         Qt${QT_VERSION_MAJOR}::Svg
         DirBridgeCore
 )
+
+if(WIN32)
+    target_link_libraries(DirBridge PRIVATE DirBridgeTerminal)
+endif()
 
 target_compile_definitions(DirBridge
     PRIVATE
@@ -275,6 +321,55 @@ if(DIRBRIDGE_BUILD_SSH_TERMINAL_PROTOTYPE)
             PROPERTIES TIMEOUT 120
         )
     endif()
+endif()
+
+if(WIN32 AND BUILD_TESTING)
+    add_executable(DirBridgeAskPassChecks
+        tests/terminal/AskPassChecks.cpp
+    )
+
+    add_executable(DirBridgeOpenSshLauncherChecks
+        tests/terminal/OpenSshLauncherChecks.cpp
+    )
+
+    target_link_libraries(DirBridgeAskPassChecks
+        PRIVATE
+            DirBridgeTerminal
+            Shell32
+    )
+
+    add_dependencies(DirBridgeAskPassChecks DirBridgeSshAskPass)
+
+    target_link_libraries(DirBridgeOpenSshLauncherChecks
+        PRIVATE
+            DirBridgeTerminal
+            Shell32
+    )
+
+    set_target_properties(
+        DirBridgeAskPassChecks
+        DirBridgeOpenSshLauncherChecks
+        PROPERTIES
+        AUTOMOC OFF
+        AUTOUIC OFF
+        AUTORCC OFF
+    )
+
+    add_test(
+        NAME DirBridgeAskPassChecks
+        COMMAND DirBridgeAskPassChecks
+            "$<TARGET_FILE:DirBridgeSshAskPass>"
+    )
+    set_tests_properties(DirBridgeAskPassChecks PROPERTIES TIMEOUT 20)
+
+    add_test(
+        NAME DirBridgeOpenSshLauncherChecks
+        COMMAND DirBridgeOpenSshLauncherChecks
+    )
+    set_tests_properties(
+        DirBridgeOpenSshLauncherChecks
+        PROPERTIES TIMEOUT 15
+    )
 endif()
 
 if(BUILD_TESTING)
