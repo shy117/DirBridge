@@ -1,3 +1,7 @@
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+
 #include "terminal/SshTerminalManager.h"
 
 #include "terminal/TerminalBrokerClient.h"
@@ -38,6 +42,28 @@ QString fromUtf8(const std::string &value)
 }
 
 } // namespace
+
+SshTerminalRuntimePaths defaultSshTerminalRuntimePaths(
+    const std::filesystem::path &applicationDirectory,
+    const std::filesystem::path &workingDirectory)
+{
+    SshTerminalRuntimePaths paths;
+    paths.brokerExecutable = applicationDirectory
+        / L"DirBridgeTerminalBroker.exe";
+    paths.askPassHelper = applicationDirectory / L"DirBridgeSshAskPass.exe";
+    paths.workingDirectory = workingDirectory;
+
+    wchar_t windowsDirectory[32768]{};
+    const UINT length = GetWindowsDirectoryW(
+        windowsDirectory,
+        static_cast<UINT>(std::size(windowsDirectory)));
+    if (length > 0 && length < std::size(windowsDirectory))
+    {
+        paths.sshExecutable = std::filesystem::path(windowsDirectory)
+            / L"System32" / L"OpenSSH" / L"ssh.exe";
+    }
+    return paths;
+}
 
 struct SshTerminalManager::Session
 {

@@ -170,6 +170,18 @@ void MainWindow::showSessionManagerContextMenu(const QPoint &position)
         menu.addAction(fluentIcon("checkmark_circle"), "连接", this, [this, index]() {
             connectSiteAtIndex(index);
         });
+        if (index >= 0
+            && index < static_cast<int>(m_sites.size())
+            && m_sites.at(index).protocol == RemoteProtocol::Sftp)
+        {
+            menu.addAction(
+                fluentIcon("more_horizontal"),
+                "打开 SSH 终端",
+                this,
+                [this, index]() {
+                    openSshTerminal(m_sites.at(index));
+                });
+        }
         menu.addAction(fluentIcon("edit"), "编辑站点", this, [this, index]() {
             editSiteAtIndex(index);
         });
@@ -334,6 +346,14 @@ void MainWindow::showRemoteTabContextMenu(const QPoint &position)
     }
 
     QMenu menu(m_remoteTabs);
+    QAction *terminalAction = nullptr;
+    if (session->profile.protocol == RemoteProtocol::Sftp)
+    {
+        terminalAction = menu.addAction(
+            fluentIcon("more_horizontal"),
+            "打开 SSH 终端");
+        menu.addSeparator();
+    }
     QAction *reconnectAction = menu.addAction(fluentIcon("arrow_sync"), "重连");
     QAction *disconnectAction = menu.addAction(fluentIcon("dismiss_circle"), "断开");
     QAction *closeAction = menu.addAction(fluentIcon("dismiss_circle"), "关闭会话");
@@ -341,7 +361,11 @@ void MainWindow::showRemoteTabContextMenu(const QPoint &position)
     disconnectAction->setEnabled(session->connected && !session->connecting && !hasRunningTransferForSession(session->id));
 
     QAction *selected = menu.exec(m_remoteTabs->tabBar()->mapToGlobal(position));
-    if (selected == reconnectAction)
+    if (selected == terminalAction)
+    {
+        openSshTerminal(session->profile);
+    }
+    else if (selected == reconnectAction)
     {
         m_remoteTabs->setCurrentIndex(tabIndex);
         reconnectRemoteSession(*session);

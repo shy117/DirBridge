@@ -28,6 +28,7 @@
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QTabWidget>
+#include <QTabBar>
 #include <QTextStream>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
@@ -153,6 +154,14 @@ bool checkRemoteUiObjects(MainWindow &window)
     ok = requireChild<QLineEdit>(window, "quickRemotePathEdit") && ok;
     ok = requireChild<QPushButton>(window, "quickConnectButton") && ok;
     ok = requireChild<QTabWidget>(window, "remoteTabs") && ok;
+    ok = requireChild<QTabWidget>(window, "bottomTabs") && ok;
+    ok = requireChild<QTabWidget>(window, "terminalTabs") && ok;
+    QTabWidget *terminalTabs = window.findChild<QTabWidget *>("terminalTabs");
+    if (terminalTabs != nullptr && terminalTabs->count() != 0)
+    {
+        QTextStream(stderr) << "Terminal tabs should start empty" << Qt::endl;
+        ok = false;
+    }
     QPushButton *cancelTransferButton = window.findChild<QPushButton *>("transferCancelButton");
     QPushButton *retryTransferButton = window.findChild<QPushButton *>("transferRetryButton");
     QPushButton *clearFinishedButton = window.findChild<QPushButton *>("transferClearFinishedButton");
@@ -1347,6 +1356,29 @@ bool checkSessionManagerWorkflow(MainWindow &window)
         QTextStream(stderr) << "Grouped site item is missing" << Qt::endl;
         return false;
     }
+    QStringList siteContextActions;
+    QTimer::singleShot(0, [&siteContextActions]() {
+        auto *contextMenu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+        if (contextMenu == nullptr)
+        {
+            return;
+        }
+        for (QAction *action : contextMenu->actions())
+        {
+            siteContextActions.push_back(action->text());
+        }
+        contextMenu->close();
+    });
+    QMetaObject::invokeMethod(
+        sessionTree,
+        "customContextMenuRequested",
+        Qt::DirectConnection,
+        Q_ARG(QPoint, sessionTree->visualItemRect(groupedItem).center()));
+    if (!siteContextActions.contains("打开 SSH 终端"))
+    {
+        QTextStream(stderr) << "Saved SFTP site context menu is missing SSH terminal action" << Qt::endl;
+        return false;
+    }
     sessionTree->setCurrentItem(groupedItem);
     QMetaObject::invokeMethod(sessionTree, "itemDoubleClicked", Qt::DirectConnection, Q_ARG(QTreeWidgetItem *, groupedItem), Q_ARG(int, 0));
     QApplication::processEvents();
@@ -1354,6 +1386,31 @@ bool checkSessionManagerWorkflow(MainWindow &window)
     if (!waitForRemoteConnected(remoteTabs->currentWidget(), "/home/testuser/remote_test"))
     {
         QTextStream(stderr) << "Session manager site double click did not connect remote session" << Qt::endl;
+        return false;
+    }
+
+    QStringList remoteTabContextActions;
+    QTimer::singleShot(0, [&remoteTabContextActions]() {
+        auto *contextMenu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+        if (contextMenu == nullptr)
+        {
+            return;
+        }
+        for (QAction *action : contextMenu->actions())
+        {
+            remoteTabContextActions.push_back(action->text());
+        }
+        contextMenu->close();
+    });
+    QTabBar *remoteTabBar = remoteTabs->tabBar();
+    QMetaObject::invokeMethod(
+        remoteTabBar,
+        "customContextMenuRequested",
+        Qt::DirectConnection,
+        Q_ARG(QPoint, remoteTabBar->tabRect(remoteTabs->currentIndex()).center()));
+    if (!remoteTabContextActions.contains("打开 SSH 终端"))
+    {
+        QTextStream(stderr) << "SFTP remote tab context menu is missing SSH terminal action" << Qt::endl;
         return false;
     }
 

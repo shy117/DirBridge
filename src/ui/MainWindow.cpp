@@ -6,6 +6,7 @@
 #include "ui/ExternalEditManager.h"
 #include "ui/FilePanel.h"
 #include "ui/window_shared.h"
+#include "terminal/SshTerminalManager.h"
 
 #include <algorithm>
 #include <atomic>
@@ -553,6 +554,7 @@ MainWindow::MainWindow(const DependencyCheckResult &dependencyCheck, QWidget *pa
     loadSites();
     loadSettings();
     setupCentralWorkspace(dependencyCheck);
+    setupSshTerminalManager();
     ExternalEditManager::Callbacks externalEditCallbacks;
     externalEditCallbacks.resolveFileSystem = [this](const QString &sessionId) {
         RemoteSession *session = remoteSessionById(sessionId.toStdString());
@@ -628,10 +630,16 @@ void MainWindow::closeEvent(QCloseEvent *event)
         m_closePending = true;
         setEnabled(false);
         cancelActiveTransfersForClose();
+        if (m_sshTerminalManager != nullptr)
+        {
+            m_sshTerminalManager->beginShutdown();
+        }
         statusBar()->showMessage("正在停止后台任务后退出…");
     }
 
-    if (m_activeBackgroundTaskCount > 0)
+    if (m_activeBackgroundTaskCount > 0
+        || (m_sshTerminalManager != nullptr
+            && m_sshTerminalManager->sessionCount() > 0))
     {
         event->ignore();
         return;
@@ -654,7 +662,9 @@ void MainWindow::finishBackgroundTask()
     }
 
     --m_activeBackgroundTaskCount;
-    if (m_closePending && m_activeBackgroundTaskCount == 0)
+    if (m_closePending && m_activeBackgroundTaskCount == 0
+        && (m_sshTerminalManager == nullptr
+            || m_sshTerminalManager->sessionCount() == 0))
     {
         QTimer::singleShot(0, this, [this]() {
             close();

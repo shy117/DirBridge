@@ -264,9 +264,9 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     m_fileSplitter->setStretchFactor(1, 1);
     updateFileSplitterLayout();
 
-    auto *bottomTabs = new QTabWidget(verticalSplitter);
-    bottomTabs->setObjectName("bottomTabs");
-    auto *transferTab = new QWidget(bottomTabs);
+    m_bottomTabs = new QTabWidget(verticalSplitter);
+    m_bottomTabs->setObjectName("bottomTabs");
+    auto *transferTab = new QWidget(m_bottomTabs);
     auto *transferLayout = new QVBoxLayout(transferTab);
     transferLayout->setContentsMargins(0, 0, 0, 0);
     transferLayout->setSpacing(4);
@@ -306,18 +306,34 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     connect(m_retryTransferButton, &QPushButton::clicked, this, &MainWindow::retrySelectedTransferJob);
     connect(m_clearFinishedTransfersButton, &QPushButton::clicked, this, &MainWindow::clearFinishedTransferJobs);
 
-    m_logView = new QTreeWidget(bottomTabs);
+    m_logView = new QTreeWidget(m_bottomTabs);
     m_logView->setObjectName("logView");
     m_logView->setHeaderLabels({"时间", "级别", "消息"});
     m_logView->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     m_logView->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     m_logView->header()->setStretchLastSection(true);
 
-    bottomTabs->addTab(transferTab, "传输");
-    bottomTabs->addTab(m_logView, "日志");
+    auto *terminalHost = new QWidget(m_bottomTabs);
+    terminalHost->setObjectName("terminalHost");
+    auto *terminalHostLayout = new QVBoxLayout(terminalHost);
+    terminalHostLayout->setContentsMargins(0, 0, 0, 0);
+    m_terminalTabs = new QTabWidget(terminalHost);
+    m_terminalTabs->setObjectName("terminalTabs");
+    m_terminalTabs->setTabsClosable(true);
+    m_terminalTabs->setMovable(true);
+    terminalHostLayout->addWidget(m_terminalTabs);
+    connect(
+        m_terminalTabs,
+        &QTabWidget::tabCloseRequested,
+        this,
+        &MainWindow::closeTerminalTab);
+
+    m_bottomTabs->addTab(transferTab, "传输");
+    m_bottomTabs->addTab(m_logView, "日志");
+    m_bottomTabs->addTab(terminalHost, "终端");
 
     verticalSplitter->addWidget(m_fileSplitter);
-    verticalSplitter->addWidget(bottomTabs);
+    verticalSplitter->addWidget(m_bottomTabs);
     verticalSplitter->setStretchFactor(0, 5);
     verticalSplitter->setStretchFactor(1, 1);
 

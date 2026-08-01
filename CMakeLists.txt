@@ -229,6 +229,7 @@ add_executable(DirBridge
     src/ui/window_layout.cpp
     src/ui/window_remote.cpp
     src/ui/window_session.cpp
+    src/ui/window_terminal.cpp
     src/ui/window_transfer.cpp
     src/ui/FilePanel.cpp
     src/ui/FilePanel.h
@@ -255,6 +256,11 @@ target_link_libraries(DirBridge
 
 if(WIN32)
     target_link_libraries(DirBridge PRIVATE DirBridgeTerminal DirBridgeTerminalQt)
+    add_dependencies(
+        DirBridge
+        DirBridgeSshAskPass
+        DirBridgeTerminalBroker
+    )
 endif()
 
 target_compile_definitions(DirBridge

@@ -135,6 +135,8 @@ New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
 
 foreach ($fileName in @(
     "DirBridge.exe",
+    "DirBridgeTerminalBroker.exe",
+    "DirBridgeSshAskPass.exe",
     "libcurl-x64.dll",
     "curl-ca-bundle.crt",
     "libgcc_s_seh-1.dll",

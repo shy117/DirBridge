@@ -21,6 +21,10 @@ struct SshTerminalRuntimePaths
     std::filesystem::path workingDirectory;
 };
 
+SshTerminalRuntimePaths defaultSshTerminalRuntimePaths(
+    const std::filesystem::path &applicationDirectory,
+    const std::filesystem::path &workingDirectory);
+
 class SshTerminalManager final : public QObject
 {
     Q_OBJECT

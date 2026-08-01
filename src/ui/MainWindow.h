@@ -22,6 +22,7 @@
 class QComboBox;
 class QDockWidget;
 class QFileInfo;
+class QLabel;
 class QLineEdit;
 class QPushButton;
 class QAction;
@@ -33,6 +34,9 @@ class QTreeWidget;
 class QTreeWidgetItem;
 class ExternalEditManager;
 class FilePanel;
+namespace dirbridge::terminal {
+class SshTerminalManager;
+}
 
 class MainWindow : public QMainWindow
 {
@@ -152,6 +156,15 @@ private:
         QString displayName;
     };
 
+    struct TerminalTab
+    {
+        QWidget *page = nullptr;
+        QLabel *statusLabel = nullptr;
+        bool active = true;
+        bool closeRequested = false;
+        bool receivedOutput = false;
+    };
+
     void loadSites();
     void saveSites();
     void loadSettings();
@@ -170,6 +183,10 @@ private:
     void installRemoteTabCloseButton(int index);
     void closeRemoteTab(int index);
     void showRemoteTabContextMenu(const QPoint &position);
+    void setupSshTerminalManager();
+    void openSshTerminal(const SiteProfile &profile);
+    void closeTerminalTab(int index);
+    void removeTerminalTab(const QString &terminalId);
     void appendLog(const QString &level, const QString &message);
     void beginBackgroundTask();
     void finishBackgroundTask();
@@ -315,6 +332,7 @@ private:
     UserSettings m_settings;
     std::unique_ptr<RemoteFileSystem> m_testingRemoteFileSystem;
     std::unique_ptr<ExternalEditManager> m_externalEditManager;
+    std::unique_ptr<dirbridge::terminal::SshTerminalManager> m_sshTerminalManager;
     bool m_dialogsSuppressedForTesting = false;
     std::vector<std::unique_ptr<RemoteSession>> m_remoteSessions;
     TransferQueue m_transferQueue;
@@ -326,6 +344,7 @@ private:
     QThread *m_transferThread = nullptr;
     std::map<std::string, std::shared_ptr<std::atomic_bool>> m_transferCancelFlags;
     std::set<QString> m_pendingRemoteDeletes;
+    std::map<QString, TerminalTab> m_terminalUiSessions;
 
     QAction *m_disconnectAction = nullptr;
     QAction *m_refreshAction = nullptr;
@@ -344,6 +363,8 @@ private:
     QPushButton *m_retryTransferButton = nullptr;
     QPushButton *m_clearFinishedTransfersButton = nullptr;
     QTreeWidget *m_logView = nullptr;
+    QTabWidget *m_bottomTabs = nullptr;
+    QTabWidget *m_terminalTabs = nullptr;
     FilePanel *m_localPanel = nullptr;
     QSplitter *m_fileSplitter = nullptr;
     QTabWidget *m_remoteTabs = nullptr;
