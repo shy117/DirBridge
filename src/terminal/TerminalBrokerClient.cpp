@@ -172,6 +172,7 @@ struct TerminalBrokerClient::Impl
     Handle process;
     Handle job;
     std::mutex commandMutex;
+    std::mutex processMutex;
     std::uint32_t generation = 1;
     std::uint32_t nextCommandSequence = 1;
     std::uint32_t nextEventSequence = 1;
@@ -496,6 +497,7 @@ bool TerminalBrokerClient::waitForBroker(
     std::chrono::milliseconds timeout,
     std::uint32_t &exitCode)
 {
+    std::lock_guard<std::mutex> lock(impl_->processMutex);
     if (!impl_->process)
     {
         impl_->error = "broker process is not running";
@@ -529,7 +531,11 @@ void TerminalBrokerClient::terminate(std::uint32_t exitCode) noexcept
 {
     std::lock_guard<std::mutex> lock(impl_->commandMutex);
     impl_->commandWrite.reset();
-    impl_->eventRead.reset();
+    if (impl_->eventRead)
+    {
+        CancelIoEx(impl_->eventRead.get(), nullptr);
+    }
+    std::lock_guard<std::mutex> processLock(impl_->processMutex);
     if (impl_->job)
     {
         TerminateJobObject(impl_->job.get(), exitCode);

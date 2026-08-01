@@ -161,6 +161,24 @@ if(WIN32)
         PRIVATE
             src
     )
+
+    add_library(DirBridgeTerminalQt STATIC
+        src/terminal/SshTerminalManager.cpp
+        src/terminal/SshTerminalManager.h
+    )
+
+    target_link_libraries(DirBridgeTerminalQt
+        PUBLIC
+            Qt${QT_VERSION_MAJOR}::Core
+            DirBridgeCore
+        PRIVATE
+            DirBridgeTerminal
+    )
+
+    target_include_directories(DirBridgeTerminalQt
+        PUBLIC
+            src
+    )
 endif()
 
 set_target_properties(DirBridgeCore PROPERTIES
@@ -236,7 +254,7 @@ target_link_libraries(DirBridge
 )
 
 if(WIN32)
-    target_link_libraries(DirBridge PRIVATE DirBridgeTerminal)
+    target_link_libraries(DirBridge PRIVATE DirBridgeTerminal DirBridgeTerminalQt)
 endif()
 
 target_compile_definitions(DirBridge
@@ -392,6 +410,10 @@ if(WIN32 AND BUILD_TESTING)
         tests/terminal/TerminalBrokerClientChecks.cpp
     )
 
+    add_executable(DirBridgeSshTerminalManagerChecks
+        tests/terminal/SshTerminalManagerChecks.cpp
+    )
+
     add_executable(DirBridgeAskPassChecks
         tests/terminal/AskPassChecks.cpp
     )
@@ -425,6 +447,17 @@ if(WIN32 AND BUILD_TESTING)
             Shell32
     )
 
+    target_link_libraries(DirBridgeSshTerminalManagerChecks
+        PRIVATE
+            DirBridgeTerminalQt
+            Qt${QT_VERSION_MAJOR}::Core
+    )
+
+    add_dependencies(
+        DirBridgeSshTerminalManagerChecks
+        DirBridgeTerminalBrokerClientChecks
+    )
+
     add_dependencies(DirBridgeAskPassChecks DirBridgeSshAskPass)
 
     target_link_libraries(DirBridgeOpenSshLauncherChecks
@@ -440,6 +473,7 @@ if(WIN32 AND BUILD_TESTING)
         DirBridgeOpenSshLauncherChecks
         DirBridgeTerminalBrokerProtocolChecks
         DirBridgeTerminalBrokerClientChecks
+        DirBridgeSshTerminalManagerChecks
         PROPERTIES
         AUTOMOC OFF
         AUTOUIC OFF
@@ -475,6 +509,16 @@ if(WIN32 AND BUILD_TESTING)
     )
     set_tests_properties(
         DirBridgeTerminalBrokerClientChecks
+        PROPERTIES TIMEOUT 15
+    )
+
+    add_test(
+        NAME DirBridgeSshTerminalManagerChecks
+        COMMAND DirBridgeSshTerminalManagerChecks
+            "$<TARGET_FILE:DirBridgeTerminalBrokerClientChecks>"
+    )
+    set_tests_properties(
+        DirBridgeSshTerminalManagerChecks
         PROPERTIES TIMEOUT 15
     )
 

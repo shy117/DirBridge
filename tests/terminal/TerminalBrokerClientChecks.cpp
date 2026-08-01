@@ -150,31 +150,57 @@ std::optional<HANDLE> inheritedHandle(
 int runFakeBroker(HANDLE command, HANDLE event)
 {
     Frame start;
+    Frame secret;
     Frame resize;
     Frame input;
     Frame close;
     if (!readFrame(command, start)
         || start.type != FrameType::Start
-        || start.sequence != 1
-        || !writeFrame(event, {FrameType::Ready, start.generation, 1, {}})
+        || start.sequence != 1)
+    {
+        return 10;
+    }
+    StartRequest request;
+    std::string error;
+    if (!decodeStartRequest(start.payload, request, error))
+    {
+        return 10;
+    }
+    std::uint32_t nextCommandSequence = 2;
+    if (request.ssh.authentication
+        == dirbridge::terminal::SshAuthenticationMode::StoredPassword)
+    {
+        if (!readFrame(command, secret)
+            || secret.type != FrameType::AuthSecret
+            || secret.sequence != nextCommandSequence
+            || secret.payload.empty())
+        {
+            return 10;
+        }
+        ++nextCommandSequence;
+    }
+    if (!writeFrame(event, {FrameType::Ready, start.generation, 1, {}})
         || !readFrame(command, resize)
         || resize.type != FrameType::Resize
-        || resize.sequence != 2
+        || resize.sequence != nextCommandSequence++
         || resize.payload != std::vector<std::uint8_t>({100, 0, 30, 0})
         || !readFrame(command, input)
         || input.type != FrameType::Input
-        || input.sequence != 3
-        || input.payload != std::vector<std::uint8_t>({'p', 'w', 'd', '\r'})
+        || input.sequence != nextCommandSequence++
+        || input.payload != std::vector<std::uint8_t>({'p', 'w', 'd', '\r'}))
+    {
+        return 10;
+    }
+    if (!writeFrame(
+            event,
+            {FrameType::Output, start.generation, 2, {'o', 'k'}})
         || !readFrame(command, close)
         || close.type != FrameType::Close
-        || close.sequence != 4)
+        || close.sequence != nextCommandSequence)
     {
         return 10;
     }
     return writeFrame(
-               event,
-               {FrameType::Output, start.generation, 2, {'o', 'k'}})
-            && writeFrame(
                 event,
                 {FrameType::Exit, start.generation, 3, {0, 0, 0, 0}})
             && writeFrame(
