@@ -26,7 +26,9 @@ int main()
     std::vector<Frame> expected = {
         {FrameType::Start, 7, 1, {'s', 'p', 'e', 'c'}},
         {FrameType::AuthSecret, 7, 2, {'s', 'e', 'c', 'r', 'e', 't'}},
-        {FrameType::Input, 7, 3, {'e', 'x', 'i', 't', '\n'}},
+        {FrameType::Resize, 7, 3, {120, 0, 40, 0}},
+        {FrameType::Input, 7, 4, {'e', 'x', 'i', 't', '\n'}},
+        {FrameType::Close, 7, 5, {}},
     };
     std::vector<std::uint8_t> bytes;
     for (const Frame &frame : expected)
@@ -45,21 +47,29 @@ int main()
         "preserve broker frame type and payload");
     check(
         validateCommandSequence(decoded, error),
-        "accept Start, AuthSecret, Input sequence");
+        "accept Start, AuthSecret, Resize, Input, Close sequence");
 
     auto repeatedSecret = decoded;
+    repeatedSecret.resize(2);
     repeatedSecret.push_back(
-        {FrameType::AuthSecret, 7, 4, {'x'}});
+        {FrameType::AuthSecret, 7, 3, {'x'}});
     check(
         !validateCommandSequence(repeatedSecret, error),
         "reject repeated AuthSecret");
 
     auto lateSecret = decoded;
-    lateSecret[1] = {FrameType::Input, 7, 2, {'x'}};
+    lateSecret.resize(3);
+    lateSecret[1] = {FrameType::Resize, 7, 2, {80, 0, 24, 0}};
     lateSecret[2] = {FrameType::AuthSecret, 7, 3, {'x'}};
     check(
         !validateCommandSequence(lateSecret, error),
-        "reject AuthSecret after input");
+        "reject AuthSecret after runtime command");
+
+    auto afterClose = decoded;
+    afterClose.push_back({FrameType::Input, 7, 6, {'x'}});
+    check(
+        !validateCommandSequence(afterClose, error),
+        "reject command after Close");
 
     std::vector<std::uint8_t> oversized(MaximumSecretPayloadSize + 1, 'x');
     check(

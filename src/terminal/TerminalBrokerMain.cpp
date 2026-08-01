@@ -108,31 +108,169 @@ bool sendEvent(
     std::uint32_t sequence,
     std::vector<std::uint8_t> payload = {})
 {
-    return writeAll(handle, encodeFrame(
-        {type, generation, sequence, std::move(payload)}));
+    const std::vector<std::uint8_t> encoded = encodeFrame(
+        {type, generation, sequence, std::move(payload)});
+    return !encoded.empty() && writeAll(handle, encoded);
 }
 
-bool readCommands(HANDLE handle, std::vector<std::uint8_t> &bytes)
+bool sendOutputEvents(
+    HANDLE handle,
+    std::uint32_t generation,
+    std::uint32_t &sequence,
+    std::vector<std::uint8_t> output)
 {
-    std::array<std::uint8_t, 4096> buffer{};
-    constexpr std::size_t MaximumStreamSize = 2U * 1024U * 1024U;
-    for (;;)
+    std::size_t offset = 0;
+    while (offset < output.size())
     {
-        DWORD read = 0;
-        if (!ReadFile(handle, buffer.data(), buffer.size(), &read, nullptr))
-        {
-            return GetLastError() == ERROR_BROKEN_PIPE;
-        }
-        if (read == 0)
-        {
-            return true;
-        }
-        if (bytes.size() > MaximumStreamSize - read)
+        const std::size_t size = std::min<std::size_t>(
+            MaximumPayloadSize,
+            output.size() - offset);
+        std::vector<std::uint8_t> chunk(
+            output.begin() + static_cast<std::ptrdiff_t>(offset),
+            output.begin() + static_cast<std::ptrdiff_t>(offset + size));
+        if (!sendEvent(
+                handle,
+                FrameType::Output,
+                generation,
+                sequence++,
+                std::move(chunk)))
         {
             return false;
         }
-        bytes.insert(bytes.end(), buffer.begin(), buffer.begin() + read);
+        offset += size;
     }
+    return true;
+}
+
+enum class ReadFrameResult
+{
+    Ok,
+    NoData,
+    Eof,
+    Error
+};
+
+bool readExact(HANDLE handle, std::uint8_t *bytes, std::size_t size)
+{
+    std::size_t offset = 0;
+    while (offset < size)
+    {
+        DWORD read = 0;
+        if (!ReadFile(
+                handle,
+                bytes + offset,
+                static_cast<DWORD>(size - offset),
+                &read,
+                nullptr)
+            || read == 0)
+        {
+            return false;
+        }
+        offset += read;
+    }
+    return true;
+}
+
+std::uint32_t frameUint32(const std::uint8_t *bytes)
+{
+    return static_cast<std::uint32_t>(bytes[0])
+        | (static_cast<std::uint32_t>(bytes[1]) << 8U)
+        | (static_cast<std::uint32_t>(bytes[2]) << 16U)
+        | (static_cast<std::uint32_t>(bytes[3]) << 24U);
+}
+
+ReadFrameResult readFrame(
+    HANDLE handle,
+    Frame &frame,
+    std::string &error)
+{
+    std::array<std::uint8_t, FrameHeaderSize> header{};
+    DWORD firstRead = 0;
+    if (!ReadFile(handle, header.data(), header.size(), &firstRead, nullptr))
+    {
+        const DWORD code = GetLastError();
+        if (code == ERROR_BROKEN_PIPE || code == ERROR_OPERATION_ABORTED)
+        {
+            return ReadFrameResult::Eof;
+        }
+        error = "failed to read broker frame header";
+        return ReadFrameResult::Error;
+    }
+    if (firstRead == 0)
+    {
+        return ReadFrameResult::Eof;
+    }
+    if (firstRead < header.size()
+        && !readExact(
+            handle,
+            header.data() + firstRead,
+            header.size() - firstRead))
+    {
+        error = "truncated broker frame header";
+        return ReadFrameResult::Error;
+    }
+    const std::uint32_t payloadSize = frameUint32(header.data() + 20);
+    if (payloadSize > MaximumPayloadSize)
+    {
+        error = "broker frame payload exceeded limit";
+        return ReadFrameResult::Error;
+    }
+    std::vector<std::uint8_t> encoded(header.begin(), header.end());
+    encoded.resize(FrameHeaderSize + payloadSize);
+    if (payloadSize > 0
+        && !readExact(handle, encoded.data() + FrameHeaderSize, payloadSize))
+    {
+        error = "truncated broker frame payload";
+        return ReadFrameResult::Error;
+    }
+    std::vector<Frame> decoded;
+    if (!decodeFrames(encoded, decoded, error) || decoded.size() != 1)
+    {
+        return ReadFrameResult::Error;
+    }
+    frame = std::move(decoded.front());
+    return ReadFrameResult::Ok;
+}
+
+ReadFrameResult peekFrame(
+    HANDLE handle,
+    Frame &frame,
+    std::string &error)
+{
+    std::array<std::uint8_t, FrameHeaderSize> header{};
+    DWORD peeked = 0;
+    DWORD available = 0;
+    if (!PeekNamedPipe(
+            handle,
+            header.data(),
+            static_cast<DWORD>(header.size()),
+            &peeked,
+            &available,
+            nullptr))
+    {
+        const DWORD code = GetLastError();
+        if (code == ERROR_BROKEN_PIPE || code == ERROR_OPERATION_ABORTED)
+        {
+            return ReadFrameResult::Eof;
+        }
+        error = "failed to inspect broker command pipe";
+        return ReadFrameResult::Error;
+    }
+    if (available < FrameHeaderSize || peeked < FrameHeaderSize)
+    {
+        return ReadFrameResult::NoData;
+    }
+    const std::uint32_t payloadSize = frameUint32(header.data() + 20);
+    if (payloadSize > MaximumPayloadSize)
+    {
+        error = "broker frame payload exceeded limit";
+        return ReadFrameResult::Error;
+    }
+    if (available < FrameHeaderSize + payloadSize)
+    {
+        return ReadFrameResult::NoData;
+    }
+    return readFrame(handle, frame, error);
 }
 
 std::vector<std::uint8_t> exitPayload(std::uint32_t exitCode)
@@ -158,53 +296,47 @@ int fail(
 
 int runBroker(HANDLE command, HANDLE event)
 {
-    std::vector<std::uint8_t> commandBytes;
-    if (!readCommands(command, commandBytes))
-    {
-        return fail(event, 0, 1, "failed to read broker commands", 65);
-    }
-    std::vector<Frame> frames;
+    Frame startFrame;
     std::string error;
-    if (!decodeFrames(commandBytes, frames, error)
-        || !validateCommandSequence(frames, error))
-    {
-        SecureZeroMemory(commandBytes.data(), commandBytes.size());
-        return fail(event, 0, 1, error, 66);
-    }
-    SecureZeroMemory(commandBytes.data(), commandBytes.size());
-    const std::uint32_t generation = frames.front().generation;
-
-    StartRequest request;
-    if (!decodeStartRequest(frames.front().payload, request, error))
-    {
-        return fail(event, generation, 1, error, 67);
-    }
-    Frame *secretFrame = nullptr;
-    std::vector<std::uint8_t> initialInput;
-    for (Frame &frame : frames)
-    {
-        if (frame.type == FrameType::AuthSecret)
-        {
-            secretFrame = &frame;
-        }
-        else if (frame.type == FrameType::Input)
-        {
-            initialInput.insert(
-                initialInput.end(),
-                frame.payload.begin(),
-                frame.payload.end());
-        }
-    }
-    const bool requiresPassword = request.ssh.authentication
-        == SshAuthenticationMode::StoredPassword;
-    if (requiresPassword != (secretFrame != nullptr))
+    if (readFrame(command, startFrame, error) != ReadFrameResult::Ok
+        || startFrame.type != FrameType::Start
+        || startFrame.generation == 0
+        || startFrame.sequence != 1)
     {
         return fail(
             event,
-            generation,
+            0,
             1,
-            "stored-password mode and AuthSecret frame do not match",
-            68);
+            error.empty() ? "invalid broker Start frame" : error,
+            65);
+    }
+    const std::uint32_t generation = startFrame.generation;
+
+    StartRequest request;
+    if (!decodeStartRequest(startFrame.payload, request, error))
+    {
+        return fail(event, generation, 1, error, 66);
+    }
+    const bool requiresPassword = request.ssh.authentication
+        == SshAuthenticationMode::StoredPassword;
+    Frame secretFrame;
+    std::uint32_t nextCommandSequence = 2;
+    if (requiresPassword)
+    {
+        if (readFrame(command, secretFrame, error) != ReadFrameResult::Ok
+            || secretFrame.type != FrameType::AuthSecret
+            || secretFrame.generation != generation
+            || secretFrame.sequence != nextCommandSequence
+            || secretFrame.payload.empty())
+        {
+            return fail(
+                event,
+                generation,
+                1,
+                error.empty() ? "invalid broker AuthSecret frame" : error,
+                67);
+        }
+        ++nextCommandSequence;
     }
 
     OpenSshLauncherConfig launcherConfig;
@@ -215,16 +347,16 @@ int runBroker(HANDLE command, HANDLE event)
         launcherConfig);
     if (!launch.spec)
     {
-        return fail(event, generation, 1, launch.error, 69);
+        return fail(event, generation, 1, launch.error, 68);
     }
 
     std::unique_ptr<StoredPasswordChannel> passwordChannel;
     std::vector<std::pair<std::wstring, std::wstring>> environment;
-    if (secretFrame != nullptr)
+    if (requiresPassword)
     {
         const std::string_view password(
-            reinterpret_cast<const char *>(secretFrame->payload.data()),
-            secretFrame->payload.size());
+            reinterpret_cast<const char *>(secretFrame.payload.data()),
+            secretFrame.payload.size());
         try
         {
             passwordChannel = StoredPasswordChannel::create(
@@ -236,13 +368,11 @@ int runBroker(HANDLE command, HANDLE event)
         {
             error = exception.what();
         }
-        SecureZeroMemory(
-            secretFrame->payload.data(),
-            secretFrame->payload.size());
-        secretFrame = nullptr;
+        SecureZeroMemory(secretFrame.payload.data(), secretFrame.payload.size());
+        secretFrame.payload.clear();
         if (!passwordChannel)
         {
-            return fail(event, generation, 1, error, 70);
+            return fail(event, generation, 1, error, 69);
         }
         environment = {
             {L"SSH_ASKPASS", request.askPassHelper.wstring()},
@@ -255,7 +385,7 @@ int runBroker(HANDLE command, HANDLE event)
     ConPtyProcess process;
     if (!process.start(*launch.spec, environment, 100, 30))
     {
-        return fail(event, generation, 1, process.error(), 71);
+        return fail(event, generation, 1, process.error(), 70);
     }
 
     bool passwordServed = !passwordChannel;
@@ -269,10 +399,9 @@ int runBroker(HANDLE command, HANDLE event)
     }
 
     std::uint32_t eventSequence = 1;
-    sendEvent(event, FrameType::Ready, generation, eventSequence++);
-    if (!initialInput.empty() && !process.send(initialInput))
+    if (!sendEvent(event, FrameType::Ready, generation, eventSequence++))
     {
-        process.terminate(72);
+        process.terminate(71);
         if (passwordChannel)
         {
             passwordChannel->cancel();
@@ -281,22 +410,125 @@ int runBroker(HANDLE command, HANDLE event)
         {
             passwordThread.join();
         }
-        return fail(event, generation, eventSequence, process.error(), 72);
+        return 71;
     }
 
-    std::uint32_t sshExitCode = 0;
-    if (!process.wait(std::chrono::seconds(45), sshExitCode))
+    bool closeRequested = false;
+    bool commandFailed = false;
+    bool commandOpen = true;
+    std::string commandError;
+    std::uint32_t expectedCommandSequence = nextCommandSequence;
+
+    auto closeStarted = std::chrono::steady_clock::time_point{};
+    bool eventWriteFailed = false;
+    bool forcedClose = false;
+    while (!process.hasExited() && !commandFailed)
+    {
+        while (commandOpen && !closeRequested)
+        {
+            Frame frame;
+            std::string readError;
+            const ReadFrameResult result = peekFrame(command, frame, readError);
+            if (result == ReadFrameResult::NoData)
+            {
+                break;
+            }
+            if (result == ReadFrameResult::Eof)
+            {
+                commandOpen = false;
+                break;
+            }
+            if (result != ReadFrameResult::Ok
+                || frame.generation != generation
+                || frame.sequence != expectedCommandSequence++)
+            {
+                commandError = readError.empty()
+                    ? "invalid streaming broker command sequence"
+                    : readError;
+                commandFailed = true;
+                break;
+            }
+            if (frame.type == FrameType::Input)
+            {
+                if (!process.send(frame.payload))
+                {
+                    commandError = process.error();
+                    commandFailed = true;
+                    break;
+                }
+            }
+            else if (frame.type == FrameType::Resize)
+            {
+                if (frame.payload.size() != 4)
+                {
+                    commandError = "Resize frame payload must be four bytes";
+                    commandFailed = true;
+                    break;
+                }
+                const std::uint16_t columns = static_cast<std::uint16_t>(
+                    frame.payload[0] | frame.payload[1] << 8U);
+                const std::uint16_t rows = static_cast<std::uint16_t>(
+                    frame.payload[2] | frame.payload[3] << 8U);
+                if (!process.resize(columns, rows))
+                {
+                    commandError = process.error();
+                    commandFailed = true;
+                    break;
+                }
+            }
+            else if (frame.type == FrameType::Close)
+            {
+                closeRequested = true;
+                process.closeInput();
+            }
+            else
+            {
+                commandError = "command is not valid after Ready";
+                commandFailed = true;
+                break;
+            }
+        }
+        std::vector<std::uint8_t> output = process.takeOutput();
+        if (!sendOutputEvents(
+                event,
+                generation,
+                eventSequence,
+                std::move(output)))
+        {
+            eventWriteFailed = true;
+            break;
+        }
+        if (closeRequested)
+        {
+            if (closeStarted == std::chrono::steady_clock::time_point{})
+            {
+                closeStarted = std::chrono::steady_clock::now();
+            }
+            else if (std::chrono::steady_clock::now() - closeStarted
+                >= std::chrono::seconds(2))
+            {
+                process.terminate(72);
+                forcedClose = true;
+                break;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    if (commandFailed || eventWriteFailed)
     {
         process.terminate(73);
-        if (passwordChannel)
-        {
-            passwordChannel->cancel();
-        }
-        if (passwordThread.joinable())
-        {
-            passwordThread.join();
-        }
-        return fail(event, generation, eventSequence, process.error(), 73);
+    }
+    std::uint32_t sshExitCode = commandFailed || eventWriteFailed
+        ? 73
+        : (forcedClose ? 72 : 0);
+    if (!commandFailed && !eventWriteFailed && !forcedClose && !process.wait(
+            std::chrono::seconds(2),
+            sshExitCode))
+    {
+        process.terminate(74);
+        commandFailed = true;
+        commandError = process.error();
     }
     if (passwordChannel)
     {
@@ -307,26 +539,22 @@ int runBroker(HANDLE command, HANDLE event)
         passwordThread.join();
     }
 
-    std::vector<std::uint8_t> output = process.takeOutput();
-    std::size_t offset = 0;
-    while (offset < output.size())
+    std::vector<std::uint8_t> finalOutput = process.takeOutput();
+    if (!sendOutputEvents(
+            event,
+            generation,
+            eventSequence,
+            std::move(finalOutput)))
     {
-        const std::size_t size = std::min<std::size_t>(
-            MaximumPayloadSize,
-            output.size() - offset);
-        std::vector<std::uint8_t> chunk(
-            output.begin() + static_cast<std::ptrdiff_t>(offset),
-            output.begin() + static_cast<std::ptrdiff_t>(offset + size));
-        if (!sendEvent(
-                event,
-                FrameType::Output,
-                generation,
-                eventSequence++,
-                std::move(chunk)))
-        {
-            return 74;
-        }
-        offset += size;
+        return 75;
+    }
+    if (commandFailed)
+    {
+        return fail(event, generation, eventSequence, commandError, 76);
+    }
+    if (eventWriteFailed)
+    {
+        return 77;
     }
     if (!passwordServed && requiresPassword)
     {
@@ -337,7 +565,7 @@ int runBroker(HANDLE command, HANDLE event)
             passwordError.empty()
                 ? "stored password was not consumed"
                 : passwordError,
-            75);
+            78);
     }
     sendEvent(
         event,
@@ -346,7 +574,7 @@ int runBroker(HANDLE command, HANDLE event)
         eventSequence++,
         exitPayload(sshExitCode));
     sendEvent(event, FrameType::Stopped, generation, eventSequence++);
-    return sshExitCode == 0 ? 0 : 76;
+    return sshExitCode == 0 ? 0 : 79;
 }
 
 } // namespace

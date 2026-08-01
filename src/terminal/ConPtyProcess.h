@@ -28,6 +28,8 @@ public:
         std::uint16_t rows);
     bool send(const std::vector<std::uint8_t> &bytes);
     bool resize(std::uint16_t columns, std::uint16_t rows);
+    void closeInput() noexcept;
+    bool hasExited() const noexcept;
     bool wait(std::chrono::milliseconds timeout, std::uint32_t &exitCode);
     void terminate(std::uint32_t exitCode) noexcept;
 

@@ -166,7 +166,8 @@ bool validateCommandSequence(
     }
 
     bool sawSecret = false;
-    bool sawInput = false;
+    bool sawRuntimeCommand = false;
+    bool sawClose = false;
     for (std::size_t index = 0; index < frames.size(); ++index)
     {
         const Frame &frame = frames[index];
@@ -177,6 +178,11 @@ bool validateCommandSequence(
             error = "broker command generation or sequence is invalid";
             return false;
         }
+        if (sawClose)
+        {
+            error = "broker Close frame must be last";
+            return false;
+        }
         if (frame.type == FrameType::Start && index != 0)
         {
             error = "broker Start frame was repeated";
@@ -184,16 +190,19 @@ bool validateCommandSequence(
         }
         if (frame.type == FrameType::AuthSecret)
         {
-            if (sawSecret || sawInput || frame.payload.empty())
+            if (sawSecret || sawRuntimeCommand || frame.payload.empty())
             {
                 error = "broker AuthSecret position or payload is invalid";
                 return false;
             }
             sawSecret = true;
         }
-        else if (frame.type == FrameType::Input)
+        else if (frame.type == FrameType::Input
+            || frame.type == FrameType::Resize
+            || frame.type == FrameType::Close)
         {
-            sawInput = true;
+            sawRuntimeCommand = true;
+            sawClose = frame.type == FrameType::Close;
         }
     }
     return true;

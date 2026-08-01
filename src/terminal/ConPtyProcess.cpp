@@ -164,6 +164,7 @@ struct ConPtyProcess::Impl
     std::thread outputThread;
     std::mutex inputMutex;
     std::mutex outputMutex;
+    std::mutex stateMutex;
     std::vector<std::uint8_t> outputBytes;
     std::string error;
     bool started = false;
@@ -416,6 +417,7 @@ bool ConPtyProcess::send(const std::vector<std::uint8_t> &bytes)
 
 bool ConPtyProcess::resize(std::uint16_t columns, std::uint16_t rows)
 {
+    std::lock_guard<std::mutex> lock(impl_->stateMutex);
     if (!impl_->pseudoConsole || columns == 0 || rows == 0)
     {
         impl_->error = "ConPTY resize arguments are invalid";
@@ -430,6 +432,18 @@ bool ConPtyProcess::resize(std::uint16_t columns, std::uint16_t rows)
         return false;
     }
     return true;
+}
+
+void ConPtyProcess::closeInput() noexcept
+{
+    std::lock_guard<std::mutex> lock(impl_->inputMutex);
+    impl_->input.reset();
+}
+
+bool ConPtyProcess::hasExited() const noexcept
+{
+    return impl_->process
+        && WaitForSingleObject(impl_->process.get(), 0) == WAIT_OBJECT_0;
 }
 
 bool ConPtyProcess::wait(
@@ -454,18 +468,22 @@ bool ConPtyProcess::wait(
         return false;
     }
     exitCode = nativeExitCode;
-    impl_->input.reset();
-    impl_->closePseudoConsole();
-    impl_->joinOutput();
-    impl_->output.reset();
-    impl_->process.reset();
-    impl_->job.reset();
-    impl_->finished = true;
+    {
+        std::scoped_lock lock(impl_->inputMutex, impl_->stateMutex);
+        impl_->input.reset();
+        impl_->closePseudoConsole();
+        impl_->joinOutput();
+        impl_->output.reset();
+        impl_->process.reset();
+        impl_->job.reset();
+        impl_->finished = true;
+    }
     return true;
 }
 
 void ConPtyProcess::terminate(std::uint32_t exitCode) noexcept
 {
+    std::scoped_lock lock(impl_->inputMutex, impl_->stateMutex);
     if (impl_->job)
     {
         TerminateJobObject(impl_->job.get(), exitCode);

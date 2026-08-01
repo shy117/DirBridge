@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
@@ -98,22 +99,64 @@ bool writeAll(HANDLE handle, const std::vector<std::uint8_t> &bytes)
     return true;
 }
 
-bool readToEnd(HANDLE handle, std::vector<std::uint8_t> &bytes)
+bool readExact(HANDLE handle, std::uint8_t *bytes, std::size_t size)
 {
-    std::array<std::uint8_t, 4096> buffer{};
-    for (;;)
+    std::size_t offset = 0;
+    while (offset < size)
     {
         DWORD read = 0;
-        if (!ReadFile(handle, buffer.data(), buffer.size(), &read, nullptr))
+        if (!ReadFile(
+                handle,
+                bytes + offset,
+                static_cast<DWORD>(size - offset),
+                &read,
+                nullptr)
+            || read == 0)
         {
-            return GetLastError() == ERROR_BROKEN_PIPE;
+            return false;
         }
-        if (read == 0)
-        {
-            return true;
-        }
-        bytes.insert(bytes.end(), buffer.begin(), buffer.begin() + read);
+        offset += read;
     }
+    return true;
+}
+
+std::uint32_t read32(const std::uint8_t *bytes)
+{
+    return static_cast<std::uint32_t>(bytes[0])
+        | (static_cast<std::uint32_t>(bytes[1]) << 8U)
+        | (static_cast<std::uint32_t>(bytes[2]) << 16U)
+        | (static_cast<std::uint32_t>(bytes[3]) << 24U);
+}
+
+bool readEventFrame(HANDLE handle, Frame &frame, std::string &error)
+{
+    std::array<std::uint8_t, FrameHeaderSize> header{};
+    if (!readExact(handle, header.data(), header.size()))
+    {
+        error = "failed to read broker event header";
+        return false;
+    }
+    const std::uint32_t payloadSize = read32(header.data() + 20);
+    if (payloadSize > MaximumPayloadSize)
+    {
+        error = "broker event payload exceeded limit";
+        return false;
+    }
+    std::vector<std::uint8_t> encoded(header.begin(), header.end());
+    encoded.resize(FrameHeaderSize + payloadSize);
+    if (payloadSize > 0
+        && !readExact(handle, encoded.data() + FrameHeaderSize, payloadSize))
+    {
+        error = "failed to read broker event payload";
+        return false;
+    }
+    std::vector<Frame> decoded;
+    if (!decodeFrames(encoded, decoded, error) || decoded.size() != 1)
+    {
+        return false;
+    }
+    frame = std::move(decoded.front());
+    return true;
 }
 
 std::optional<std::wstring> argument(
@@ -178,16 +221,8 @@ int run(
         std::vector<std::uint8_t>(site->password.begin(), site->password.end())};
     SecureZeroMemory(site->password.data(), site->password.size());
     site->password.clear();
-    const std::string input =
-        "printf 'DIRBRIDGE_SSH_UBUNTU_OK:%s\\n' \"$(uname -s)\"\rexit\r";
-    Frame inputFrame{
-        FrameType::Input,
-        Generation,
-        3,
-        std::vector<std::uint8_t>(input.begin(), input.end())};
-
     std::vector<std::uint8_t> commands;
-    for (const Frame *frame : {&startFrame, &secretFrame, &inputFrame})
+    for (const Frame *frame : {&startFrame, &secretFrame})
     {
         const auto encoded = encodeFrame(*frame);
         commands.insert(commands.end(), encoded.begin(), encoded.end());
@@ -284,52 +319,129 @@ int run(
     eventWrite.reset();
     const bool written = writeAll(commandWrite.get(), commands);
     SecureZeroMemory(commands.data(), commands.size());
-    commandWrite.reset();
     if (!written)
     {
         TerminateJobObject(job.get(), 10);
         return 10;
     }
-    if (WaitForSingleObject(processHandle.get(), 60000) != WAIT_OBJECT_0)
-    {
-        TerminateJobObject(job.get(), 11);
-        return 11;
-    }
-
-    std::vector<std::uint8_t> eventBytes;
-    if (!readToEnd(eventRead.get(), eventBytes))
-    {
-        return 12;
-    }
     std::vector<Frame> events;
-    std::string error;
-    if (!decodeFrames(eventBytes, events, error))
-    {
-        std::cerr << error << '\n';
-        return 13;
-    }
     std::vector<std::uint8_t> output;
-    for (const Frame &frame : events)
+    std::string error;
+    std::uint32_t expectedEventSequence = 1;
+    bool sentRuntimeCommands = false;
+    bool sentClose = false;
+    bool brokerError = false;
+    bool exited = false;
+    std::uint32_t sshExitCode = 0;
+    bool stopped = false;
+    const auto deadline = std::chrono::steady_clock::now()
+        + std::chrono::seconds(60);
+    while (!stopped && std::chrono::steady_clock::now() < deadline)
     {
+        Frame frame;
+        if (!readEventFrame(eventRead.get(), frame, error)
+            || frame.generation != Generation
+            || frame.sequence != expectedEventSequence++)
+        {
+            std::cerr << (error.empty()
+                ? "invalid broker event sequence"
+                : error) << '\n';
+            TerminateJobObject(job.get(), 12);
+            return 12;
+        }
+        events.push_back(frame);
+        if (frame.type == FrameType::Ready && !sentRuntimeCommands)
+        {
+            Frame resize{
+                FrameType::Resize,
+                Generation,
+                3,
+                {120, 0, 40, 0}};
+            const std::string input =
+                "printf 'DIRBRIDGE_SSH_UBUNTU_OK:%s\\n' \"$(uname -s)\"\r";
+            Frame inputFrame{
+                FrameType::Input,
+                Generation,
+                4,
+                std::vector<std::uint8_t>(input.begin(), input.end())};
+            const auto resizeBytes = encodeFrame(resize);
+            const auto inputBytes = encodeFrame(inputFrame);
+            if (!writeAll(commandWrite.get(), resizeBytes))
+            {
+                std::cerr << "failed to write Resize frame: "
+                          << GetLastError() << '\n';
+                brokerError = true;
+                commandWrite.reset();
+            }
+            else if (!writeAll(commandWrite.get(), inputBytes))
+            {
+                std::cerr << "failed to write Input frame: "
+                          << GetLastError() << '\n';
+                brokerError = true;
+                commandWrite.reset();
+            }
+            sentRuntimeCommands = true;
+        }
         if (frame.type == FrameType::Error)
         {
             std::cerr << "broker error: "
                       << std::string(frame.payload.begin(), frame.payload.end())
                       << '\n';
+            brokerError = true;
         }
         else if (frame.type == FrameType::Output)
         {
             output.insert(output.end(), frame.payload.begin(), frame.payload.end());
+            const std::string marker = "DIRBRIDGE_SSH_UBUNTU_OK:Linux";
+            if (!sentClose && std::search(
+                    output.begin(), output.end(), marker.begin(), marker.end())
+                    != output.end())
+            {
+                const Frame close{FrameType::Close, Generation, 5, {}};
+                if (!writeAll(commandWrite.get(), encodeFrame(close)))
+                {
+                    const DWORD code = GetLastError();
+                    if (code != ERROR_BROKEN_PIPE && code != ERROR_NO_DATA)
+                    {
+                        std::cerr << "failed to write Close frame: "
+                                  << code << '\n';
+                        TerminateJobObject(job.get(), 13);
+                        return 13;
+                    }
+                    commandWrite.reset();
+                }
+                sentClose = true;
+            }
         }
+        else if (frame.type == FrameType::Exit)
+        {
+            exited = frame.payload.size() == 4;
+            if (exited)
+            {
+                sshExitCode = read32(frame.payload.data());
+            }
+        }
+        else if (frame.type == FrameType::Stopped)
+        {
+            stopped = true;
+        }
+    }
+    commandWrite.reset();
+    if (!stopped || WaitForSingleObject(processHandle.get(), 5000) != WAIT_OBJECT_0)
+    {
+        TerminateJobObject(job.get(), 14);
+        return 14;
     }
     const std::string marker = "DIRBRIDGE_SSH_UBUNTU_OK:Linux";
     const bool connected = std::search(
         output.begin(), output.end(), marker.begin(), marker.end()) != output.end();
-    std::cout << (connected ? "[PASS] " : "[FAIL] ")
+    const bool passed = connected && sentClose && exited && stopped && !brokerError;
+    std::cout << (passed ? "[PASS] " : "[FAIL] ")
               << "Broker + ConPTY + OpenSSH + Ubuntu\n";
     std::cout << "[SUMMARY] events=" << events.size()
-              << " output_bytes=" << output.size() << '\n';
-    return connected ? 0 : 14;
+              << " output_bytes=" << output.size()
+              << " ssh_exit_code=" << sshExitCode << '\n';
+    return passed ? 0 : 14;
 }
 
 } // namespace
