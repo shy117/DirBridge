@@ -127,6 +127,29 @@ QString SshTerminalManager::openSession(const SiteProfile &profile)
         return {};
     }
 
+    const auto requireFile = [this](
+                                 const std::filesystem::path &path,
+                                 const QString &displayName) {
+        std::error_code error;
+        if (!path.empty() && std::filesystem::is_regular_file(path, error))
+        {
+            return true;
+        }
+        setError(QString("%1 不存在：%2")
+            .arg(displayName, QString::fromStdWString(path.wstring())));
+        return false;
+    };
+    if (!requireFile(impl_->paths.brokerExecutable, "SSH Broker")
+        || !requireFile(impl_->paths.sshExecutable, "系统 OpenSSH"))
+    {
+        return {};
+    }
+    if (!profile.password.empty()
+        && !requireFile(impl_->paths.askPassHelper, "SSH AskPass helper"))
+    {
+        return {};
+    }
+
     StartRequest request;
     request.ssh.displayName = profile.name;
     request.ssh.host = profile.host;

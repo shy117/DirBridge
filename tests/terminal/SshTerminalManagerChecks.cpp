@@ -42,6 +42,19 @@ int main(int argc, char **argv)
     site.username = "tester";
     site.password = "saved-test-secret";
 
+    SshTerminalRuntimePaths missingPaths;
+    missingPaths.brokerExecutable = fakeBroker.parent_path()
+        / L"missing-terminal-broker.exe";
+    missingPaths.askPassHelper = fakeBroker;
+    missingPaths.sshExecutable = fakeBroker;
+    missingPaths.workingDirectory = std::filesystem::current_path();
+    SshTerminalManager missingManager(std::move(missingPaths));
+    if (!missingManager.openSession(site).isEmpty()
+        || !missingManager.lastError().contains("SSH Broker"))
+    {
+        return 2;
+    }
+
     bool ready = false;
     bool output = false;
     bool exited = false;
