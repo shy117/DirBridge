@@ -137,6 +137,7 @@ foreach ($fileName in @(
     "DirBridge.exe",
     "DirBridgeTerminalBroker.exe",
     "DirBridgeSshAskPass.exe",
+    "ghostty-vt.dll",
     "libcurl-x64.dll",
     "curl-ca-bundle.crt",
     "libgcc_s_seh-1.dll",
@@ -163,6 +164,7 @@ Copy-IfExists -Source (Resolve-RepoPath "installer/LICENSE.zh-CN.txt") -Destinat
 $licenseDir = Join-Path $stageDir "licenses"
 New-Item -ItemType Directory -Force -Path $licenseDir | Out-Null
 Copy-IfExists -Source (Resolve-RepoPath "resources/licenses/FluentUI-System-Icons-LICENSE.txt") -Destination (Join-Path $licenseDir "FluentUI-System-Icons-LICENSE.txt")
+Copy-IfExists -Source (Resolve-RepoPath "third_party/installed/ghostty-vt/licenses/Ghostty-LICENSE.txt") -Destination (Join-Path $licenseDir "Ghostty-LICENSE.txt")
 
 $thirdPartySource = Resolve-RepoPath "third_party/_source"
 if (Test-Path -LiteralPath $thirdPartySource) {

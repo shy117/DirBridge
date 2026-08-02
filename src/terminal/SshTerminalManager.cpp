@@ -4,16 +4,19 @@
 
 #include "terminal/SshTerminalManager.h"
 
+#include "terminal/GhosttyTerminalEngine.h"
 #include "terminal/TerminalBrokerClient.h"
 
 #include <QByteArray>
 #include <QMetaObject>
 #include <QPointer>
+#include <QTimer>
 #include <QUuid>
 
 #include <atomic>
 #include <chrono>
 #include <map>
+#include <mutex>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -51,6 +54,7 @@ SshTerminalRuntimePaths defaultSshTerminalRuntimePaths(
     paths.brokerExecutable = applicationDirectory
         / L"DirBridgeTerminalBroker.exe";
     paths.askPassHelper = applicationDirectory / L"DirBridgeSshAskPass.exe";
+    paths.terminalEngineLibrary = applicationDirectory / L"ghostty-vt.dll";
     paths.workingDirectory = workingDirectory;
 
     wchar_t windowsDirectory[32768]{};
@@ -69,8 +73,12 @@ struct SshTerminalManager::Session
 {
     QString id;
     std::unique_ptr<TerminalBrokerClient> client;
+    std::unique_ptr<ITerminalEngine> engine;
     std::thread reader;
+    std::mutex engineMutex;
     std::atomic<bool> closeRequested{false};
+    std::atomic<bool> snapshotQueued{false};
+    std::atomic<std::uint64_t> screenRevision{0};
 };
 
 struct SshTerminalManager::Impl
@@ -139,7 +147,8 @@ QString SshTerminalManager::openSession(const SiteProfile &profile)
             .arg(displayName, QString::fromStdWString(path.wstring())));
         return false;
     };
-    if (!requireFile(impl_->paths.brokerExecutable, "SSH Broker")
+    if (!requireFile(impl_->paths.terminalEngineLibrary, "Ghostty VT 运行库")
+        || !requireFile(impl_->paths.brokerExecutable, "SSH Broker")
         || !requireFile(impl_->paths.sshExecutable, "系统 OpenSSH"))
     {
         return {};
@@ -168,6 +177,17 @@ QString SshTerminalManager::openSession(const SiteProfile &profile)
     auto session = std::make_unique<Session>();
     session->id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     session->client = std::make_unique<TerminalBrokerClient>();
+    TerminalGeometry initialGeometry;
+    std::string engineError;
+    session->engine = GhosttyTerminalEngine::create(
+        impl_->paths.terminalEngineLibrary,
+        initialGeometry,
+        engineError);
+    if (!session->engine)
+    {
+        setError(fromUtf8(engineError));
+        return {};
+    }
     try
     {
         const bool started = profile.password.empty()
@@ -208,12 +228,140 @@ bool SshTerminalManager::sendInput(
         return false;
     }
     const auto *begin = reinterpret_cast<const std::uint8_t *>(bytes.constData());
-    if (!session->client->sendInput(
-            std::vector<std::uint8_t>(begin, begin + bytes.size())))
+    return sendEncoded(session,
+        std::vector<std::uint8_t>(begin, begin + bytes.size()));
+}
+
+bool SshTerminalManager::sendKey(
+    const QString &terminalId,
+    const TerminalKeyEvent &event)
+{
+    Session *session = findSession(terminalId);
+    if (session == nullptr || session->closeRequested)
+    {
+        setError("SSH 终端会话不存在或正在关闭。");
+        return false;
+    }
+    std::vector<std::uint8_t> encoded;
+    {
+        const std::lock_guard<std::mutex> lock(session->engineMutex);
+        encoded = session->engine->encodeKey(event);
+        if (encoded.empty() && !session->engine->lastError().empty())
+        {
+            setError(fromUtf8(session->engine->lastError()));
+            return false;
+        }
+    }
+    return sendEncoded(session, std::move(encoded));
+}
+
+bool SshTerminalManager::sendText(
+    const QString &terminalId,
+    const QByteArray &utf8)
+{
+    Session *session = findSession(terminalId);
+    if (session == nullptr || session->closeRequested)
+    {
+        setError("SSH 终端会话不存在或正在关闭。");
+        return false;
+    }
+    std::vector<std::uint8_t> encoded;
+    {
+        const std::lock_guard<std::mutex> lock(session->engineMutex);
+        encoded = session->engine->encodeText(std::string(
+            utf8.constData(), static_cast<std::size_t>(utf8.size())));
+    }
+    return sendEncoded(session, std::move(encoded));
+}
+
+bool SshTerminalManager::sendPaste(
+    const QString &terminalId,
+    const QByteArray &utf8)
+{
+    Session *session = findSession(terminalId);
+    if (session == nullptr || session->closeRequested)
+    {
+        setError("SSH 终端会话不存在或正在关闭。");
+        return false;
+    }
+    std::vector<std::uint8_t> encoded;
+    {
+        const std::lock_guard<std::mutex> lock(session->engineMutex);
+        encoded = session->engine->encodePaste(std::string(
+            utf8.constData(), static_cast<std::size_t>(utf8.size())));
+        if (encoded.empty() && !utf8.isEmpty())
+        {
+            setError(fromUtf8(session->engine->lastError()));
+            return false;
+        }
+    }
+    return sendEncoded(session, std::move(encoded));
+}
+
+bool SshTerminalManager::sendMouse(
+    const QString &terminalId,
+    const TerminalMouseEvent &event)
+{
+    Session *session = findSession(terminalId);
+    if (session == nullptr || session->closeRequested)
+    {
+        setError("SSH 终端会话不存在或正在关闭。");
+        return false;
+    }
+    std::vector<std::uint8_t> encoded;
+    {
+        const std::lock_guard<std::mutex> lock(session->engineMutex);
+        encoded = session->engine->encodeMouse(event);
+    }
+    return sendEncoded(session, std::move(encoded));
+}
+
+bool SshTerminalManager::scrollLines(const QString &terminalId, int lines)
+{
+    Session *session = findSession(terminalId);
+    if (session == nullptr || session->closeRequested)
+    {
+        setError("SSH 终端会话不存在或正在关闭。");
+        return false;
+    }
+    {
+        const std::lock_guard<std::mutex> lock(session->engineMutex);
+        if (!session->engine->scrollLines(lines))
+        {
+            setError(fromUtf8(session->engine->lastError()));
+            return false;
+        }
+    }
+    ++session->screenRevision;
+    scheduleSnapshot(session);
+    return true;
+}
+
+bool SshTerminalManager::resize(
+    const QString &terminalId,
+    const TerminalGeometry &geometry)
+{
+    Session *session = findSession(terminalId);
+    if (session == nullptr || session->closeRequested)
+    {
+        setError("SSH 终端会话不存在或正在关闭。");
+        return false;
+    }
+    if (!session->client->resize(geometry.columns, geometry.rows))
     {
         setError(fromUtf8(session->client->error()));
         return false;
     }
+    {
+        const std::lock_guard<std::mutex> lock(session->engineMutex);
+        if (!session->engine->resize(geometry))
+        {
+            setError(fromUtf8(session->engine->lastError()));
+            return false;
+        }
+    }
+    ++session->screenRevision;
+    scheduleSnapshot(session);
     return true;
 }
 
@@ -222,18 +370,10 @@ bool SshTerminalManager::resize(
     std::uint16_t columns,
     std::uint16_t rows)
 {
-    Session *session = findSession(terminalId);
-    if (session == nullptr || session->closeRequested)
-    {
-        setError("SSH 终端会话不存在或正在关闭。");
-        return false;
-    }
-    if (!session->client->resize(columns, rows))
-    {
-        setError(fromUtf8(session->client->error()));
-        return false;
-    }
-    return true;
+    TerminalGeometry geometry;
+    geometry.columns = columns;
+    geometry.rows = rows;
+    return resize(terminalId, geometry);
 }
 
 bool SshTerminalManager::requestClose(const QString &terminalId)
@@ -326,15 +466,34 @@ void SshTerminalManager::runReader(Session *session)
         }
         else if (frame.type == FrameType::Output)
         {
-            const QByteArray bytes(
-                reinterpret_cast<const char *>(frame.payload.data()),
-                static_cast<int>(frame.payload.size()));
-            QMetaObject::invokeMethod(this, [manager, terminalId, bytes]() {
-                if (manager)
+            bool parsed = false;
+            QString parseError;
+            {
+                const std::lock_guard<std::mutex> lock(session->engineMutex);
+                parsed = session->engine->ingest(
+                    frame.payload.data(), frame.payload.size());
+                if (!parsed)
                 {
-                    Q_EMIT manager->sessionOutput(terminalId, bytes);
+                    parseError = fromUtf8(session->engine->lastError());
                 }
-            }, Qt::QueuedConnection);
+            }
+            if (!parsed)
+            {
+                QMetaObject::invokeMethod(this,
+                    [manager, terminalId, parseError]() {
+                        if (manager)
+                        {
+                            Q_EMIT manager->sessionError(
+                                terminalId, parseError);
+                        }
+                    },
+                    Qt::QueuedConnection);
+            }
+            else
+            {
+                ++session->screenRevision;
+                scheduleSnapshot(session);
+            }
         }
         else if (frame.type == FrameType::Exit && frame.payload.size() == 4)
         {
@@ -391,6 +550,71 @@ void SshTerminalManager::runReader(Session *session)
             manager->finishReader(terminalId, readerError, sawStopped);
         }
     }, Qt::QueuedConnection);
+}
+
+void SshTerminalManager::scheduleSnapshot(Session *session)
+{
+    if (session == nullptr || session->snapshotQueued.exchange(true))
+    {
+        return;
+    }
+    const QString terminalId = session->id;
+    QPointer<SshTerminalManager> manager(this);
+    QTimer::singleShot(16, this, [manager, terminalId]() {
+        if (manager)
+        {
+            manager->publishSnapshot(terminalId);
+        }
+    });
+}
+
+void SshTerminalManager::publishSnapshot(const QString &terminalId)
+{
+    Session *session = findSession(terminalId);
+    if (session == nullptr)
+    {
+        return;
+    }
+    const std::uint64_t revision = session->screenRevision.load();
+    TerminalSnapshotPtr snapshot;
+    QString snapshotError;
+    {
+        const std::lock_guard<std::mutex> lock(session->engineMutex);
+        snapshot = session->engine->snapshot();
+        if (!snapshot)
+        {
+            snapshotError = fromUtf8(session->engine->lastError());
+        }
+    }
+    session->snapshotQueued = false;
+    if (!snapshot)
+    {
+        Q_EMIT sessionError(terminalId, snapshotError);
+    }
+    else
+    {
+        Q_EMIT sessionSnapshot(terminalId, std::move(snapshot));
+    }
+    if (session->screenRevision.load() != revision)
+    {
+        scheduleSnapshot(session);
+    }
+}
+
+bool SshTerminalManager::sendEncoded(
+    Session *session,
+    std::vector<std::uint8_t> bytes)
+{
+    if (bytes.empty())
+    {
+        return true;
+    }
+    if (!session->client->sendInput(bytes))
+    {
+        setError(fromUtf8(session->client->error()));
+        return false;
+    }
+    return true;
 }
 
 void SshTerminalManager::finishReader(

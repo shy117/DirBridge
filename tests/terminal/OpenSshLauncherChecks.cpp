@@ -124,7 +124,9 @@ int main()
     reporter.check(
         hasOption(*defaultResult.spec, L"ClearAllForwardings=yes")
             && hasOption(*defaultResult.spec, L"PermitLocalCommand=no")
-            && hasOption(*defaultResult.spec, L"ControlMaster=no"),
+            && hasOption(*defaultResult.spec, L"ControlMaster=no")
+            && hasOption(*defaultResult.spec,
+                L"StrictHostKeyChecking=accept-new"),
         "fixed safety options are present");
 
     request.authentication = SshAuthenticationMode::StoredPassword;

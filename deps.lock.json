@@ -20,6 +20,17 @@
       "url": "https://github.com/gabime/spdlog/archive/refs/tags/v1.17.0.zip",
       "sourceDir": "spdlog-1.17.0",
       "installDir": "spdlog"
+    },
+    "ghostty_vt": {
+      "commit": "46edeee407ff1cd15fb7db3837025386b2f3a327",
+      "sourcePackage": "libghostty-vt-46edeee407ff1cd15fb7db3837025386b2f3a327.tar.gz",
+      "sourceSha256": "95bb832859292d30808297ffbbdff403b1dbb5fbc9e865f40bae9ef6fd2cffbb",
+      "zigVersion": "0.16.0",
+      "zigWindowsX64Sha256": "68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e",
+      "target": "x86_64-windows-gnu",
+      "simd": false,
+      "dllSha256": "05b664c2ffbf68c0e1b851befc0a994affbc386897ee23811311891a49567495",
+      "installDir": "ghostty-vt"
     }
   }
 }

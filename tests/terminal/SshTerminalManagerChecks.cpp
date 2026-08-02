@@ -1,10 +1,12 @@
 #include "terminal/SshTerminalManager.h"
 
 #include <QCoreApplication>
+#include <QEventLoop>
 #include <QTimer>
 
 #include <filesystem>
 #include <iostream>
+#include <set>
 
 using dirbridge::terminal::SshTerminalManager;
 using dirbridge::terminal::SshTerminalRuntimePaths;
@@ -12,16 +14,18 @@ using dirbridge::terminal::SshTerminalRuntimePaths;
 int main(int argc, char **argv)
 {
     QCoreApplication application(argc, argv);
-    if (argc != 2)
+    if (argc != 3)
     {
         return 64;
     }
 
     const std::filesystem::path fakeBroker = std::filesystem::absolute(argv[1]);
+    const std::filesystem::path terminalEngine = std::filesystem::absolute(argv[2]);
     SshTerminalRuntimePaths paths;
     paths.brokerExecutable = fakeBroker;
     paths.askPassHelper = fakeBroker;
     paths.sshExecutable = fakeBroker;
+    paths.terminalEngineLibrary = terminalEngine;
     paths.workingDirectory = std::filesystem::current_path();
     SshTerminalManager manager(std::move(paths));
 
@@ -47,6 +51,7 @@ int main(int argc, char **argv)
         / L"missing-terminal-broker.exe";
     missingPaths.askPassHelper = fakeBroker;
     missingPaths.sshExecutable = fakeBroker;
+    missingPaths.terminalEngineLibrary = terminalEngine;
     missingPaths.workingDirectory = std::filesystem::current_path();
     SshTerminalManager missingManager(std::move(missingPaths));
     if (!missingManager.openSession(site).isEmpty()
@@ -75,15 +80,19 @@ int main(int argc, char **argv)
                 application.quit();
                 return;
             }
-            ready = manager.resize(id, 100, 30)
-                && manager.sendInput(id, QByteArray("pwd\r"));
+            dirbridge::terminal::TerminalGeometry geometry;
+            geometry.columns = 100;
+            geometry.rows = 30;
+            ready = manager.resize(id, geometry)
+                && manager.sendText(id, QByteArray("pwd\r"));
         });
     QObject::connect(
         &manager,
-        &SshTerminalManager::sessionOutput,
+        &SshTerminalManager::sessionSnapshot,
         &application,
-        [&](const QString &id, const QByteArray &bytes) {
-            if (id == terminalId && bytes == QByteArray("ok"))
+        [&](const QString &id,
+            const dirbridge::terminal::TerminalSnapshotPtr &snapshot) {
+            if (id == terminalId && snapshot && !snapshot->rows.empty())
             {
                 output = true;
                 if (!manager.requestClose(id))
@@ -147,13 +156,117 @@ int main(int argc, char **argv)
         cancellationPaths.brokerExecutable = fakeBroker;
         cancellationPaths.askPassHelper = fakeBroker;
         cancellationPaths.sshExecutable = fakeBroker;
+        cancellationPaths.terminalEngineLibrary = terminalEngine;
         cancellationPaths.workingDirectory = std::filesystem::current_path();
         SshTerminalManager cancellationManager(std::move(cancellationPaths));
         cancellationStarted = !cancellationManager.openSession(site).isEmpty();
     }
 
+    bool stressPassed = false;
+    {
+        SshTerminalRuntimePaths stressPaths;
+        stressPaths.brokerExecutable = fakeBroker;
+        stressPaths.askPassHelper = fakeBroker;
+        stressPaths.sshExecutable = fakeBroker;
+        stressPaths.terminalEngineLibrary = terminalEngine;
+        stressPaths.workingDirectory = std::filesystem::current_path();
+        SshTerminalManager stressManager(std::move(stressPaths));
+        QEventLoop stressLoop;
+        std::set<QString> sessionIds;
+        std::set<QString> closeSent;
+        int stoppedCount = 0;
+        bool stressError = false;
+        constexpr int stressSessionCount = 20;
+
+        QObject::connect(&stressManager,
+            &SshTerminalManager::sessionReady,
+            &application,
+            [&](const QString &id) {
+                dirbridge::terminal::TerminalGeometry geometry;
+                geometry.columns = 100;
+                geometry.rows = 30;
+                if (sessionIds.count(id) == 0
+                    || !stressManager.resize(id, geometry)
+                    || !stressManager.sendText(id, QByteArray("pwd\r")))
+                {
+                    stressError = true;
+                    stressLoop.quit();
+                }
+            });
+        QObject::connect(&stressManager,
+            &SshTerminalManager::sessionSnapshot,
+            &application,
+            [&](const QString &id,
+                const dirbridge::terminal::TerminalSnapshotPtr &snapshot) {
+                std::string text;
+                if (snapshot)
+                {
+                    for (const auto &row : snapshot->rows)
+                    {
+                        for (const auto &cell : row)
+                        {
+                            text += cell.text;
+                        }
+                    }
+                }
+                if (text.find("ok") != std::string::npos
+                    && closeSent.insert(id).second
+                    && !stressManager.requestClose(id))
+                {
+                    stressError = true;
+                    stressLoop.quit();
+                }
+            });
+        QObject::connect(&stressManager,
+            &SshTerminalManager::sessionError,
+            &application,
+            [&](const QString &, const QString &) {
+                stressError = true;
+                stressLoop.quit();
+            });
+        QObject::connect(&stressManager,
+            &SshTerminalManager::sessionStopped,
+            &application,
+            [&](const QString &) {
+                ++stoppedCount;
+                if (stoppedCount == stressSessionCount)
+                {
+                    QTimer::singleShot(20, &application, [&]() {
+                        stressManager.beginShutdown();
+                    });
+                }
+            });
+        QObject::connect(&stressManager,
+            &SshTerminalManager::allSessionsStopped,
+            &stressLoop,
+            &QEventLoop::quit);
+
+        for (int index = 0; index < stressSessionCount; ++index)
+        {
+            const QString id = stressManager.openSession(site);
+            if (id.isEmpty())
+            {
+                stressError = true;
+                break;
+            }
+            sessionIds.insert(id);
+        }
+        QTimer::singleShot(10000, &stressLoop, [&]() {
+            stressError = true;
+            stressLoop.quit();
+        });
+        if (!stressError)
+        {
+            stressLoop.exec();
+        }
+        stressPassed = !stressError
+            && stoppedCount == stressSessionCount
+            && closeSent.size() == stressSessionCount
+            && stressManager.sessionCount() == 0;
+    }
+
     const bool passed = ready && output && exited && closeWasRequested
-        && stopped && allStopped && cancellationStarted && !error
+        && stopped && allStopped && cancellationStarted && stressPassed && !error
         && manager.sessionCount() == 0;
     std::cout << (passed ? "[PASS] " : "[FAIL] ")
               << "Qt SSH terminal manager lifecycle\n";

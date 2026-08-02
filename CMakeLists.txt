@@ -163,8 +163,12 @@ if(WIN32)
     )
 
     add_library(DirBridgeTerminalQt STATIC
+        src/terminal/GhosttyTerminalEngine.cpp
+        src/terminal/GhosttyTerminalEngine.h
+        src/terminal/ITerminalEngine.h
         src/terminal/SshTerminalManager.cpp
         src/terminal/SshTerminalManager.h
+        src/terminal/TerminalTypes.h
     )
 
     target_link_libraries(DirBridgeTerminalQt
@@ -178,6 +182,13 @@ if(WIN32)
     target_include_directories(DirBridgeTerminalQt
         PUBLIC
             src
+        PRIVATE
+            "${DIRBRIDGE_GHOSTTY_VT_ROOT}/include"
+    )
+
+    target_compile_definitions(DirBridgeTerminalQt
+        PRIVATE
+            QT_NO_KEYWORDS
     )
 endif()
 
@@ -222,6 +233,8 @@ add_executable(DirBridge
     src/app/UiSmokeTests.h
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
+    src/ui/TerminalWidget.cpp
+    src/ui/TerminalWidget.h
     src/ui/FileChangeMonitor.cpp
     src/ui/FileChangeMonitor.h
     src/ui/ExternalEditManager.cpp
@@ -297,6 +310,10 @@ if(WIN32)
         tests/integration/SshTerminalVerticalCheck.cpp
     )
 
+    add_executable(DirBridgeSshTerminalEngineVerticalCheck
+        tests/integration/SshTerminalEngineVerticalCheck.cpp
+    )
+
     target_link_libraries(DirBridgeSshTerminalVerticalCheck
         PRIVATE
             DirBridgeCore
@@ -304,7 +321,19 @@ if(WIN32)
             Shell32
     )
 
+    target_link_libraries(DirBridgeSshTerminalEngineVerticalCheck
+        PRIVATE
+            DirBridgeCore
+            DirBridgeTerminalQt
+            Qt${QT_VERSION_MAJOR}::Core
+    )
+
     target_include_directories(DirBridgeSshTerminalVerticalCheck
+        PRIVATE
+            src
+    )
+
+    target_include_directories(DirBridgeSshTerminalEngineVerticalCheck
         PRIVATE
             src
     )
@@ -315,7 +344,16 @@ if(WIN32)
         DirBridgeTerminalBroker
     )
 
-    set_target_properties(DirBridgeSshTerminalVerticalCheck PROPERTIES
+    add_dependencies(
+        DirBridgeSshTerminalEngineVerticalCheck
+        DirBridgeSshAskPass
+        DirBridgeTerminalBroker
+    )
+
+    set_target_properties(
+        DirBridgeSshTerminalVerticalCheck
+        DirBridgeSshTerminalEngineVerticalCheck
+        PROPERTIES
         AUTOMOC OFF
         AUTOUIC OFF
         AUTORCC OFF
@@ -420,6 +458,20 @@ if(WIN32 AND BUILD_TESTING)
         tests/terminal/SshTerminalManagerChecks.cpp
     )
 
+    add_executable(DirBridgeGhosttyTerminalEngineChecks
+        tests/terminal/GhosttyTerminalEngineChecks.cpp
+    )
+
+    add_executable(DirBridgeGhosttyTerminalEngineStressChecks
+        tests/terminal/GhosttyTerminalEngineStressChecks.cpp
+    )
+
+    add_executable(DirBridgeTerminalWidgetChecks
+        tests/ui/TerminalWidgetChecks.cpp
+        src/ui/TerminalWidget.cpp
+        src/ui/TerminalWidget.h
+    )
+
     add_executable(DirBridgeAskPassChecks
         tests/terminal/AskPassChecks.cpp
     )
@@ -459,6 +511,33 @@ if(WIN32 AND BUILD_TESTING)
             Qt${QT_VERSION_MAJOR}::Core
     )
 
+    target_link_libraries(DirBridgeGhosttyTerminalEngineChecks
+        PRIVATE
+            DirBridgeTerminalQt
+            Qt${QT_VERSION_MAJOR}::Core
+    )
+
+    target_link_libraries(DirBridgeGhosttyTerminalEngineStressChecks
+        PRIVATE
+            DirBridgeTerminalQt
+            Qt${QT_VERSION_MAJOR}::Core
+    )
+
+    target_link_libraries(DirBridgeTerminalWidgetChecks
+        PRIVATE
+            Qt${QT_VERSION_MAJOR}::Widgets
+    )
+
+    target_include_directories(DirBridgeTerminalWidgetChecks
+        PRIVATE
+            src
+    )
+
+    target_compile_definitions(DirBridgeTerminalWidgetChecks
+        PRIVATE
+            QT_NO_KEYWORDS
+    )
+
     add_dependencies(
         DirBridgeSshTerminalManagerChecks
         DirBridgeTerminalBrokerClientChecks
@@ -480,8 +559,15 @@ if(WIN32 AND BUILD_TESTING)
         DirBridgeTerminalBrokerProtocolChecks
         DirBridgeTerminalBrokerClientChecks
         DirBridgeSshTerminalManagerChecks
+        DirBridgeGhosttyTerminalEngineChecks
+        DirBridgeGhosttyTerminalEngineStressChecks
         PROPERTIES
         AUTOMOC OFF
+        AUTOUIC OFF
+        AUTORCC OFF
+    )
+
+    set_target_properties(DirBridgeTerminalWidgetChecks PROPERTIES
         AUTOUIC OFF
         AUTORCC OFF
     )
@@ -522,10 +608,42 @@ if(WIN32 AND BUILD_TESTING)
         NAME DirBridgeSshTerminalManagerChecks
         COMMAND DirBridgeSshTerminalManagerChecks
             "$<TARGET_FILE:DirBridgeTerminalBrokerClientChecks>"
+            "${DIRBRIDGE_GHOSTTY_VT_ROOT}/bin/ghostty-vt.dll"
     )
     set_tests_properties(
         DirBridgeSshTerminalManagerChecks
         PROPERTIES TIMEOUT 15
+    )
+
+    add_test(
+        NAME DirBridgeGhosttyTerminalEngineChecks
+        COMMAND DirBridgeGhosttyTerminalEngineChecks
+            "${DIRBRIDGE_GHOSTTY_VT_ROOT}/bin/ghostty-vt.dll"
+    )
+    set_tests_properties(
+        DirBridgeGhosttyTerminalEngineChecks
+        PROPERTIES TIMEOUT 15
+    )
+
+    add_test(
+        NAME DirBridgeGhosttyTerminalEngineStressChecks
+        COMMAND DirBridgeGhosttyTerminalEngineStressChecks
+            "${DIRBRIDGE_GHOSTTY_VT_ROOT}/bin/ghostty-vt.dll"
+    )
+    set_tests_properties(
+        DirBridgeGhosttyTerminalEngineStressChecks
+        PROPERTIES TIMEOUT 60
+    )
+
+    add_test(
+        NAME DirBridgeTerminalWidgetChecks
+        COMMAND DirBridgeTerminalWidgetChecks
+    )
+    set_tests_properties(
+        DirBridgeTerminalWidgetChecks
+        PROPERTIES
+            TIMEOUT 15
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )
 
     add_test(
@@ -556,6 +674,15 @@ if(WIN32)
     get_filename_component(DIRBRIDGE_CXX_RUNTIME_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
 
     function(dirbridge_copy_runtime_files target_name)
+        if(EXISTS "${DIRBRIDGE_GHOSTTY_VT_ROOT}/bin/ghostty-vt.dll")
+            add_custom_command(TARGET ${target_name} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${DIRBRIDGE_GHOSTTY_VT_ROOT}/bin/ghostty-vt.dll"
+                    "$<TARGET_FILE_DIR:${target_name}>/ghostty-vt.dll"
+                COMMENT "Copying ghostty-vt runtime for ${target_name}"
+            )
+        endif()
+
         if(EXISTS "${DIRBRIDGE_CURL_ROOT}/bin/libcurl-x64.dll")
             add_custom_command(TARGET ${target_name} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different

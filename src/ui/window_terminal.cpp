@@ -1,10 +1,10 @@
 #include "ui/MainWindow.h"
 
 #include "terminal/SshTerminalManager.h"
+#include "ui/TerminalWidget.h"
 
 #include <QCoreApplication>
 #include <QDir>
-#include <QLabel>
 #include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -13,6 +13,9 @@
 #include <filesystem>
 
 using dirbridge::terminal::SshTerminalManager;
+using dirbridge::terminal::TerminalGeometry;
+using dirbridge::terminal::TerminalKeyEvent;
+using dirbridge::terminal::TerminalMouseEvent;
 using dirbridge::terminal::defaultSshTerminalRuntimePaths;
 
 void MainWindow::setupSshTerminalManager()
@@ -32,22 +35,20 @@ void MainWindow::setupSshTerminalManager()
             const auto found = m_terminalUiSessions.find(terminalId);
             if (found != m_terminalUiSessions.end())
             {
-                found->second.statusLabel->setText(
-                    "SSH 已连接，等待终端绘制层接管输出。");
+                found->second.terminal->setStatus(
+                    "SSH 进程已启动，正在等待远端输出。");
             }
         });
     connect(
         m_sshTerminalManager.get(),
-        &SshTerminalManager::sessionOutput,
+        &SshTerminalManager::sessionSnapshot,
         this,
-        [this](const QString &terminalId, const QByteArray &) {
+        [this](const QString &terminalId,
+            const dirbridge::terminal::TerminalSnapshotPtr &snapshot) {
             const auto found = m_terminalUiSessions.find(terminalId);
-            if (found != m_terminalUiSessions.end()
-                && !found->second.receivedOutput)
+            if (found != m_terminalUiSessions.end())
             {
-                found->second.receivedOutput = true;
-                found->second.statusLabel->setText(
-                    "SSH 会话正在运行；输出未写入日志，等待正式 Terminal Engine 渲染。");
+                found->second.terminal->setSnapshot(snapshot);
             }
         });
     connect(
@@ -60,9 +61,10 @@ void MainWindow::setupSshTerminalManager()
             {
                 return;
             }
-            found->second.statusLabel->setText(closeRequested
-                ? "SSH 终端正在关闭…"
-                : QString("SSH 进程已退出（代码 %1）。").arg(exitCode));
+            found->second.terminal->setStatus(closeRequested
+                    ? "SSH 终端正在关闭…"
+                    : QString("SSH 进程已退出（代码 %1）。").arg(exitCode),
+                !closeRequested && exitCode != 0);
         });
     connect(
         m_sshTerminalManager.get(),
@@ -72,8 +74,8 @@ void MainWindow::setupSshTerminalManager()
             const auto found = m_terminalUiSessions.find(terminalId);
             if (found != m_terminalUiSessions.end())
             {
-                found->second.statusLabel->setText(
-                    QString("SSH 终端错误：%1").arg(message));
+                found->second.terminal->setStatus(
+                    QString("SSH 终端错误：%1").arg(message), true);
             }
         });
     connect(
@@ -87,7 +89,7 @@ void MainWindow::setupSshTerminalManager()
                 return;
             }
             found->second.active = false;
-            found->second.statusLabel->setText("SSH 终端已停止。");
+            found->second.terminal->setStatus("SSH 终端已停止。");
             if (found->second.closeRequested)
             {
                 removeTerminalTab(terminalId);
@@ -133,29 +135,46 @@ void MainWindow::openSshTerminal(const SiteProfile &profile)
     page->setObjectName("sshTerminalPage");
     page->setProperty("terminalId", terminalId);
     auto *layout = new QVBoxLayout(page);
-    layout->setContentsMargins(12, 12, 12, 12);
-    auto *status = new QLabel("正在启动 SSH 终端…", page);
-    status->setObjectName("sshTerminalStatus");
-    status->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    status->setWordWrap(true);
-    auto *boundary = new QLabel(
-        "会话进程和安全通道已接入；正式终端内容将在 Terminal Engine 与自定义绘制层接入后显示。",
-        page);
-    boundary->setObjectName("sshTerminalRenderBoundary");
-    boundary->setWordWrap(true);
-    layout->addWidget(status);
-    layout->addWidget(boundary);
-    layout->addStretch(1);
+    layout->setContentsMargins(0, 0, 0, 0);
+    auto *terminal = new TerminalWidget(page);
+    terminal->setStatus("正在启动 SSH 终端…");
+    layout->addWidget(terminal);
+
+    connect(terminal, &TerminalWidget::keyInput, this,
+        [this, terminalId](const TerminalKeyEvent &event) {
+            m_sshTerminalManager->sendKey(terminalId, event);
+        });
+    connect(terminal, &TerminalWidget::textInput, this,
+        [this, terminalId](const QByteArray &utf8) {
+            m_sshTerminalManager->sendText(terminalId, utf8);
+        });
+    connect(terminal, &TerminalWidget::pasteInput, this,
+        [this, terminalId](const QByteArray &utf8) {
+            m_sshTerminalManager->sendPaste(terminalId, utf8);
+        });
+    connect(terminal, &TerminalWidget::mouseInput, this,
+        [this, terminalId](const TerminalMouseEvent &event) {
+            m_sshTerminalManager->sendMouse(terminalId, event);
+        });
+    connect(terminal, &TerminalWidget::scrollRequested, this,
+        [this, terminalId](int lines) {
+            m_sshTerminalManager->scrollLines(terminalId, lines);
+        });
+    connect(terminal, &TerminalWidget::resizeRequested, this,
+        [this, terminalId](const TerminalGeometry &geometry) {
+            m_sshTerminalManager->resize(terminalId, geometry);
+        });
 
     TerminalTab terminalTab;
     terminalTab.page = page;
-    terminalTab.statusLabel = status;
+    terminalTab.terminal = terminal;
     m_terminalUiSessions.emplace(terminalId, terminalTab);
     const QString title = QString::fromStdString(
         profile.name.empty() ? profile.host : profile.name);
     const int index = m_terminalTabs->addTab(page, title);
     m_terminalTabs->setCurrentIndex(index);
     m_bottomTabs->setCurrentWidget(m_terminalTabs->parentWidget());
+    terminal->setFocus(Qt::OtherFocusReason);
 }
 
 void MainWindow::closeTerminalTab(int index)
@@ -181,11 +200,12 @@ void MainWindow::closeTerminalTab(int index)
         return;
     }
     found->second.closeRequested = true;
-    found->second.statusLabel->setText("正在关闭 SSH 终端…");
+    found->second.terminal->setStatus("正在关闭 SSH 终端…");
     if (!m_sshTerminalManager->requestClose(terminalId))
     {
-        found->second.statusLabel->setText(
-            QString("关闭失败：%1").arg(m_sshTerminalManager->lastError()));
+        found->second.terminal->setStatus(
+            QString("关闭失败：%1").arg(m_sshTerminalManager->lastError()),
+            true);
     }
 }
 

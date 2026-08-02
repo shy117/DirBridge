@@ -22,6 +22,12 @@ set(DIRBRIDGE_SPDLOG_ROOT
     "Root directory of the installed spdlog package"
 )
 
+set(DIRBRIDGE_GHOSTTY_VT_ROOT
+    "${DIRBRIDGE_THIRD_PARTY_ROOT}/ghostty-vt"
+    CACHE PATH
+    "Root directory of the project-local ghostty-vt runtime package"
+)
+
 set(DIRBRIDGE_LOCAL_CURL_LIBRARY "")
 
 if(EXISTS "${DIRBRIDGE_CURL_ROOT}/include/curl/curl.h")
@@ -78,4 +84,13 @@ if(NOT TARGET spdlog::spdlog_header_only)
     add_library(spdlog_header_only INTERFACE)
     add_library(spdlog::spdlog_header_only ALIAS spdlog_header_only)
     target_include_directories(spdlog_header_only INTERFACE "${DIRBRIDGE_SPDLOG_ROOT}/include")
+endif()
+
+if(WIN32)
+    if(NOT EXISTS "${DIRBRIDGE_GHOSTTY_VT_ROOT}/include/ghostty/vt.h")
+        message(FATAL_ERROR "ghostty-vt headers were not found at ${DIRBRIDGE_GHOSTTY_VT_ROOT}. Run scripts/setup_ghostty_vt_local.ps1.")
+    endif()
+    if(NOT EXISTS "${DIRBRIDGE_GHOSTTY_VT_ROOT}/bin/ghostty-vt.dll")
+        message(FATAL_ERROR "ghostty-vt.dll was not found at ${DIRBRIDGE_GHOSTTY_VT_ROOT}. Run scripts/setup_ghostty_vt_local.ps1.")
+    endif()
 endif()

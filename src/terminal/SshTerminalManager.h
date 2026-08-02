@@ -2,6 +2,7 @@
 #define DIRBRIDGE_TERMINAL_SSHTERMINALMANAGER_H
 
 #include "config/SiteProfile.h"
+#include "terminal/TerminalTypes.h"
 
 #include <QByteArray>
 #include <QObject>
@@ -10,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <vector>
 
 namespace dirbridge::terminal {
 
@@ -18,6 +20,7 @@ struct SshTerminalRuntimePaths
     std::filesystem::path brokerExecutable;
     std::filesystem::path askPassHelper;
     std::filesystem::path sshExecutable;
+    std::filesystem::path terminalEngineLibrary;
     std::filesystem::path workingDirectory;
 };
 
@@ -37,6 +40,18 @@ public:
 
     QString openSession(const SiteProfile &profile);
     bool sendInput(const QString &terminalId, const QByteArray &bytes);
+    bool sendKey(
+        const QString &terminalId,
+        const TerminalKeyEvent &event);
+    bool sendText(const QString &terminalId, const QByteArray &utf8);
+    bool sendPaste(const QString &terminalId, const QByteArray &utf8);
+    bool sendMouse(
+        const QString &terminalId,
+        const TerminalMouseEvent &event);
+    bool scrollLines(const QString &terminalId, int lines);
+    bool resize(
+        const QString &terminalId,
+        const TerminalGeometry &geometry);
     bool resize(
         const QString &terminalId,
         std::uint16_t columns,
@@ -50,7 +65,9 @@ public:
 
 Q_SIGNALS:
     void sessionReady(const QString &terminalId);
-    void sessionOutput(const QString &terminalId, const QByteArray &bytes);
+    void sessionSnapshot(
+        const QString &terminalId,
+        dirbridge::terminal::TerminalSnapshotPtr snapshot);
     void sessionExited(
         const QString &terminalId,
         quint32 sshExitCode,
@@ -66,6 +83,9 @@ private:
         const QString &terminalId,
         const QString &readerError,
         bool sawStopped);
+    void scheduleSnapshot(Session *session);
+    void publishSnapshot(const QString &terminalId);
+    bool sendEncoded(Session *session, std::vector<std::uint8_t> bytes);
     Session *findSession(const QString &terminalId) const noexcept;
     void setError(const QString &message);
 

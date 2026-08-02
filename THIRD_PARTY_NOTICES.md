@@ -17,6 +17,7 @@ DirBridge source code is licensed under the Apache License 2.0. See `LICENSE`.
 | nlohmann/json | `3.12.0` | JSON configuration parsing and serialization | MIT License. |
 | spdlog | `1.17.0` | Logging | MIT License. |
 | Fluent UI System Icons | Repository asset copy under `resources/icons/fluent/` | Toolbar and UI icons | MIT License. See `resources/licenses/FluentUI-System-Icons-LICENSE.txt`. |
+| Ghostty VT | Commit `46edeee407ff1cd15fb7db3837025386b2f3a327` | SSH terminal state, VT parsing and input encoding | MIT License. The runtime DLL is loaded dynamically from the application directory. See `licenses/Ghostty-LICENSE.txt` in release packages. |
 | MinGW runtime libraries | From the configured MinGW compiler runtime directory | C/C++ runtime DLLs for Windows package | GCC runtime libraries are distributed with their own license terms and runtime exceptions. Keep the relevant runtime notices when preparing a public binary release. |
 
 ## Release Package Rule
@@ -28,6 +29,7 @@ Windows release packages should include:
 - `CHANGELOG.md`
 - `README.md`
 - `resources/licenses/FluentUI-System-Icons-LICENSE.txt`
+- `licenses/Ghostty-LICENSE.txt`
 - copied license files for bundled libcurl package dependencies when available under `third_party/_source`
 
 If dependency versions change, update this file and `deps.lock.json` in the same change.

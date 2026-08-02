@@ -34,6 +34,7 @@ class QTreeWidget;
 class QTreeWidgetItem;
 class ExternalEditManager;
 class FilePanel;
+class TerminalWidget;
 namespace dirbridge::terminal {
 class SshTerminalManager;
 }
@@ -159,10 +160,9 @@ private:
     struct TerminalTab
     {
         QWidget *page = nullptr;
-        QLabel *statusLabel = nullptr;
+        TerminalWidget *terminal = nullptr;
         bool active = true;
         bool closeRequested = false;
-        bool receivedOutput = false;
     };
 
     void loadSites();

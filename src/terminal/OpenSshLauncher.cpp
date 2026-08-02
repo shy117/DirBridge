@@ -174,6 +174,7 @@ OpenSshLaunchResult OpenSshLauncher::build(
     appendOption(spec.arguments, L"SessionType", L"default");
     appendOption(spec.arguments, L"RemoteCommand", L"none");
     appendOption(spec.arguments, L"AddKeysToAgent", L"no");
+    appendOption(spec.arguments, L"StrictHostKeyChecking", L"accept-new");
 
     if (request.authentication == SshAuthenticationMode::StoredPassword)
     {
