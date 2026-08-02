@@ -5,8 +5,11 @@
 ## 发布版本
 
 - 版本格式：`vX.Y.Z`
+- 当前归档版本：`v0.7.0`
 - 平台：Windows x64
 - 状态：MVP 阶段预发布包
+
+`v0.7.0` 新增内嵌多标签 SSH 终端、终端区域最大化和直接右键粘贴，并修复 Tab 命令补全与中文双宽字符显示。
 
 ## 发布资产
 
@@ -26,6 +29,9 @@ build/release/
 发布包应包含：
 
 - `DirBridge.exe`
+- `DirBridgeTerminalBroker.exe`
+- `DirBridgeSshAskPass.exe`
+- `ghostty-vt.dll`
 - Qt 运行库和平台插件
 - libcurl 运行库和 CA bundle
 - MinGW 运行库
@@ -34,6 +40,8 @@ build/release/
 - `LICENSE`
 - `THIRD_PARTY_NOTICES.md`
 - `licenses/` 第三方许可证文件
+
+其中 `licenses/Ghostty-LICENSE.txt` 必须与 `ghostty-vt.dll` 一起进入绿色包和安装包。
 
 ## 生成命令
 

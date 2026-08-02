@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(DirBridge
-    VERSION 0.6.0
+    VERSION 0.7.0
     LANGUAGES CXX
 )
 
@@ -658,6 +658,18 @@ endif()
 
 if(BUILD_TESTING)
     add_test(NAME DirBridgeCoreChecks COMMAND DirBridgeCoreChecks)
+endif()
+
+if(WIN32 AND BUILD_TESTING)
+    set_tests_properties(
+        DirBridgeSshTerminalManagerChecks
+        DirBridgeGhosttyTerminalEngineChecks
+        DirBridgeGhosttyTerminalEngineStressChecks
+        DirBridgeTerminalWidgetChecks
+        PROPERTIES
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt${QT_VERSION_MAJOR}::Core>"
+    )
 endif()
 
 target_link_libraries(DirBridgeRemoteCheck

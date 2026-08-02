@@ -16,6 +16,7 @@ DirBridge 是一个面向 Windows 桌面场景的远程文件管理工具，目�
 - 全局传输队列。
 - 目录传输聚合进度。
 - 远程文件通过系统默认应用编辑，并在保存后自动同步。
+- 内嵌多标签 SSH 终端，支持从 SFTP 站点和远程文件标签直接打开。
 - 应用日志和基础配置。
 
 ## 技术栈
@@ -26,6 +27,8 @@ DirBridge 是一个面向 Windows 桌面场景的远程文件管理工具，目�
 - libcurl
 - nlohmann/json
 - spdlog
+- Windows ConPTY / OpenSSH
+- Ghostty VT（项目固定版本的运行时 DLL）
 
 ## 构建环境要求
 
@@ -62,6 +65,10 @@ DirBridge 使用 C++17，并依赖标准库 `<filesystem>`。不建议为了兼�
 准备第三方依赖：
 
     powershell -ExecutionPolicy Bypass -File scripts\setup_third_party.ps1
+
+SSH 终端还需要项目固定版本的 Ghostty VT 运行包。准备好与 `deps.lock.json` 匹配的已验证构建产物后，执行：
+
+    powershell -ExecutionPolicy Bypass -File scripts\setup_ghostty_vt_local.ps1 -SourceRoot <Ghostty VT 构建输出目录>
 
 使用 CMake preset 配置和构建。公开仓库中的 `CMakePresets.json` 不包含本机 Qt / MinGW 绝对路径；如果 Qt 或 MinGW 不在默认搜索路径中，请在本地创建不提交的 `CMakeUserPresets.json` 覆盖路径配置。
 
