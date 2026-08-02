@@ -18,9 +18,18 @@ struct TerminalColor
     bool valid = false;
 };
 
+enum class TerminalCellWidth
+{
+    Narrow,
+    Wide,
+    SpacerTail,
+    SpacerHead,
+};
+
 struct TerminalCell
 {
     std::string text;
+    TerminalCellWidth width = TerminalCellWidth::Narrow;
     TerminalColor foreground;
     TerminalColor background;
     bool bold = false;

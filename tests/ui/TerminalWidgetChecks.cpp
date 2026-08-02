@@ -2,12 +2,16 @@
 
 #include <QApplication>
 #include <QEventLoop>
+#include <QFontMetrics>
 #include <QImage>
 #include <QInputMethodEvent>
 #include <QKeyEvent>
+#include <QLineEdit>
 #include <QPainter>
 #include <QTimer>
+#include <QVBoxLayout>
 
+#include <algorithm>
 #include <iostream>
 #include <memory>
 
@@ -16,8 +20,13 @@ using namespace dirbridge::terminal;
 int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
-    TerminalWidget widget;
-    widget.resize(480, 240);
+    QWidget host;
+    QVBoxLayout layout(&host);
+    TerminalWidget widget(&host);
+    QLineEdit focusTarget(&host);
+    layout.addWidget(&widget);
+    layout.addWidget(&focusTarget);
+    host.resize(500, 300);
 
     auto mutableSnapshot = std::make_shared<TerminalSnapshot>();
     mutableSnapshot->geometry.columns = 20;
@@ -29,6 +38,10 @@ int main(int argc, char **argv)
     }
     mutableSnapshot->rows[0][0].text = "O";
     mutableSnapshot->rows[0][1].text = "K";
+    mutableSnapshot->rows[1][0].text = "WW";
+    mutableSnapshot->rows[1][0].width = TerminalCellWidth::Wide;
+    mutableSnapshot->rows[1][1].width = TerminalCellWidth::SpacerTail;
+    mutableSnapshot->rows[1][1].background = {255, 0, 0, true};
     mutableSnapshot->cursor.visible = true;
     mutableSnapshot->cursor.column = 2;
     widget.setSnapshot(mutableSnapshot);
@@ -51,6 +64,18 @@ int main(int argc, char **argv)
                 && geometry.cellHeightPixels > 0;
         });
 
+    host.show();
+    widget.setFocus(Qt::OtherFocusReason);
+    application.processEvents();
+    QKeyEvent tabEvent(QEvent::KeyPress, Qt::Key_Tab,
+        Qt::NoModifier, QStringLiteral("\t"));
+    QApplication::sendEvent(&widget, &tabEvent);
+    if (!sawKey || key.key != TerminalKey::Tab
+        || QApplication::focusWidget() != &widget)
+    {
+        return 5;
+    }
+
     QKeyEvent textEvent(QEvent::KeyPress, Qt::Key_A,
         Qt::NoModifier, QStringLiteral("a"));
     QApplication::sendEvent(&widget, &textEvent);
@@ -71,8 +96,7 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    widget.show();
-    widget.resize(500, 260);
+    host.resize(520, 320);
     QEventLoop wait;
     QTimer::singleShot(100, &wait, &QEventLoop::quit);
     wait.exec();
@@ -89,6 +113,32 @@ int main(int argc, char **argv)
     if (image.isNull())
     {
         return 4;
+    }
+
+    const QFontMetrics metrics(widget.font());
+    const int cellWidth = std::max(
+        1, metrics.horizontalAdvance(QLatin1Char('M')));
+    const int cellHeight = std::max(1, metrics.height());
+    bool wideGlyphReachedTail = false;
+    for (int y = 6 + cellHeight; y < 6 + 2 * cellHeight; ++y)
+    {
+        for (int x = 6 + cellWidth; x < 6 + 2 * cellWidth; ++x)
+        {
+            const QColor pixel = image.pixelColor(x, y);
+            if (pixel.green() > 80 && pixel.blue() > 80)
+            {
+                wideGlyphReachedTail = true;
+                break;
+            }
+        }
+        if (wideGlyphReachedTail)
+        {
+            break;
+        }
+    }
+    if (!wideGlyphReachedTail)
+    {
+        return 6;
     }
 
     std::cout << "[PASS] terminal widget input, IME, resize and paint checks\n";

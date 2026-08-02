@@ -122,6 +122,7 @@ struct GhosttyTerminalEngine::Impl
     using RowCellsFree = decltype(&ghostty_render_state_row_cells_free);
     using RowCellsNext = decltype(&ghostty_render_state_row_cells_next);
     using RowCellsGet = decltype(&ghostty_render_state_row_cells_get);
+    using CellGet = decltype(&ghostty_cell_get);
     using KeyEncoderNew = decltype(&ghostty_key_encoder_new);
     using KeyEncoderFree = decltype(&ghostty_key_encoder_free);
     using KeyEncoderFromTerminal = decltype(&ghostty_key_encoder_setopt_from_terminal);
@@ -167,6 +168,7 @@ struct GhosttyTerminalEngine::Impl
     RowCellsFree rowCellsFree = nullptr;
     RowCellsNext rowCellsNext = nullptr;
     RowCellsGet rowCellsGet = nullptr;
+    CellGet cellGet = nullptr;
     KeyEncoderNew keyEncoderNew = nullptr;
     KeyEncoderFree keyEncoderFree = nullptr;
     KeyEncoderFromTerminal keyEncoderFromTerminal = nullptr;
@@ -242,6 +244,7 @@ struct GhosttyTerminalEngine::Impl
         DIRBRIDGE_RESOLVE(rowCellsFree, "ghostty_render_state_row_cells_free");
         DIRBRIDGE_RESOLVE(rowCellsNext, "ghostty_render_state_row_cells_next");
         DIRBRIDGE_RESOLVE(rowCellsGet, "ghostty_render_state_row_cells_get");
+        DIRBRIDGE_RESOLVE(cellGet, "ghostty_cell_get");
         DIRBRIDGE_RESOLVE(keyEncoderNew, "ghostty_key_encoder_new");
         DIRBRIDGE_RESOLVE(keyEncoderFree, "ghostty_key_encoder_free");
         DIRBRIDGE_RESOLVE(keyEncoderFromTerminal, "ghostty_key_encoder_setopt_from_terminal");
@@ -513,6 +516,31 @@ TerminalSnapshotPtr GhosttyTerminalEngine::snapshot()
             && row.size() < result->geometry.columns)
         {
             TerminalCell cell;
+            GhosttyCell rawCell = 0;
+            GhosttyCellWide cellWide = GHOSTTY_CELL_WIDE_NARROW;
+            if (impl_->rowCellsGet(impl_->rowCells,
+                    GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW,
+                    &rawCell) == GHOSTTY_SUCCESS
+                && impl_->cellGet(rawCell, GHOSTTY_CELL_DATA_WIDE,
+                    &cellWide) == GHOSTTY_SUCCESS)
+            {
+                switch (cellWide)
+                {
+                case GHOSTTY_CELL_WIDE_WIDE:
+                    cell.width = TerminalCellWidth::Wide;
+                    break;
+                case GHOSTTY_CELL_WIDE_SPACER_TAIL:
+                    cell.width = TerminalCellWidth::SpacerTail;
+                    break;
+                case GHOSTTY_CELL_WIDE_SPACER_HEAD:
+                    cell.width = TerminalCellWidth::SpacerHead;
+                    break;
+                case GHOSTTY_CELL_WIDE_NARROW:
+                default:
+                    cell.width = TerminalCellWidth::Narrow;
+                    break;
+                }
+            }
             std::array<char, 128> grapheme{};
             GhosttyBuffer buffer{
                 reinterpret_cast<std::uint8_t *>(grapheme.data()),

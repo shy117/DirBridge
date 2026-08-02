@@ -12,6 +12,7 @@
 #include <QWidget>
 
 class QInputMethodEvent;
+class QEvent;
 class QKeyEvent;
 class QMouseEvent;
 class QPaintEvent;
@@ -39,6 +40,7 @@ Q_SIGNALS:
     void resizeRequested(const dirbridge::terminal::TerminalGeometry &geometry);
 
 protected:
+    bool event(QEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;

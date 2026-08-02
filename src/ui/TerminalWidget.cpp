@@ -17,6 +17,7 @@
 #include <cmath>
 
 using dirbridge::terminal::TerminalColor;
+using dirbridge::terminal::TerminalCellWidth;
 using dirbridge::terminal::TerminalCursorStyle;
 using dirbridge::terminal::TerminalGeometry;
 using dirbridge::terminal::TerminalKey;
@@ -116,6 +117,21 @@ void TerminalWidget::setStatus(const QString &message, bool error)
     update();
 }
 
+bool TerminalWidget::event(QEvent *event)
+{
+    if (event->type() == QEvent::KeyPress)
+    {
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        if (keyEvent->key() == Qt::Key_Tab
+            || keyEvent->key() == Qt::Key_Backtab)
+        {
+            keyPressEvent(keyEvent);
+            return true;
+        }
+    }
+    return QWidget::event(event);
+}
+
 bool TerminalWidget::hasSelection() const noexcept
 {
     return m_hasSelection;
@@ -176,6 +192,8 @@ void TerminalWidget::paintEvent(QPaintEvent *)
     if (m_snapshot)
     {
         QFont baseFont = font();
+        // Backgrounds are painted first so a wide character's spacer cell
+        // cannot erase the right half of its glyph.
         for (int row = 0; row < static_cast<int>(m_snapshot->rows.size()); ++row)
         {
             const auto &cells = m_snapshot->rows[row];
@@ -199,9 +217,40 @@ void TerminalWidget::paintEvent(QPaintEvent *)
                     foreground = Qt::white;
                 }
                 painter.fillRect(cellRect, background);
-                if (cell.invisible || cell.text.empty())
+            }
+        }
+
+        for (int row = 0; row < static_cast<int>(m_snapshot->rows.size()); ++row)
+        {
+            const auto &cells = m_snapshot->rows[row];
+            for (int column = 0; column < static_cast<int>(cells.size()); ++column)
+            {
+                const auto &cell = cells[column];
+                if (cell.width == TerminalCellWidth::SpacerTail
+                    || cell.width == TerminalCellWidth::SpacerHead
+                    || cell.invisible || cell.text.empty())
                 {
                     continue;
+                }
+                const int widthInCells = cell.width == TerminalCellWidth::Wide
+                    ? 2
+                    : 1;
+                QRect cellRect(
+                    m_margin + column * m_cellWidth,
+                    m_margin + row * m_cellHeight,
+                    widthInCells * m_cellWidth,
+                    m_cellHeight);
+                QColor foreground = color(cell.foreground, defaultForeground);
+                QColor background = color(cell.background, defaultBackground);
+                if (cell.inverse)
+                {
+                    std::swap(foreground, background);
+                }
+                const bool selected = isSelected(column, row)
+                    || (widthInCells == 2 && isSelected(column + 1, row));
+                if (selected)
+                {
+                    foreground = Qt::white;
                 }
                 QFont cellFont = baseFont;
                 cellFont.setBold(cell.bold);
@@ -214,20 +263,41 @@ void TerminalWidget::paintEvent(QPaintEvent *)
                     foreground.setAlpha(145);
                 }
                 painter.setPen(foreground);
+                painter.save();
+                painter.setClipRect(cellRect);
                 painter.drawText(
                     QPoint(cellRect.left(), cellRect.top() + m_ascent),
                     QString::fromUtf8(cell.text.data(),
                         static_cast<int>(cell.text.size())));
+                painter.restore();
             }
         }
 
         if (m_snapshot->cursor.visible)
         {
             const auto &cursor = m_snapshot->cursor;
+            int cursorColumn = cursor.column;
+            int cursorWidthInCells = 1;
+            if (cursor.row < m_snapshot->rows.size()
+                && cursor.column < m_snapshot->rows[cursor.row].size())
+            {
+                const auto &cursorCell =
+                    m_snapshot->rows[cursor.row][cursor.column];
+                if (cursorCell.width == TerminalCellWidth::Wide)
+                {
+                    cursorWidthInCells = 2;
+                }
+                else if (cursorCell.width == TerminalCellWidth::SpacerTail
+                    && cursorColumn > 0)
+                {
+                    --cursorColumn;
+                    cursorWidthInCells = 2;
+                }
+            }
             QRect cursorRect(
-                m_margin + cursor.column * m_cellWidth,
+                m_margin + cursorColumn * m_cellWidth,
                 m_margin + cursor.row * m_cellHeight,
-                m_cellWidth,
+                cursorWidthInCells * m_cellWidth,
                 m_cellHeight);
             QColor cursorColor = color(cursor.color, defaultForeground);
             switch (cursor.style)
@@ -532,6 +602,15 @@ TerminalWidget::CellPoint TerminalWidget::cellAt(const QPointF &position) const
     point.row = std::clamp(
         static_cast<int>((position.y() - m_margin) / m_cellHeight),
         0, maximumRow);
+    if (m_snapshot
+        && point.row < static_cast<int>(m_snapshot->rows.size())
+        && point.column < static_cast<int>(m_snapshot->rows[point.row].size())
+        && m_snapshot->rows[point.row][point.column].width
+            == TerminalCellWidth::SpacerTail
+        && point.column > 0)
+    {
+        --point.column;
+    }
     return point;
 }
 

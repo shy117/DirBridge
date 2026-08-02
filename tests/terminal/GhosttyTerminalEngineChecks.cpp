@@ -106,6 +106,13 @@ int main(int argc, char **argv)
     {
         return 4;
     }
+    if (snapshot->rows[1][0].width != TerminalCellWidth::Wide
+        || snapshot->rows[1][1].width != TerminalCellWidth::SpacerTail
+        || snapshot->rows[1][2].width != TerminalCellWidth::Wide
+        || snapshot->rows[1][3].width != TerminalCellWidth::SpacerTail)
+    {
+        return 13;
+    }
 
     if (!ingest(*engine, "\x1b[?1049halt\x1b[?2004h")
         || !engine->snapshot()->alternateScreen)
