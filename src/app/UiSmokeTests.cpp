@@ -10,6 +10,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QComboBox>
+#include <QDockWidget>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -22,7 +23,9 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QSaveFile>
+#include <QSplitter>
 #include <QStatusBar>
+#include <QToolButton>
 #include <QStringList>
 #include <QTableWidget>
 #include <QTemporaryDir>
@@ -161,6 +164,52 @@ bool checkRemoteUiObjects(MainWindow &window)
     {
         QTextStream(stderr) << "Terminal tabs should start empty" << Qt::endl;
         ok = false;
+    }
+    QTabWidget *bottomTabs = window.findChild<QTabWidget *>("bottomTabs");
+    QWidget *terminalHost = window.findChild<QWidget *>("terminalHost");
+    QSplitter *workspaceSplitter =
+        window.findChild<QSplitter *>("workspaceSplitter");
+    QSplitter *fileSplitter = window.findChild<QSplitter *>("fileSplitter");
+    QDockWidget *sessionDock = window.findChild<QDockWidget *>("SessionManagerDock");
+    QToolButton *terminalMaximizeButton =
+        window.findChild<QToolButton *>("terminalMaximizeButton");
+    if (bottomTabs == nullptr || terminalHost == nullptr
+        || workspaceSplitter == nullptr
+        || fileSplitter == nullptr || sessionDock == nullptr
+        || terminalMaximizeButton == nullptr)
+    {
+        QTextStream(stderr) << "Terminal workspace controls are incomplete" << Qt::endl;
+        ok = false;
+    }
+    else
+    {
+        const QList<int> originalSizes = workspaceSplitter->sizes();
+        bottomTabs->setCurrentWidget(terminalHost);
+        QApplication::processEvents();
+        terminalMaximizeButton->click();
+        QApplication::processEvents();
+        if (!fileSplitter->isHidden() || sessionDock->isHidden())
+        {
+            QTextStream(stderr) << "Terminal maximize should only hide the file workspace" << Qt::endl;
+            ok = false;
+        }
+        terminalMaximizeButton->click();
+        QApplication::processEvents();
+        if (fileSplitter->isHidden()
+            || workspaceSplitter->sizes() != originalSizes)
+        {
+            QTextStream(stderr) << "Terminal restore should show the file workspace and restore its size" << Qt::endl;
+            ok = false;
+        }
+        terminalMaximizeButton->click();
+        QApplication::processEvents();
+        bottomTabs->setCurrentIndex(0);
+        QApplication::processEvents();
+        if (fileSplitter->isHidden() || !terminalMaximizeButton->isHidden())
+        {
+            QTextStream(stderr) << "Leaving the terminal page should restore the file workspace" << Qt::endl;
+            ok = false;
+        }
     }
     QPushButton *cancelTransferButton = window.findChild<QPushButton *>("transferCancelButton");
     QPushButton *retryTransferButton = window.findChild<QPushButton *>("transferRetryButton");

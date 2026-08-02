@@ -1,12 +1,14 @@
 #include "ui/TerminalWidget.h"
 
 #include <QApplication>
+#include <QClipboard>
 #include <QEventLoop>
 #include <QFontMetrics>
 #include <QImage>
 #include <QInputMethodEvent>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -141,6 +143,33 @@ int main(int argc, char **argv)
         return 6;
     }
 
-    std::cout << "[PASS] terminal widget input, IME, resize and paint checks\n";
+    QByteArray pastedBytes;
+    int pasteCount = 0;
+    int mouseInputCount = 0;
+    QObject::connect(&widget, &TerminalWidget::pasteInput,
+        [&](const QByteArray &bytes) {
+            pastedBytes = bytes;
+            ++pasteCount;
+        });
+    QObject::connect(&widget, &TerminalWidget::mouseInput,
+        [&](const TerminalMouseEvent &) { ++mouseInputCount; });
+    QApplication::clipboard()->setText(QStringLiteral("right-click-paste"));
+    mutableSnapshot->mouseTracking = true;
+    widget.setSnapshot(mutableSnapshot);
+    QMouseEvent rightPress(QEvent::MouseButtonPress,
+        QPointF(10, 10), QPointF(10, 10),
+        Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+    QApplication::sendEvent(&widget, &rightPress);
+    QMouseEvent rightRelease(QEvent::MouseButtonRelease,
+        QPointF(10, 10), QPointF(10, 10),
+        Qt::RightButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&widget, &rightRelease);
+    if (pasteCount != 1 || pastedBytes != QByteArray("right-click-paste")
+        || mouseInputCount != 0)
+    {
+        return 7;
+    }
+
+    std::cout << "[PASS] terminal widget input, IME, resize, paint and right-click paste checks\n";
     return 0;
 }

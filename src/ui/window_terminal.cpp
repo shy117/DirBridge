@@ -229,4 +229,8 @@ void MainWindow::removeTerminalTab(const QString &terminalId)
     {
         page->deleteLater();
     }
+    if (m_terminalTabs != nullptr && m_terminalTabs->count() == 0)
+    {
+        setTerminalWorkspaceMaximized(false);
+    }
 }

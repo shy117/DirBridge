@@ -2,6 +2,7 @@
 #define DIRBRIDGE_UI_MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QList>
 #include <QPoint>
 
 #include <memory>
@@ -30,6 +31,7 @@ class QCloseEvent;
 class QSplitter;
 class QTabWidget;
 class QThread;
+class QToolButton;
 class QTreeWidget;
 class QTreeWidgetItem;
 class ExternalEditManager;
@@ -187,6 +189,8 @@ private:
     void openSshTerminal(const SiteProfile &profile);
     void closeTerminalTab(int index);
     void removeTerminalTab(const QString &terminalId);
+    void setTerminalWorkspaceMaximized(bool maximized);
+    void updateTerminalWorkspaceControls();
     void appendLog(const QString &level, const QString &message);
     void beginBackgroundTask();
     void finishBackgroundTask();
@@ -365,10 +369,15 @@ private:
     QTreeWidget *m_logView = nullptr;
     QTabWidget *m_bottomTabs = nullptr;
     QTabWidget *m_terminalTabs = nullptr;
+    QWidget *m_terminalHost = nullptr;
+    QToolButton *m_terminalMaximizeButton = nullptr;
     FilePanel *m_localPanel = nullptr;
+    QSplitter *m_workspaceSplitter = nullptr;
     QSplitter *m_fileSplitter = nullptr;
     QTabWidget *m_remoteTabs = nullptr;
     FilePanel *m_remotePanel = nullptr;
+    QList<int> m_workspaceSplitterSizes;
+    bool m_terminalWorkspaceMaximized = false;
 };
 
 #endif // DIRBRIDGE_UI_MAINWINDOW_H

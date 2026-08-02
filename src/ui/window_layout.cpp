@@ -18,9 +18,11 @@
 #include <QPushButton>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QStyle>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QToolBar>
+#include <QToolButton>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -214,8 +216,10 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     m_sessionDock->setWidget(createSessionManager());
     addDockWidget(Qt::LeftDockWidgetArea, m_sessionDock);
 
-    auto *verticalSplitter = new QSplitter(Qt::Vertical, this);
-    m_fileSplitter = new QSplitter(Qt::Horizontal, verticalSplitter);
+    m_workspaceSplitter = new QSplitter(Qt::Vertical, this);
+    m_workspaceSplitter->setObjectName("workspaceSplitter");
+    m_fileSplitter = new QSplitter(Qt::Horizontal, m_workspaceSplitter);
+    m_fileSplitter->setObjectName("fileSplitter");
 
     auto *localTabs = new QTabWidget(m_fileSplitter);
     localTabs->setObjectName("localTabs");
@@ -264,7 +268,7 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     m_fileSplitter->setStretchFactor(1, 1);
     updateFileSplitterLayout();
 
-    m_bottomTabs = new QTabWidget(verticalSplitter);
+    m_bottomTabs = new QTabWidget(m_workspaceSplitter);
     m_bottomTabs->setObjectName("bottomTabs");
     auto *transferTab = new QWidget(m_bottomTabs);
     auto *transferLayout = new QVBoxLayout(transferTab);
@@ -313,11 +317,11 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     m_logView->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     m_logView->header()->setStretchLastSection(true);
 
-    auto *terminalHost = new QWidget(m_bottomTabs);
-    terminalHost->setObjectName("terminalHost");
-    auto *terminalHostLayout = new QVBoxLayout(terminalHost);
+    m_terminalHost = new QWidget(m_bottomTabs);
+    m_terminalHost->setObjectName("terminalHost");
+    auto *terminalHostLayout = new QVBoxLayout(m_terminalHost);
     terminalHostLayout->setContentsMargins(0, 0, 0, 0);
-    m_terminalTabs = new QTabWidget(terminalHost);
+    m_terminalTabs = new QTabWidget(m_terminalHost);
     m_terminalTabs->setObjectName("terminalTabs");
     m_terminalTabs->setTabsClosable(true);
     m_terminalTabs->setMovable(true);
@@ -330,15 +334,94 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
 
     m_bottomTabs->addTab(transferTab, "传输");
     m_bottomTabs->addTab(m_logView, "日志");
-    m_bottomTabs->addTab(terminalHost, "终端");
+    m_bottomTabs->addTab(m_terminalHost, "终端");
 
-    verticalSplitter->addWidget(m_fileSplitter);
-    verticalSplitter->addWidget(m_bottomTabs);
-    verticalSplitter->setStretchFactor(0, 5);
-    verticalSplitter->setStretchFactor(1, 1);
+    m_terminalMaximizeButton = new QToolButton(m_bottomTabs);
+    m_terminalMaximizeButton->setObjectName("terminalMaximizeButton");
+    m_terminalMaximizeButton->setAutoRaise(true);
+    m_terminalMaximizeButton->setFocusPolicy(Qt::NoFocus);
+    m_terminalMaximizeButton->setIcon(
+        style()->standardIcon(QStyle::SP_TitleBarMaxButton));
+    m_bottomTabs->setCornerWidget(
+        m_terminalMaximizeButton, Qt::TopRightCorner);
+    connect(m_terminalMaximizeButton, &QToolButton::clicked, this, [this]() {
+        setTerminalWorkspaceMaximized(!m_terminalWorkspaceMaximized);
+    });
+    connect(m_bottomTabs, &QTabWidget::currentChanged, this, [this]() {
+        if (m_bottomTabs->currentWidget() != m_terminalHost
+            && m_terminalWorkspaceMaximized)
+        {
+            setTerminalWorkspaceMaximized(false);
+            return;
+        }
+        updateTerminalWorkspaceControls();
+    });
 
-    setCentralWidget(verticalSplitter);
+    m_workspaceSplitter->addWidget(m_fileSplitter);
+    m_workspaceSplitter->addWidget(m_bottomTabs);
+    m_workspaceSplitter->setStretchFactor(0, 5);
+    m_workspaceSplitter->setStretchFactor(1, 1);
+
+    setCentralWidget(m_workspaceSplitter);
+    updateTerminalWorkspaceControls();
     updateTransferActionButtons();
+}
+
+/**
+ * @brief 在右侧中央工作区内最大化或还原终端面板。
+ *
+ * 左侧会话管理器是独立 Dock，不参与该布局切换。
+ */
+void MainWindow::setTerminalWorkspaceMaximized(bool maximized)
+{
+    if (m_workspaceSplitter == nullptr || m_fileSplitter == nullptr)
+    {
+        return;
+    }
+
+    if (maximized && !m_terminalWorkspaceMaximized)
+    {
+        const QList<int> currentSizes = m_workspaceSplitter->sizes();
+        if (currentSizes.size() == 2 && currentSizes.front() > 0)
+        {
+            m_workspaceSplitterSizes = currentSizes;
+        }
+        m_fileSplitter->hide();
+        m_workspaceSplitter->setSizes({0, std::max(1, height())});
+        m_terminalWorkspaceMaximized = true;
+    }
+    else if (!maximized && m_terminalWorkspaceMaximized)
+    {
+        m_fileSplitter->show();
+        m_workspaceSplitter->setSizes(m_workspaceSplitterSizes.size() == 2
+                ? m_workspaceSplitterSizes
+                : QList<int>({5, 1}));
+        m_terminalWorkspaceMaximized = false;
+    }
+
+    updateTerminalWorkspaceControls();
+}
+
+/**
+ * @brief 根据底部当前页和最大化状态刷新终端面板按钮。
+ */
+void MainWindow::updateTerminalWorkspaceControls()
+{
+    if (m_terminalMaximizeButton == nullptr || m_bottomTabs == nullptr)
+    {
+        return;
+    }
+
+    const bool terminalPageVisible = m_bottomTabs->currentWidget() == m_terminalHost;
+    m_terminalMaximizeButton->setVisible(terminalPageVisible);
+    m_terminalMaximizeButton->setIcon(style()->standardIcon(
+        m_terminalWorkspaceMaximized
+            ? QStyle::SP_TitleBarNormalButton
+            : QStyle::SP_TitleBarMaxButton));
+    m_terminalMaximizeButton->setToolTip(
+        m_terminalWorkspaceMaximized ? "还原终端区域" : "最大化终端区域");
+    m_terminalMaximizeButton->setAccessibleName(
+        m_terminalWorkspaceMaximized ? "还原终端区域" : "最大化终端区域");
 }
 
 /**

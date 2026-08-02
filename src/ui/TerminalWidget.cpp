@@ -437,6 +437,12 @@ QVariant TerminalWidget::inputMethodQuery(Qt::InputMethodQuery query) const
 void TerminalWidget::mousePressEvent(QMouseEvent *event)
 {
     setFocus(Qt::MouseFocusReason);
+    if (event->button() == Qt::RightButton)
+    {
+        pasteClipboard();
+        event->accept();
+        return;
+    }
     if (m_snapshot && m_snapshot->mouseTracking
         && !event->modifiers().testFlag(Qt::ShiftModifier))
     {
@@ -480,6 +486,11 @@ void TerminalWidget::mouseMoveEvent(QMouseEvent *event)
 
 void TerminalWidget::mouseReleaseEvent(QMouseEvent *event)
 {
+    if (event->button() == Qt::RightButton)
+    {
+        event->accept();
+        return;
+    }
     if (m_snapshot && m_snapshot->mouseTracking
         && !event->modifiers().testFlag(Qt::ShiftModifier))
     {
