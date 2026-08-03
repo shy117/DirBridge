@@ -114,6 +114,15 @@ void FilePanel::setRemoteRenameRequestedHandler(std::function<void(const QString
 }
 
 /**
+ * @brief 设置远程权限修改请求回调。
+ * @param handler 接收路径、权限模式和递归标志的回调。
+ */
+void FilePanel::setRemotePermissionsRequestedHandler(std::function<void(const QString &, int, bool)> handler)
+{
+    m_remotePermissionsRequested = std::move(handler);
+}
+
+/**
  * @brief 设置本地上传请求回调。
  * @param handler 接收本地路径的回调。
  */
@@ -161,9 +170,9 @@ void FilePanel::setLocalFilesDroppedOnRemoteHandler(std::function<void(const QSt
 
 /**
  * @brief 设置远程文件拖放到本地面板时的下载回调。
- * @param handler 接收远程路径列表的回调。
+ * @param handler 接收带文件类型的远程项目列表。
  */
-void FilePanel::setRemoteFilesDroppedOnLocalHandler(std::function<void(const QStringList &)> handler)
+void FilePanel::setRemoteFilesDroppedOnLocalHandler(std::function<void(const QList<RemoteTransferItem> &)> handler)
 {
     m_remoteFilesDroppedOnLocal = std::move(handler);
 }
@@ -373,9 +382,11 @@ void FilePanel::setupUi()
     m_table->setDropIndicatorShown(true);
     m_table->setSortingEnabled(false);
     m_table->verticalHeader()->setVisible(false);
+    m_table->setTextElideMode(Qt::ElideMiddle);
     m_table->horizontalHeader()->setSortIndicatorShown(m_mode == Mode::RemotePlaceholder);
     m_table->horizontalHeader()->setStretchLastSection(true);
-    m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Interactive);
+    m_table->setColumnWidth(0, 240);
     for (int column = 1; column < m_table->columnCount(); ++column)
     {
         m_table->horizontalHeader()->setSectionResizeMode(column, QHeaderView::ResizeToContents);

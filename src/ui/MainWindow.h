@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <set>
@@ -101,6 +102,11 @@ public:
     void removeRemotePathForTesting(const QString &path);
 
     /**
+     * @brief 为自动化 UI 测试触发远程权限修改流程。
+     */
+    void setRemotePermissionsForTesting(const QString &path, int mode, bool recursive = false);
+
+    /**
      * @brief 为自动化 UI 测试触发标准的远程移动流程。
      * @param sourcePaths 待移动的远程源路径列表。
      * @param targetDirectory 目标远程目录。
@@ -153,8 +159,11 @@ private:
         std::shared_ptr<RemoteFileSystem> fileSystem;
         FilePanel *panel = nullptr;
         QString currentPath;
+        QStringList knownDirectories;
         bool connected = false;
         bool connecting = false;
+        std::uint64_t directoryLoadGeneration = 0;
+        int activeRemoteOperationCount = 0;
         std::shared_ptr<std::atomic_bool> connectionCanceled;
         QString displayName;
     };
@@ -256,6 +265,7 @@ private:
     void removeRemotePath(const QString &path);
     void finishRemoteRemove(const QString &sessionId, const QString &path, const QString &errorMessage);
     void renameRemotePath(RemoteSession &session, const QString &sourcePath, const QString &targetPath);
+    void setRemotePermissions(RemoteSession &session, const QString &path, int mode, bool recursive);
     bool removeRemotePathRecursive(RemoteSession &session, const QString &path, QString *errorMessage = nullptr);
     void moveRemotePaths(RemoteSession &session, const QStringList &sourcePaths, const QString &targetDirectory);
     void setRemoteConnectionState(RemoteSession &session, bool connected, const QString &message);

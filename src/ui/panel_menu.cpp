@@ -2,25 +2,71 @@
 #include "ui/panel_shared.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QClipboard>
 #include <QDateTime>
 #include <QDesktopServices>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QGroupBox>
+#include <QHBoxLayout>
 #include <QInputDialog>
 #include <QIODevice>
+#include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPointer>
+#include <QRegularExpression>
+#include <QRegularExpressionValidator>
+#include <QSignalBlocker>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QThread>
 #include <QUrl>
+#include <QVBoxLayout>
+
+#include <array>
 
 using namespace panel_shared;
+
+namespace
+{
+int permissionModeFromText(const QString &text, int fallbackMode)
+{
+    const QString bits = text.right(9);
+    if (bits.size() != 9)
+    {
+        return fallbackMode;
+    }
+
+    int mode = 0;
+    constexpr int masks[] = {0400, 0200, 0100, 0040, 0020, 0010, 0004, 0002, 0001};
+    constexpr QChar symbols[] = {'r', 'w', 'x', 'r', 'w', 'x', 'r', 'w', 'x'};
+    for (int index = 0; index < 9; ++index)
+    {
+        if (bits.at(index) == symbols[index])
+        {
+            mode |= masks[index];
+        }
+        else if (bits.at(index) != '-')
+        {
+            return fallbackMode;
+        }
+    }
+    return mode;
+}
+
+QString octalPermissionText(int mode)
+{
+    return QString("%1").arg(mode, 3, 8, QChar('0'));
+}
+} // namespace
+
 /**
  * @brief 显示本地面板右键菜单。
  * @param position 表格视口中的菜单触发位置。
@@ -76,6 +122,7 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
     QAction *editAction = nullptr;
     QAction *closeEditAction = nullptr;
     QAction *renameAction = nullptr;
+    QAction *permissionsAction = nullptr;
     QAction *removeAction = nullptr;
     QAction *copyPathAction = nullptr;
     QAction *propertiesAction = nullptr;
@@ -120,6 +167,11 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
             }
         }
         renameAction = menu.addAction(fluentIcon("edit"), "重命名");
+        if (!isLocal)
+        {
+            permissionsAction = menu.addAction(fluentIcon("lock_closed"), "更改权限...");
+            permissionsAction->setEnabled(m_remotePermissionsRequested != nullptr);
+        }
         removeAction = menu.addAction(fluentIcon("delete"), "删除");
         menu.addSeparator();
         copyPathAction = menu.addAction(fluentIcon("copy"), "复制路径");
@@ -290,6 +342,12 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
         return;
     }
 
+    if (selectedAction == permissionsAction)
+    {
+        showRemotePermissionsDialog(selectedPath, selectedIsDirectory);
+        return;
+    }
+
     if (selectedAction == renameAction)
     {
         renameSelectedEntry();
@@ -366,6 +424,148 @@ void FilePanel::showRemoteProperties(const QString &path) const
 }
 
 /**
+ * @brief 显示 UNIX 风格远程权限编辑器。
+ * @param path 要修改的远程项目路径。
+ * @param isDirectory 项目是否为目录。
+ */
+void FilePanel::showRemotePermissionsDialog(const QString &path, bool isDirectory)
+{
+    if (!m_remotePermissionsRequested)
+    {
+        return;
+    }
+
+    QString listedPermissions;
+    for (int row = 0; row < m_table->rowCount(); ++row)
+    {
+        QTableWidgetItem *nameItem = m_table->item(row, 0);
+        if (nameItem != nullptr && nameItem->data(Qt::UserRole).toString() == path)
+        {
+            QTableWidgetItem *permissionItem = m_table->item(row, 4);
+            listedPermissions = permissionItem == nullptr ? QString() : permissionItem->text();
+            break;
+        }
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle("更改权限");
+    dialog.setModal(true);
+    auto *layout = new QVBoxLayout(&dialog);
+
+    auto *modeRow = new QHBoxLayout();
+    modeRow->addWidget(new QLabel("文件/文件夹 权限(P):", &dialog));
+    auto *modeEdit = new QLineEdit(&dialog);
+    modeEdit->setObjectName("remotePermissionModeEdit");
+    modeEdit->setFixedWidth(56);
+    modeEdit->setMaxLength(3);
+    modeEdit->setAlignment(Qt::AlignCenter);
+    modeEdit->setValidator(new QRegularExpressionValidator(QRegularExpression("[0-7]{3}"), modeEdit));
+    modeRow->addWidget(modeEdit);
+    modeRow->addStretch(1);
+    layout->addLayout(modeRow);
+
+    auto *groupsRow = new QHBoxLayout();
+    std::array<std::array<QCheckBox *, 3>, 3> checks{};
+    const QStringList groupNames = {"所有者", "组", "其他"};
+    const QStringList permissionNames = {"读取", "写入", "执行"};
+    for (int groupIndex = 0; groupIndex < 3; ++groupIndex)
+    {
+        auto *groupBox = new QGroupBox(groupNames.at(groupIndex), &dialog);
+        auto *groupLayout = new QVBoxLayout(groupBox);
+        for (int permissionIndex = 0; permissionIndex < 3; ++permissionIndex)
+        {
+            checks[groupIndex][permissionIndex] = new QCheckBox(permissionNames.at(permissionIndex), groupBox);
+            groupLayout->addWidget(checks[groupIndex][permissionIndex]);
+        }
+        groupsRow->addWidget(groupBox);
+    }
+    layout->addLayout(groupsRow);
+
+    auto updateChecks = [&checks](int mode) {
+        constexpr int masks[3][3] = {
+            {0400, 0200, 0100},
+            {0040, 0020, 0010},
+            {0004, 0002, 0001}
+        };
+        for (int groupIndex = 0; groupIndex < 3; ++groupIndex)
+        {
+            for (int permissionIndex = 0; permissionIndex < 3; ++permissionIndex)
+            {
+                QSignalBlocker blocker(checks[groupIndex][permissionIndex]);
+                checks[groupIndex][permissionIndex]->setChecked((mode & masks[groupIndex][permissionIndex]) != 0);
+            }
+        }
+    };
+    auto updateMode = [&checks, modeEdit]() {
+        constexpr int masks[3][3] = {
+            {0400, 0200, 0100},
+            {0040, 0020, 0010},
+            {0004, 0002, 0001}
+        };
+        int mode = 0;
+        for (int groupIndex = 0; groupIndex < 3; ++groupIndex)
+        {
+            for (int permissionIndex = 0; permissionIndex < 3; ++permissionIndex)
+            {
+                if (checks[groupIndex][permissionIndex]->isChecked())
+                {
+                    mode |= masks[groupIndex][permissionIndex];
+                }
+            }
+        }
+        QSignalBlocker blocker(modeEdit);
+        modeEdit->setText(octalPermissionText(mode));
+    };
+
+    const int initialMode = permissionModeFromText(listedPermissions, isDirectory ? 0755 : 0644);
+    modeEdit->setText(octalPermissionText(initialMode));
+    updateChecks(initialMode);
+    connect(modeEdit, &QLineEdit::textChanged, &dialog, [modeEdit, updateChecks](const QString &text) {
+        bool ok = false;
+        const int mode = text.toInt(&ok, 8);
+        if (ok && text.size() == 3)
+        {
+            updateChecks(mode);
+        }
+    });
+    for (const auto &group : checks)
+    {
+        for (QCheckBox *check : group)
+        {
+            connect(check, &QCheckBox::toggled, &dialog, [updateMode](bool) {
+                updateMode();
+            });
+        }
+    }
+
+    auto *recursiveCheck = new QCheckBox("包含子目录(&I)", &dialog);
+    recursiveCheck->setObjectName("remotePermissionRecursiveCheck");
+    recursiveCheck->setEnabled(isDirectory);
+    layout->addWidget(recursiveCheck);
+    auto *hintLabel = new QLabel("此命令仅在部分 UNIX 主机中适用。", &dialog);
+    layout->addWidget(hintLabel);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted)
+    {
+        return;
+    }
+
+    bool ok = false;
+    const int mode = modeEdit->text().toInt(&ok, 8);
+    if (!ok || modeEdit->text().size() != 3 || mode < 0 || mode > 0777)
+    {
+        showFileOperationWarning(this, "更改权限", "请输入 000 到 777 之间的三位八进制权限值。");
+        return;
+    }
+    m_remotePermissionsRequested(path, mode, isDirectory && recursiveCheck->isChecked());
+}
+
+/**
  * @brief 在当前本地目录中新建文件夹。
  */
 void FilePanel::createLocalDirectory()
@@ -426,26 +626,26 @@ void FilePanel::createLocalFile()
 }
 
 /**
- * @brief 异步删除指定本地项目。
- * @param path 要删除的本地文件或目录。
+ * @brief 异步将指定本地项目移入系统回收站。
+ * @param path 要移入回收站的本地文件或目录。
  */
 void FilePanel::removeLocalPath(const QString &path)
 {
     if (m_pendingLocalDeletes.contains(path))
     {
-        showFileOperationWarning(this, "删除本地项目", "该项目正在删除，请等待完成。");
+        showFileOperationWarning(this, "移入回收站", "该项目正在处理，请等待完成。");
         return;
     }
 
     const QFileInfo info(path);
     if (!info.exists())
     {
-        showFileOperationWarning(this, "删除本地项目失败", QString("项目不存在：%1").arg(path));
+        showFileOperationWarning(this, "移入回收站失败", QString("项目不存在：%1").arg(path));
         return;
     }
 
-    const QString text = QString("确定删除本地项目？\n%1").arg(path);
-    if (QMessageBox::question(this, "删除本地项目", text) != QMessageBox::Yes)
+    const QString text = QString("确定将本地项目移入回收站？\n%1").arg(path);
+    if (QMessageBox::question(this, "移入回收站", text) != QMessageBox::Yes)
     {
         return;
     }
@@ -453,8 +653,10 @@ void FilePanel::removeLocalPath(const QString &path)
     m_pendingLocalDeletes.insert(path);
     QPointer<FilePanel> panel(this);
     QThread *thread = QThread::create([panel, path]() {
-        const QFileInfo info(path);
-        const bool removed = info.isDir() ? QDir(path).removeRecursively() : QFile::remove(path);
+        bool removed = false;
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+        removed = QFile::moveToTrash(path);
+#endif
         if (panel != nullptr)
         {
             QMetaObject::invokeMethod(panel.data(), [panel, path, removed]() {
@@ -470,16 +672,16 @@ void FilePanel::removeLocalPath(const QString &path)
 }
 
 /**
- * @brief 处理本地异步删除完成后的 UI 更新。
- * @param path 已尝试删除的路径。
- * @param removed 是否删除成功。
+ * @brief 处理本地项目移入回收站后的 UI 更新。
+ * @param path 已尝试移动的路径。
+ * @param removed 是否成功移入回收站。
  */
 void FilePanel::finishLocalRemove(const QString &path, bool removed)
 {
     m_pendingLocalDeletes.remove(path);
     if (!removed)
     {
-        showFileOperationWarning(this, "删除本地项目失败", QString("无法删除：%1").arg(path));
+        showFileOperationWarning(this, "移入回收站失败", QString("无法将项目移入回收站：%1").arg(path));
         return;
     }
     refresh();

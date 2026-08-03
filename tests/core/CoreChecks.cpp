@@ -42,6 +42,18 @@ bool containsPath(const std::vector<FileItem> &items, const std::string &path, F
     return false;
 }
 
+std::string permissionsForPath(const std::vector<FileItem> &items, const std::string &path)
+{
+    for (const FileItem &item : items)
+    {
+        if (item.path == path)
+        {
+            return item.permissions;
+        }
+    }
+    return {};
+}
+
 template <typename Callable>
 void requireThrows(Callable callable, const std::string &message)
 {
@@ -92,6 +104,15 @@ void checkFakeRemoteFileSystem()
     require(result.success, "create file should succeed");
     items = remote.listDirectory(profile.defaultRemotePath);
     require(containsPath(items, "/home/testuser/remote_test/empty.txt", FileItemType::File), "created file not listed");
+
+    result = remote.setPermissions("/home/testuser/remote_test/empty.txt", 0750);
+    require(result.success, "set permissions should succeed");
+    items = remote.listDirectory(profile.defaultRemotePath);
+    require(permissionsForPath(items, "/home/testuser/remote_test/empty.txt") == "-rwxr-x---", "updated file permissions not listed");
+    result = remote.setPermissions("/home/testuser/remote_test/empty.txt", 01000);
+    require(!result.success, "permission mode above 0777 should fail");
+    result = remote.setPermissions("/home/testuser/remote_test/missing.txt", 0644);
+    require(!result.success, "set permissions on missing item should fail");
 
     result = remote.createFile("/home/testuser/remote_test/empty.txt");
     require(!result.success, "duplicate file create should fail");
@@ -161,7 +182,7 @@ void checkFakeRemoteFileSystem()
 
     const std::filesystem::path downloadTarget = tempRoot / "download.txt";
     result = remote.downloadFile("/home/testuser/remote_test/upload.txt", downloadTarget.string());
-    require(result.success, "download file should succeed");
+    require(result.success, "download file should succeed: " + result.message);
     require(std::filesystem::is_regular_file(downloadTarget), "download target should exist");
 
     result = remote.downloadFile("/home/testuser/remote_test/missing-download.txt", (tempRoot / "missing-download.txt").string());

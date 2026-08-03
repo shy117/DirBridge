@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <memory>
 #include <cstdlib>
 #include <mutex>
@@ -210,6 +211,24 @@ std::string ftpCommandPath(const std::string &path)
         normalized.erase(normalized.begin());
     }
     return normalized.empty() ? "." : normalized;
+}
+
+std::string sftpCommandPath(const std::string &path)
+{
+    const std::string normalized = normalizeRemotePath(path);
+    std::string escaped;
+    escaped.reserve(normalized.size() + 2);
+    escaped.push_back('"');
+    for (const char character : normalized)
+    {
+        if (character == '\\' || character == '"')
+        {
+            escaped.push_back('\\');
+        }
+        escaped.push_back(character);
+    }
+    escaped.push_back('"');
+    return escaped;
 }
 
 std::string remoteParentPath(const std::string &path)
@@ -495,6 +514,7 @@ void applyProfileOptions(CURL *handle, const SiteProfile &profile)
         setCurlOption(handle, CURLOPT_PASSWORD, profile.password.c_str());
     }
     setCurlLongOption(handle, CURLOPT_FOLLOWLOCATION, 1L);
+    setCurlLongOption(handle, CURLOPT_NOSIGNAL, 1L);
     setCurlLongOption(handle, CURLOPT_CONNECTTIMEOUT, 15L);
     setCurlLongOption(handle, CURLOPT_TIMEOUT, 300L);
     if (profile.protocol == RemoteProtocol::Ftps)
@@ -549,6 +569,11 @@ RemoteOperationResult performQuote(const SiteProfile &profile, const std::vector
 }
 }
 
+CurlRemoteFileSystem::~CurlRemoteFileSystem()
+{
+    disconnect();
+}
+
 RemoteOperationResult CurlRemoteFileSystem::connect(const SiteProfile &profile)
 {
     if (profile.host.empty())
@@ -563,6 +588,12 @@ RemoteOperationResult CurlRemoteFileSystem::connect(const SiteProfile &profile)
         return {false, "only ftp, ftps and sftp are supported for directory browsing"};
     }
 
+    std::lock_guard<std::mutex> lock(m_directoryHandleMutex);
+    if (m_directoryHandle != nullptr)
+    {
+        curl_easy_cleanup(m_directoryHandle);
+        m_directoryHandle = nullptr;
+    }
     m_profile = profile;
     m_connected = true;
     return {true, "connection profile accepted"};
@@ -570,7 +601,13 @@ RemoteOperationResult CurlRemoteFileSystem::connect(const SiteProfile &profile)
 
 void CurlRemoteFileSystem::disconnect()
 {
+    std::lock_guard<std::mutex> lock(m_directoryHandleMutex);
     m_connected = false;
+    if (m_directoryHandle != nullptr)
+    {
+        curl_easy_cleanup(m_directoryHandle);
+        m_directoryHandle = nullptr;
+    }
 }
 
 bool CurlRemoteFileSystem::isConnected() const
@@ -580,29 +617,37 @@ bool CurlRemoteFileSystem::isConnected() const
 
 std::vector<FileItem> CurlRemoteFileSystem::listDirectory(const std::string &path)
 {
+    std::lock_guard<std::mutex> lock(m_directoryHandleMutex);
     if (!m_connected)
     {
         throw std::runtime_error("remote session is not connected");
     }
 
     ensureCurlInitialized();
-    CurlHandle handle(curl_easy_init());
-    if (!handle)
+    if (m_directoryHandle == nullptr)
+    {
+        m_directoryHandle = curl_easy_init();
+    }
+    else
+    {
+        curl_easy_reset(m_directoryHandle);
+    }
+    if (m_directoryHandle == nullptr)
     {
         throw std::runtime_error("failed to initialize libcurl easy handle");
     }
 
     std::string listing;
     char errorBuffer[CURL_ERROR_SIZE] = {};
-    const std::string url = directoryUrl(handle.get(), m_profile, path);
+    const std::string url = directoryUrl(m_directoryHandle, m_profile, path);
 
-    setCurlOption(handle.get(), CURLOPT_URL, url.c_str());
-    applyProfileOptions(handle.get(), m_profile);
-    curl_easy_setopt(handle.get(), CURLOPT_ERRORBUFFER, errorBuffer);
-    curl_easy_setopt(handle.get(), CURLOPT_WRITEFUNCTION, writeStringCallback);
-    curl_easy_setopt(handle.get(), CURLOPT_WRITEDATA, &listing);
+    setCurlOption(m_directoryHandle, CURLOPT_URL, url.c_str());
+    applyProfileOptions(m_directoryHandle, m_profile);
+    curl_easy_setopt(m_directoryHandle, CURLOPT_ERRORBUFFER, errorBuffer);
+    curl_easy_setopt(m_directoryHandle, CURLOPT_WRITEFUNCTION, writeStringCallback);
+    curl_easy_setopt(m_directoryHandle, CURLOPT_WRITEDATA, &listing);
 
-    const CURLcode code = curl_easy_perform(handle.get());
+    const CURLcode code = curl_easy_perform(m_directoryHandle);
     if (code != CURLE_OK)
     {
         const std::string detail = errorBuffer[0] != '\0' ? errorBuffer : curl_easy_strerror(code);
@@ -746,6 +791,31 @@ RemoteOperationResult CurlRemoteFileSystem::rename(const std::string &sourcePath
         m_profile,
         rootUrl(m_profile),
         {"RNFR " + ftpCommandPath(normalizedSourcePath), "RNTO " + ftpCommandPath(normalizedTargetPath)});
+}
+
+RemoteOperationResult CurlRemoteFileSystem::setPermissions(const std::string &path, int mode)
+{
+    if (!m_connected)
+    {
+        return {false, "remote session is not connected"};
+    }
+    if (mode < 0 || mode > 0777)
+    {
+        return {false, "permission mode must be between 000 and 777"};
+    }
+
+    std::ostringstream modeText;
+    modeText << std::oct << std::setw(3) << std::setfill('0') << mode;
+    const std::string normalizedPath = normalizeRemotePath(path);
+    if (m_profile.protocol == RemoteProtocol::Sftp)
+    {
+        return performQuote(m_profile, {"chmod " + modeText.str() + " " + sftpCommandPath(normalizedPath)});
+    }
+
+    return performQuoteAtUrl(
+        m_profile,
+        rootUrl(m_profile),
+        {"SITE CHMOD " + modeText.str() + " " + ftpCommandPath(normalizedPath)});
 }
 
 RemoteOperationResult CurlRemoteFileSystem::uploadFile(const std::string &localPath, const std::string &remotePath, TransferProgressCallback progress)

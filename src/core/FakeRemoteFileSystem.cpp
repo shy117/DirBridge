@@ -74,6 +74,18 @@ FileItem makeFile(const std::string &path, std::int64_t size, const std::string 
 {
     return {baseName(path), normalizePath(path), FileItemType::File, size, "2026-06-07 09:00:00", "-rw-r--r--", owner};
 }
+
+std::string permissionText(FileItemType type, int mode)
+{
+    std::string text(1, type == FileItemType::Directory ? 'd' : '-');
+    constexpr int masks[] = {0400, 0200, 0100, 0040, 0020, 0010, 0004, 0002, 0001};
+    constexpr char symbols[] = {'r', 'w', 'x', 'r', 'w', 'x', 'r', 'w', 'x'};
+    for (int index = 0; index < 9; ++index)
+    {
+        text.push_back((mode & masks[index]) != 0 ? symbols[index] : '-');
+    }
+    return text;
+}
 }
 
 RemoteOperationResult FakeRemoteFileSystem::connect(const SiteProfile &profile)
@@ -270,6 +282,27 @@ RemoteOperationResult FakeRemoteFileSystem::rename(const std::string &sourcePath
     }
 
     return {true, "remote item renamed"};
+}
+
+RemoteOperationResult FakeRemoteFileSystem::setPermissions(const std::string &path, int mode)
+{
+    if (!m_connected)
+    {
+        return {false, "remote session is not connected"};
+    }
+    if (mode < 0 || mode > 0777)
+    {
+        return {false, "permission mode must be between 000 and 777"};
+    }
+
+    const std::string normalizedPath = normalizePath(path);
+    const auto item = m_items.find(normalizedPath);
+    if (item == m_items.end())
+    {
+        return {false, "remote item does not exist"};
+    }
+    item->second.permissions = permissionText(item->second.type, mode);
+    return {true, "remote permissions updated"};
 }
 
 RemoteOperationResult FakeRemoteFileSystem::uploadFile(const std::string &localPath, const std::string &remotePath, TransferProgressCallback progress)

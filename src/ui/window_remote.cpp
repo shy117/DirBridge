@@ -25,6 +25,61 @@
 
 using namespace window_shared;
 
+namespace
+{
+struct RemoteDirectorySnapshot
+{
+    QStringList knownDirectories;
+    std::vector<FileItem> items;
+};
+
+RemoteDirectorySnapshot loadRemoteDirectorySnapshot(RemoteFileSystem &fileSystem,
+                                                    const QString &requestedPath,
+                                                    bool includeAncestorSiblings)
+{
+    const QString path = normalizedRemotePath(requestedPath);
+    RemoteDirectorySnapshot snapshot;
+    snapshot.items = fileSystem.listDirectory(path.toStdString());
+
+    const QStringList ancestors = ancestorRemoteDirectories(path);
+    snapshot.knownDirectories = ancestors;
+    if (includeAncestorSiblings)
+    {
+        for (const QString &directory : ancestors)
+        {
+            if (normalizedRemotePath(directory) == path)
+            {
+                continue;
+            }
+
+            try
+            {
+                const std::vector<FileItem> siblingItems = fileSystem.listDirectory(directory.toStdString());
+                for (const FileItem &sibling : siblingItems)
+                {
+                    if (sibling.type == FileItemType::Directory)
+                    {
+                        snapshot.knownDirectories << QString::fromStdString(sibling.path);
+                    }
+                }
+            }
+            catch (const std::exception &)
+            {
+            }
+        }
+    }
+    for (const FileItem &item : snapshot.items)
+    {
+        if (item.type == FileItemType::Directory)
+        {
+            snapshot.knownDirectories << QString::fromStdString(item.path);
+        }
+    }
+    snapshot.knownDirectories.removeDuplicates();
+    return snapshot;
+}
+} // namespace
+
 struct MainWindow::RemoteConnectionResult
 {
     SiteProfile profile;
@@ -183,6 +238,8 @@ void MainWindow::startRemoteConnection(RemoteSession &session)
 
     session.connected = false;
     session.connecting = true;
+    session.knownDirectories.clear();
+    ++session.directoryLoadGeneration;
     if (session.connectionCanceled == nullptr)
     {
         session.connectionCanceled = std::make_shared<std::atomic_bool>(false);
@@ -235,34 +292,12 @@ void MainWindow::startRemoteConnection(RemoteSession &session)
                 result->connected = true;
                 try
                 {
-                    result->items = result->fileSystem->listDirectory(defaultRemotePath.toStdString());
-                    QStringList knownDirectories = ancestorRemoteDirectories(defaultRemotePath);
-                    for (const QString &directory : ancestorRemoteDirectories(defaultRemotePath))
-                    {
-                        try
-                        {
-                            const std::vector<FileItem> siblingItems = result->fileSystem->listDirectory(directory.toStdString());
-                            for (const FileItem &sibling : siblingItems)
-                            {
-                                if (sibling.type == FileItemType::Directory)
-                                {
-                                    knownDirectories << QString::fromStdString(sibling.path);
-                                }
-                            }
-                        }
-                        catch (const std::exception &)
-                        {
-                        }
-                    }
-                    for (const FileItem &item : result->items)
-                    {
-                        if (item.type == FileItemType::Directory)
-                        {
-                            knownDirectories << QString::fromStdString(item.path);
-                        }
-                    }
-                    knownDirectories.removeDuplicates();
-                    result->knownDirectories = knownDirectories;
+                    RemoteDirectorySnapshot snapshot = loadRemoteDirectorySnapshot(
+                        *result->fileSystem,
+                        defaultRemotePath,
+                        true);
+                    result->items = std::move(snapshot.items);
+                    result->knownDirectories = std::move(snapshot.knownDirectories);
                     result->loaded = true;
                 }
                 catch (const std::exception &error)
@@ -335,7 +370,8 @@ void MainWindow::finishRemoteConnection(const QString &sessionId, const std::sha
     session->fileSystem = result->fileSystem;
     session->connected = true;
     session->currentPath = result->requestedPath;
-    session->panel->setRemoteKnownDirectories(result->knownDirectories);
+    session->knownDirectories = result->knownDirectories;
+    session->panel->setRemoteKnownDirectories(session->knownDirectories);
     session->panel->setRemoteItems(
         session->currentPath,
         result->items,
@@ -380,7 +416,7 @@ void MainWindow::reconnectRemoteSession(RemoteSession &session)
     }
     if (hasRunningTransferForSession(session.id))
     {
-        showWarningMessage("无法重连会话", "当前远程会话仍有传输任务正在运行，请等待完成或先取消传输。");
+        showWarningMessage("无法重连会话", "当前远程会话仍有后台操作或传输任务正在运行，请等待完成或先取消传输。");
         return;
     }
     if (session.fileSystem != nullptr && session.connected)
@@ -403,7 +439,7 @@ void MainWindow::reconnectRemoteSession(RemoteSession &session)
  * @param path 需要加载的远程目录。
  * @param addToHistory 是否写入面板导航历史。
  * @param errorMessage 可选错误输出。
- * @return 加载成功返回 true。
+ * @return 请求成功提交到后台线程时返回 true。
  */
 bool MainWindow::loadRemotePath(RemoteSession &session, const QString &path, bool addToHistory, QString *errorMessage)
 {
@@ -430,75 +466,98 @@ bool MainWindow::loadRemotePath(RemoteSession &session, const QString &path, boo
         return false;
     }
 
-    QString normalizedPath = path.trimmed();
-    if (normalizedPath.isEmpty())
-    {
-        normalizedPath = "/";
-    }
-    if (!normalizedPath.startsWith('/'))
-    {
-        normalizedPath.prepend('/');
-    }
+    const QString normalizedPath = normalizedRemotePath(path);
+    const QString sessionId = session.id;
+    const std::shared_ptr<RemoteFileSystem> fileSystem = session.fileSystem;
+    const std::uint64_t requestGeneration = ++session.directoryLoadGeneration;
+    ++session.activeRemoteOperationCount;
+    QPointer<MainWindow> window(this);
+    auto snapshot = std::make_shared<RemoteDirectorySnapshot>();
+    auto detail = std::make_shared<QString>();
 
-    try
+    if (errorMessage != nullptr)
     {
-        const std::vector<FileItem> items = session.fileSystem->listDirectory(normalizedPath.toStdString());
-        QStringList knownDirectories = ancestorRemoteDirectories(normalizedPath);
-        for (const QString &directory : ancestorRemoteDirectories(normalizedPath))
+        errorMessage->clear();
+    }
+    session.panel->setRemoteLoading(normalizedPath);
+    statusBar()->showMessage(QString("正在加载远程目录：%1").arg(normalizedPath));
+
+    QThread *thread = QThread::create([window, sessionId, normalizedPath, addToHistory, requestGeneration, fileSystem, snapshot, detail]() {
+        try
         {
-            try
+            *snapshot = loadRemoteDirectorySnapshot(*fileSystem, normalizedPath, false);
+        }
+        catch (const std::exception &error)
+        {
+            *detail = QString::fromUtf8(error.what());
+        }
+
+        if (window == nullptr)
+        {
+            return;
+        }
+
+        QMetaObject::invokeMethod(window.data(), [window, sessionId, normalizedPath, addToHistory, requestGeneration, snapshot, detail]() {
+            if (window == nullptr)
             {
-                const std::vector<FileItem> siblingItems = session.fileSystem->listDirectory(directory.toStdString());
-                for (const FileItem &sibling : siblingItems)
+                return;
+            }
+
+            RemoteSession *currentSession = window->remoteSessionById(sessionId.toStdString());
+            if (currentSession == nullptr)
+            {
+                return;
+            }
+            currentSession->activeRemoteOperationCount = std::max(0, currentSession->activeRemoteOperationCount - 1);
+            if (!currentSession->connected
+                || currentSession->directoryLoadGeneration != requestGeneration)
+            {
+                return;
+            }
+
+            if (!detail->isEmpty())
+            {
+                const QString message = QString("无法加载远程目录“%1”。%2")
+                    .arg(normalizedPath, userFacingRemoteError(*detail));
+                window->appendLog("ERROR", QString("远程目录加载失败：%1").arg(*detail));
+                currentSession->panel->setRemoteError(message);
+                if (!window->m_dialogsSuppressedForTesting)
                 {
-                    if (sibling.type == FileItemType::Directory)
-                    {
-                        knownDirectories << QString::fromStdString(sibling.path);
-                    }
+                    window->showWarningMessage("远程目录加载失败", message);
+                }
+                return;
+            }
+
+            currentSession->currentPath = normalizedPath;
+            const QString descendantPrefix = normalizedPath == "/" ? "/" : normalizedPath + "/";
+            for (int index = currentSession->knownDirectories.size() - 1; index >= 0; --index)
+            {
+                if (currentSession->knownDirectories.at(index).startsWith(descendantPrefix))
+                {
+                    currentSession->knownDirectories.removeAt(index);
                 }
             }
-            catch (const std::exception &)
-            {
-            }
-        }
-        for (const FileItem &item : items)
-        {
-            if (item.type == FileItemType::Directory)
-            {
-                knownDirectories << QString::fromStdString(item.path);
-            }
-        }
-        knownDirectories.removeDuplicates();
-        session.currentPath = normalizedPath;
-        session.panel->setRemoteKnownDirectories(knownDirectories);
-        session.panel->setRemoteItems(
-            session.currentPath,
-            items,
-            QString("%1 个项目").arg(items.size()),
-            addToHistory);
-        appendLog("INFO", QString("远程目录已加载：%1").arg(session.currentPath));
-        statusBar()->showMessage(QString("远程已连接：%1 %2")
-            .arg(protocolText(session.profile.protocol), session.currentPath));
-        recordRecentSession(session);
-        return true;
-    }
-    catch (const std::exception &error)
-    {
-        const QString detail = QString::fromUtf8(error.what());
-        const QString message = QString("无法加载远程目录“%1”。%2")
-            .arg(normalizedPath, userFacingRemoteError(detail));
-        if (errorMessage != nullptr)
-        {
-            *errorMessage = message;
-        }
-        appendLog("ERROR", QString("远程目录加载失败：%1").arg(detail));
-        session.panel->setRemoteError(message);
-        if (errorMessage == nullptr)
-        {
-            showWarningMessage("远程目录加载失败", message);
-        }
-        return false;
-    }
+            currentSession->knownDirectories.append(snapshot->knownDirectories);
+            currentSession->knownDirectories.removeDuplicates();
+            currentSession->panel->setRemoteKnownDirectories(currentSession->knownDirectories);
+            currentSession->panel->setRemoteItems(
+                currentSession->currentPath,
+                snapshot->items,
+                QString("%1 个项目").arg(snapshot->items.size()),
+                addToHistory);
+            window->appendLog("INFO", QString("远程目录已加载：%1").arg(currentSession->currentPath));
+            window->statusBar()->showMessage(QString("远程已连接：%1 %2")
+                .arg(protocolText(currentSession->profile.protocol), currentSession->currentPath));
+            window->recordRecentSession(*currentSession);
+        }, Qt::QueuedConnection);
+    });
+    beginBackgroundTask();
+    connect(thread, &QThread::finished, this, [this]() {
+        finishBackgroundTask();
+    });
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
+    return true;
 }
 
 /**
@@ -506,7 +565,7 @@ bool MainWindow::loadRemotePath(RemoteSession &session, const QString &path, boo
  * @param path 需要加载的远程目录。
  * @param addToHistory 是否写入面板导航历史。
  * @param errorMessage 可选错误输出。
- * @return 加载成功返回 true。
+ * @return 请求成功提交到后台线程时返回 true。
  */
 bool MainWindow::loadRemotePath(const QString &path, bool addToHistory, QString *errorMessage)
 {
@@ -562,10 +621,12 @@ void MainWindow::disconnectRemote()
     }
     if (hasRunningTransferForSession(session->id))
     {
-        showWarningMessage("无法断开会话", "当前远程会话仍有传输任务正在运行，请等待完成或先取消传输。");
+        showWarningMessage("无法断开会话", "当前远程会话仍有后台操作或传输任务正在运行，请等待完成或先取消传输。");
         return;
     }
 
+    ++session->directoryLoadGeneration;
+    session->knownDirectories.clear();
     session->fileSystem->disconnect();
     setRemoteConnectionState(*session, false, "远程会话已断开。");
     appendLog("INFO", "远程会话已断开");
@@ -744,6 +805,117 @@ void MainWindow::renameRemotePath(RemoteSession &session, const QString &sourceP
 }
 
 /**
+ * @brief 在后台修改远程项目权限，并可递归应用到目录内容。
+ * @param session 目标远程会话。
+ * @param path 远程文件或目录路径。
+ * @param mode 000 到 777 的 UNIX 权限模式。
+ * @param recursive 是否递归应用到目录内容。
+ */
+void MainWindow::setRemotePermissions(RemoteSession &session, const QString &path, int mode, bool recursive)
+{
+    if (!session.connected || session.fileSystem == nullptr)
+    {
+        showWarningMessage("更改权限失败", "远程会话未连接。");
+        return;
+    }
+    if (mode < 0 || mode > 0777)
+    {
+        showWarningMessage("更改权限失败", "权限值必须位于 000 到 777 之间。");
+        return;
+    }
+
+    const QString sessionId = session.id;
+    const std::shared_ptr<RemoteFileSystem> fileSystem = session.fileSystem;
+    auto errorMessage = std::make_shared<QString>();
+    QPointer<MainWindow> window(this);
+    ++session.activeRemoteOperationCount;
+
+    QThread *thread = QThread::create([window, sessionId, fileSystem, path, mode, recursive, errorMessage]() {
+        std::vector<QString> targets;
+        std::function<bool(const QString &, bool)> collectTargets;
+        collectTargets = [&](const QString &currentPath, bool includeChildren) {
+            targets.push_back(currentPath);
+            if (!includeChildren)
+            {
+                return true;
+            }
+
+            std::vector<FileItem> children;
+            try
+            {
+                children = fileSystem->listDirectory(currentPath.toStdString());
+            }
+            catch (const std::exception &error)
+            {
+                *errorMessage = QString("读取目录“%1”失败：%2").arg(currentPath, QString::fromUtf8(error.what()));
+                return false;
+            }
+
+            for (const FileItem &child : children)
+            {
+                if (child.type == FileItemType::Symlink)
+                {
+                    continue;
+                }
+                const QString childPath = QString::fromStdString(child.path);
+                if (!collectTargets(childPath, child.type == FileItemType::Directory))
+                {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        if (collectTargets(path, recursive))
+        {
+            for (auto target = targets.crbegin(); target != targets.crend(); ++target)
+            {
+                const RemoteOperationResult result = fileSystem->setPermissions(target->toStdString(), mode);
+                if (!result.success)
+                {
+                    *errorMessage = QString("修改“%1”失败：%2")
+                        .arg(*target, QString::fromStdString(result.message));
+                    break;
+                }
+            }
+        }
+
+        if (window == nullptr)
+        {
+            return;
+        }
+        QMetaObject::invokeMethod(window.data(), [window, sessionId, path, mode, recursive, errorMessage]() {
+            if (window == nullptr)
+            {
+                return;
+            }
+            RemoteSession *currentSession = window->remoteSessionById(sessionId.toStdString());
+            if (currentSession == nullptr)
+            {
+                return;
+            }
+            currentSession->activeRemoteOperationCount = std::max(0, currentSession->activeRemoteOperationCount - 1);
+            if (!errorMessage->isEmpty())
+            {
+                window->appendLog("ERROR", QString("远程权限修改失败：%1").arg(*errorMessage));
+                window->showWarningMessage("更改权限失败", *errorMessage);
+                return;
+            }
+
+            window->appendLog("INFO", QString("远程权限已修改：%1 -> %2%3")
+                .arg(path, QString("%1").arg(mode, 3, 8, QChar('0')), recursive ? "（包含子目录）" : QString()));
+            window->loadRemotePath(*currentSession, currentSession->currentPath, false);
+        }, Qt::QueuedConnection);
+    });
+    beginBackgroundTask();
+    connect(thread, &QThread::finished, this, [this]() {
+        finishBackgroundTask();
+    });
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
+}
+
+/**
  * @brief 递归删除远程路径，供覆盖上传等同步流程复用。
  * @param session 目标远程会话。
  * @param path 要删除的远程路径。
@@ -904,6 +1076,3 @@ void MainWindow::finishRemoteRemove(const QString &sessionId, const QString &pat
     appendLog("INFO", QString("远程项目已删除：%1").arg(path));
     loadRemotePath(*session, session->currentPath, false);
 }
-
-
-

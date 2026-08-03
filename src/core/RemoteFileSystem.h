@@ -62,6 +62,19 @@ public:
         return {false, "rename is not implemented"};
     }
 
+    /**
+     * @brief 修改远程文件或目录的 UNIX 权限位。
+     * @param path 远程项目绝对路径。
+     * @param mode 八进制权限值对应的整数，范围为 000 到 777。
+     * @return 包含成功状态和后端消息的操作结果。
+     */
+    virtual RemoteOperationResult setPermissions(const std::string &path, int mode)
+    {
+        (void)path;
+        (void)mode;
+        return {false, "set permissions is not implemented"};
+    }
+
     virtual RemoteOperationResult uploadFile(const std::string &localPath, const std::string &remotePath, TransferProgressCallback progress = {})
     {
         (void)localPath;

@@ -773,6 +773,15 @@ void MainWindow::removeRemotePathForTesting(const QString &path)
     removeRemotePath(path);
 }
 
+void MainWindow::setRemotePermissionsForTesting(const QString &path, int mode, bool recursive)
+{
+    RemoteSession *session = currentRemoteSession();
+    if (session != nullptr)
+    {
+        setRemotePermissions(*session, path, mode, recursive);
+    }
+}
+
 void MainWindow::moveRemotePathsForTesting(const QStringList &sourcePaths, const QString &targetDirectory)
 {
     RemoteSession *session = currentRemoteSession();

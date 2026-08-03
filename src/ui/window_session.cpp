@@ -289,7 +289,7 @@ void MainWindow::closeRemoteTab(int index)
         }
         if (hasRunningTransferForSession(session->id))
         {
-            showWarningMessage("无法关闭会话", "当前远程会话仍有传输任务正在运行，请等待完成或先取消传输。");
+            showWarningMessage("无法关闭会话", "当前远程会话仍有后台操作或传输任务正在运行，请等待完成或先取消传输。");
             return;
         }
         if (m_externalEditManager != nullptr)
@@ -424,6 +424,9 @@ MainWindow::RemoteSession *MainWindow::createRemoteSession(const SiteProfile &pr
     });
     sessionPtr->panel->setRemoteRenameRequestedHandler([this, sessionPtr](const QString &sourcePath, const QString &targetPath) {
         renameRemotePath(*sessionPtr, sourcePath, targetPath);
+    });
+    sessionPtr->panel->setRemotePermissionsRequestedHandler([this, sessionPtr](const QString &path, int mode, bool recursive) {
+        setRemotePermissions(*sessionPtr, path, mode, recursive);
     });
     sessionPtr->panel->setRemoteDownloadRequestedHandler([this, sessionPtr](const QString &remotePath, bool isDirectory) {
         if (isDirectory)

@@ -160,17 +160,34 @@ void MainWindow::setupQuickConnectBar()
     m_saveSiteButton->setObjectName("quickSaveSiteButton");
     m_saveSiteButton->setIcon(fluentIcon("folder_add"));
 
-    quickBar->addWidget(new QLabel("协议", quickBar));
+    auto addGroupGap = [quickBar]() {
+        auto *spacer = new QWidget(quickBar);
+        spacer->setFixedWidth(8);
+        quickBar->addWidget(spacer);
+    };
+    auto addFieldLabel = [quickBar](const QString &text) {
+        auto *label = new QLabel(text, quickBar);
+        label->setContentsMargins(0, 0, 4, 0);
+        quickBar->addWidget(label);
+    };
+
+    addGroupGap();
+    addFieldLabel("协议");
     quickBar->addWidget(m_protocolCombo);
-    quickBar->addWidget(new QLabel("主机", quickBar));
+    addGroupGap();
+    addFieldLabel("主机");
     quickBar->addWidget(m_hostEdit);
-    quickBar->addWidget(new QLabel("端口", quickBar));
+    addGroupGap();
+    addFieldLabel("端口");
     quickBar->addWidget(m_portEdit);
-    quickBar->addWidget(new QLabel("用户", quickBar));
+    addGroupGap();
+    addFieldLabel("用户");
     quickBar->addWidget(m_userEdit);
-    quickBar->addWidget(new QLabel("密码", quickBar));
+    addGroupGap();
+    addFieldLabel("密码");
     quickBar->addWidget(m_passwordEdit);
-    quickBar->addWidget(new QLabel("路径", quickBar));
+    addGroupGap();
+    addFieldLabel("路径");
     quickBar->addWidget(m_remotePathEdit);
     quickBar->addWidget(m_connectButton);
     quickBar->addWidget(m_saveSiteButton);
@@ -235,13 +252,20 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
             showWarningMessage("上传失败", "请先连接远程会话。");
         }
     });
-    m_localPanel->setRemoteFilesDroppedOnLocalHandler([this](const QStringList &remotePaths) {
-        for (const QString &remotePath : remotePaths)
+    m_localPanel->setRemoteFilesDroppedOnLocalHandler([this](const QList<RemoteTransferItem> &remoteItems) {
+        for (const RemoteTransferItem &item : remoteItems)
         {
             RemoteSession *session = currentRemoteSession();
             if (session != nullptr)
             {
-                downloadRemotePath(*session, remotePath);
+                if (item.isDirectory)
+                {
+                    downloadRemotePath(*session, item.path);
+                }
+                else
+                {
+                    downloadRemoteFile(*session, item.path);
+                }
             }
         }
     });

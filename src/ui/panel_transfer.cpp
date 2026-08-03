@@ -9,12 +9,17 @@
 #include <QEvent>
 #include <QFileInfo>
 #include <QHeaderView>
+#include <QHash>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMap>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QStyle>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -25,6 +30,54 @@
 #include <algorithm>
 
 using namespace panel_shared;
+
+namespace
+{
+QByteArray encodeRemoteTransferItems(const QList<RemoteTransferItem> &items)
+{
+    QJsonArray array;
+    for (const RemoteTransferItem &item : items)
+    {
+        QJsonObject object;
+        object.insert("path", item.path);
+        object.insert("isDirectory", item.isDirectory);
+        array.append(object);
+    }
+    return QJsonDocument(array).toJson(QJsonDocument::Compact);
+}
+
+QList<RemoteTransferItem> decodeRemoteTransferItems(const QByteArray &payload)
+{
+    QList<RemoteTransferItem> items;
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(payload, &error);
+    if (error.error != QJsonParseError::NoError || !document.isArray())
+    {
+        return items;
+    }
+
+    QSet<QString> seenPaths;
+    for (const QJsonValue &value : document.array())
+    {
+        if (!value.isObject())
+        {
+            continue;
+        }
+        const QJsonObject object = value.toObject();
+        RemoteTransferItem item;
+        item.path = object.value("path").toString();
+        item.isDirectory = object.value("isDirectory").toBool();
+        if (item.path.isEmpty() || seenPaths.contains(item.path))
+        {
+            continue;
+        }
+        seenPaths.insert(item.path);
+        items.append(item);
+    }
+    return items;
+}
+} // namespace
+
 /**
  * @brief 处理文件表格视口上的拖拽和投放事件。
  * @param watched 事件接收对象。
@@ -120,8 +173,8 @@ void FilePanel::sortRemoteItemsByColumn(int column)
  */
 void FilePanel::startDragFromSelection()
 {
-    const QStringList paths = selectedFileTransferPaths();
-    if (paths.isEmpty())
+    const QList<RemoteTransferItem> items = selectedFileTransferItems();
+    if (items.isEmpty())
     {
         return;
     }
@@ -130,15 +183,15 @@ void FilePanel::startDragFromSelection()
     if (m_mode == Mode::Local)
     {
         QList<QUrl> urls;
-        for (const QString &path : paths)
+        for (const RemoteTransferItem &item : items)
         {
-            urls.append(QUrl::fromLocalFile(path));
+            urls.append(QUrl::fromLocalFile(item.path));
         }
         mimeData->setUrls(urls);
     }
     else
     {
-        mimeData->setData(RemotePathMimeType, paths.join('\n').toUtf8());
+        mimeData->setData(RemotePathMimeType, encodeRemoteTransferItems(items));
     }
 
     auto *drag = new QDrag(this);
@@ -188,8 +241,11 @@ void FilePanel::handleTransferDrop(const QMimeData *mimeData, const QPoint &posi
     {
         if (mimeData->hasFormat(RemotePathMimeType) && m_remoteFilesDroppedOnRemote)
         {
-            QStringList remotePaths = QString::fromUtf8(mimeData->data(RemotePathMimeType)).split('\n', Qt::SkipEmptyParts);
-            remotePaths.removeDuplicates();
+            QStringList remotePaths;
+            for (const RemoteTransferItem &item : decodeRemoteTransferItems(mimeData->data(RemotePathMimeType)))
+            {
+                remotePaths.append(item.path);
+            }
             if (!remotePaths.isEmpty())
             {
                 m_remoteFilesDroppedOnRemote(remotePaths, remoteDropTargetDirectory(position));
@@ -217,20 +273,20 @@ void FilePanel::handleTransferDrop(const QMimeData *mimeData, const QPoint &posi
         return;
     }
 
-    QStringList remotePaths = QString::fromUtf8(mimeData->data(RemotePathMimeType)).split('\n', Qt::SkipEmptyParts);
-    if (!remotePaths.isEmpty())
+    const QList<RemoteTransferItem> remoteItems = decodeRemoteTransferItems(mimeData->data(RemotePathMimeType));
+    if (!remoteItems.isEmpty())
     {
-        m_remoteFilesDroppedOnLocal(remotePaths);
+        m_remoteFilesDroppedOnLocal(remoteItems);
     }
 }
 
 /**
- * @brief 收集当前表格选中行对应的传输路径。
- * @return 去重前按行号排序的路径列表。
+ * @brief 收集当前表格选中行对应的传输路径和类型。
+ * @return 按行号排序的远程传输项目列表。
  */
-QStringList FilePanel::selectedFileTransferPaths() const
+QList<RemoteTransferItem> FilePanel::selectedFileTransferItems() const
 {
-    QStringList paths;
+    QList<RemoteTransferItem> items;
     QList<int> rows;
     for (QTableWidgetItem *item : m_table->selectedItems())
     {
@@ -255,10 +311,13 @@ QStringList FilePanel::selectedFileTransferPaths() const
             continue;
         }
 
-        paths.append(path);
+        RemoteTransferItem item;
+        item.path = path;
+        item.isDirectory = nameItem->data(Qt::UserRole + 1).toBool();
+        items.append(item);
     }
 
-    return paths;
+    return items;
 }
 
 /**
@@ -311,6 +370,7 @@ void FilePanel::populateLocalDirectory(const QString &path)
         QTableWidgetItem *nameItem = createItem(entry.fileName(), m_iconProvider.icon(entry));
         nameItem->setData(Qt::UserRole, entry.absoluteFilePath());
         nameItem->setData(Qt::UserRole + 1, entry.isDir());
+        nameItem->setToolTip(entry.absoluteFilePath());
 
         m_table->setItem(row, 0, nameItem);
         m_table->setItem(row, 1, createItem(entry.isDir() ? "" : formatFileSize(entry.size())));
@@ -385,6 +445,21 @@ void FilePanel::setRemoteConnecting(const QString &status)
 }
 
 /**
+ * @brief 显示远程目录后台加载状态，同时保留当前表格内容。
+ * @param path 正在请求的远程目录。
+ */
+void FilePanel::setRemoteLoading(const QString &path)
+{
+    if (m_mode != Mode::RemotePlaceholder)
+    {
+        return;
+    }
+
+    m_pathEdit->setText(path);
+    m_stateLabel->setText(QString("正在加载：%1").arg(path));
+}
+
+/**
  * @brief 将远程项目列表填充到文件表格。
  * @param path 当前远程路径。
  * @param items 远程项目列表。
@@ -399,22 +474,48 @@ void FilePanel::populateRemoteItems(const QString &path, const std::vector<FileI
     m_refreshButton->setEnabled(true);
 
     m_table->setSortingEnabled(false);
-    m_table->setRowCount(0);
-
     const std::vector<FileItem> displayItems = sortedRemoteItems(items, m_remoteSortColumn, m_remoteSortOrder);
-
-    for (const FileItem &entry : displayItems)
+    QHeaderView *header = m_table->horizontalHeader();
+    for (int column = 1; column < m_table->columnCount(); ++column)
     {
-        const int row = m_table->rowCount();
-        m_table->insertRow(row);
+        header->setSectionResizeMode(column, QHeaderView::Interactive);
+    }
 
+    const bool tableUpdatesEnabled = m_table->updatesEnabled();
+    m_table->setUpdatesEnabled(false);
+    const QSignalBlocker tableSignals(m_table);
+    m_table->clearContents();
+    m_table->setRowCount(static_cast<int>(displayItems.size()));
+    QHash<QString, QIcon> fileIcons;
+
+    for (int row = 0; row < static_cast<int>(displayItems.size()); ++row)
+    {
+        const FileItem &entry = displayItems.at(static_cast<std::size_t>(row));
         const bool isDirectory = entry.type == FileItemType::Directory;
         const QString name = QString::fromStdString(entry.name);
-        QTableWidgetItem *nameItem = createItem(
-            name,
-            iconForFileItem(this, m_iconProvider, name, entry.type));
+        QIcon icon;
+        if (entry.type == FileItemType::File)
+        {
+            const QString iconKey = QFileInfo(name).suffix().toLower();
+            const auto cachedIcon = fileIcons.constFind(iconKey);
+            if (cachedIcon != fileIcons.constEnd())
+            {
+                icon = cachedIcon.value();
+            }
+            else
+            {
+                icon = iconForFileItem(this, m_iconProvider, name, entry.type);
+                fileIcons.insert(iconKey, icon);
+            }
+        }
+        else
+        {
+            icon = iconForFileItem(this, m_iconProvider, name, entry.type);
+        }
+        QTableWidgetItem *nameItem = createItem(name, icon);
         nameItem->setData(Qt::UserRole, QString::fromStdString(entry.path));
         nameItem->setData(Qt::UserRole + 1, isDirectory);
+        nameItem->setToolTip(QString::fromStdString(entry.path));
 
         m_table->setItem(row, 0, nameItem);
         m_table->setItem(row, 1, createItem(isDirectory ? "" : formatFileSize(entry.size)));
@@ -422,6 +523,16 @@ void FilePanel::populateRemoteItems(const QString &path, const std::vector<FileI
         m_table->setItem(row, 3, createItem(QString::fromStdString(entry.modifiedTime)));
         m_table->setItem(row, 4, createItem(QString::fromStdString(entry.permissions)));
         m_table->setItem(row, 5, createItem(QString::fromStdString(entry.owner)));
+    }
+
+    for (int column = 1; column < m_table->columnCount(); ++column)
+    {
+        header->setSectionResizeMode(column, QHeaderView::ResizeToContents);
+    }
+    m_table->setUpdatesEnabled(tableUpdatesEnabled);
+    if (tableUpdatesEnabled)
+    {
+        m_table->viewport()->update();
     }
 
     m_table->horizontalHeader()->setSortIndicator(m_remoteSortColumn, m_remoteSortOrder);
@@ -527,6 +638,9 @@ void FilePanel::updateRemoteTree(const QString &path, const std::vector<FileItem
     }
 
     const QString currentPath = path.isEmpty() ? "/" : path;
+    const bool treeUpdatesEnabled = m_remoteTree->updatesEnabled();
+    m_remoteTree->setUpdatesEnabled(false);
+    const QSignalBlocker treeSignals(m_remoteTree);
     m_remoteTree->clear();
 
     const QIcon rootIcon = style()->standardIcon(QStyle::SP_DriveNetIcon);
@@ -589,6 +703,11 @@ void FilePanel::updateRemoteTree(const QString &path, const std::vector<FileItem
     currentItem->setExpanded(true);
     m_remoteTree->setCurrentItem(currentItem);
     m_remoteTree->scrollToItem(currentItem, QAbstractItemView::PositionAtCenter);
+    m_remoteTree->setUpdatesEnabled(treeUpdatesEnabled);
+    if (treeUpdatesEnabled)
+    {
+        m_remoteTree->viewport()->update();
+    }
 }
 
 /**

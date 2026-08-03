@@ -2,6 +2,7 @@
 #define DIRBRIDGE_UI_FILEPANEL_H
 
 #include <QFileIconProvider>
+#include <QList>
 #include <QPoint>
 #include <QSet>
 #include <QStringList>
@@ -21,6 +22,12 @@ class QSplitter;
 class QTableWidget;
 class QTableWidgetItem;
 class QTreeWidget;
+
+struct RemoteTransferItem
+{
+    QString path;
+    bool isDirectory = false;
+};
 
 class FilePanel : public QWidget
 {
@@ -46,6 +53,7 @@ public:
     void setRemoteCreateFileRequestedHandler(std::function<void(const QString &)> handler);
     void setRemoteRemoveRequestedHandler(std::function<void(const QString &)> handler);
     void setRemoteRenameRequestedHandler(std::function<void(const QString &, const QString &)> handler);
+    void setRemotePermissionsRequestedHandler(std::function<void(const QString &, int, bool)> handler);
     void setLocalUploadRequestedHandler(std::function<void(const QString &)> handler);
     void setRemoteDownloadRequestedHandler(std::function<void(const QString &, bool)> handler);
     void setRemoteEditRequestedHandler(std::function<void(const QString &)> handler);
@@ -58,9 +66,9 @@ public:
     void setLocalFilesDroppedOnRemoteHandler(std::function<void(const QStringList &)> handler);
     /**
      * @brief 设置远程文件拖放到本地面板时使用的回调。
-     * @param handler 接收待下载远程文件路径的回调。
+     * @param handler 接收带文件类型的远程项目列表。
      */
-    void setRemoteFilesDroppedOnLocalHandler(std::function<void(const QStringList &)> handler);
+    void setRemoteFilesDroppedOnLocalHandler(std::function<void(const QList<RemoteTransferItem> &)> handler);
     /**
      * @brief 设置远程项目拖放到远程目录时使用的回调。
      * @param handler 接收远程源路径列表和目标远程目录的回调。
@@ -75,6 +83,11 @@ public:
      * @param status 面向用户的连接进度文本。
      */
     void setRemoteConnecting(const QString &status);
+    /**
+     * @brief 显示远程目录正在后台加载的状态。
+     * @param path 正在请求的远程目录。
+     */
+    void setRemoteLoading(const QString &path);
     void setRemoteDisconnected(const QString &status);
     void setRemoteError(const QString &status);
 
@@ -115,6 +128,7 @@ private:
      * @param path 要显示属性的远程路径。
      */
     void showRemoteProperties(const QString &path) const;
+    void showRemotePermissionsDialog(const QString &path, bool isDirectory);
     void createLocalDirectory();
     void createLocalFile();
     void removeLocalPath(const QString &path);
@@ -126,7 +140,7 @@ private:
     bool canAcceptTransferDrop(const QMimeData *mimeData) const;
     void handleTransferDrop(const QMimeData *mimeData, const QPoint &position);
     QString remoteDropTargetDirectory(const QPoint &position) const;
-    QStringList selectedFileTransferPaths() const;
+    QList<RemoteTransferItem> selectedFileTransferItems() const;
     QString remoteChildPath(const QString &name) const;
     QString remoteSiblingPath(const QString &sourcePath, const QString &newName) const;
     void updateNavigationButtons();
@@ -156,13 +170,14 @@ private:
     std::function<void(const QString &)> m_remoteCreateFileRequested;
     std::function<void(const QString &)> m_remoteRemoveRequested;
     std::function<void(const QString &, const QString &)> m_remoteRenameRequested;
+    std::function<void(const QString &, int, bool)> m_remotePermissionsRequested;
     std::function<void(const QString &)> m_localUploadRequested;
     std::function<void(const QString &, bool)> m_remoteDownloadRequested;
     std::function<void(const QString &)> m_remoteEditRequested;
     std::function<bool(const QString &)> m_remoteEditActiveQuery;
     std::function<void(const QString &)> m_remoteEditCloseRequested;
     std::function<void(const QStringList &)> m_localFilesDroppedOnRemote;
-    std::function<void(const QStringList &)> m_remoteFilesDroppedOnLocal;
+    std::function<void(const QList<RemoteTransferItem> &)> m_remoteFilesDroppedOnLocal;
     std::function<void(const QStringList &, const QString &)> m_remoteFilesDroppedOnRemote;
 
     QPushButton *m_backButton = nullptr;

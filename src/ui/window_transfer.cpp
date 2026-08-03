@@ -404,12 +404,20 @@ void MainWindow::handleTransferFinished(const QString &jobId, const RemoteOperat
 }
 
 /**
- * @brief 判断指定会话是否仍有删除或传输任务在运行。
+ * @brief 判断指定会话是否仍有目录加载、删除或传输任务在运行。
  * @param sessionId 远程会话 id。
  * @return 存在未完成任务时返回 true。
  */
 bool MainWindow::hasRunningTransferForSession(const QString &sessionId) const
 {
+    for (const std::unique_ptr<RemoteSession> &session : m_remoteSessions)
+    {
+        if (session != nullptr && session->id == sessionId && session->activeRemoteOperationCount > 0)
+        {
+            return true;
+        }
+    }
+
     const QString deletePrefix = sessionId + "\n";
     for (const QString &deleteKey : m_pendingRemoteDeletes)
     {
@@ -1689,5 +1697,3 @@ bool MainWindow::enqueueRemoteDirectoryDownload(RemoteSession &session, const QS
 
     return true;
 }
-
-

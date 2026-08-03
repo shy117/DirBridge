@@ -5,7 +5,9 @@
 #include "core/FakeRemoteFileSystem.h"
 #include "protocol/CurlRemoteFileSystem.h"
 #include "ui/FileChangeMonitor.h"
+#include "ui/FilePanel.h"
 #include "ui/MainWindow.h"
+#include "ui/panel_shared.h"
 
 #include <QAction>
 #include <QApplication>
@@ -16,9 +18,16 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMetaObject>
+#include <QMimeData>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDropEvent>
+#include <QElapsedTimer>
 #include <QEventLoop>
+#include <QHeaderView>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProgressBar>
 #include <QPointer>
 #include <QPushButton>
@@ -36,6 +45,7 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -44,6 +54,37 @@
 
 QAction *findActionByText(MainWindow &window, const QString &text);
 bool checkAboutDialog(MainWindow &window);
+
+/**
+ * @brief 测量一次性展示大量远程文件时的 UI 主线程耗时。
+ * @return 填充 2500 个远程文件所需的毫秒数。
+ */
+qint64 measureLargeRemoteDirectoryPopulation()
+{
+    FilePanel panel(FilePanel::Mode::RemotePlaceholder);
+    panel.resize(900, 600);
+    panel.show();
+    QApplication::processEvents();
+
+    std::vector<FileItem> items;
+    items.reserve(2500);
+    for (int index = 0; index < 2500; ++index)
+    {
+        const std::string name = "remote-file-" + std::to_string(index) + ".txt";
+        items.push_back({name,
+                         "/performance/" + name,
+                         FileItemType::File,
+                         1024 + index,
+                         "2026-08-03 12:00:00",
+                         "-rw-r--r--",
+                         "tester"});
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+    panel.setRemoteItems("/performance", items, QString(), false);
+    return timer.elapsed();
+}
 
 /**
  * @brief 按对象名查找必须存在的子控件，缺失时输出冒烟测试错误。
@@ -71,6 +112,13 @@ bool requireChild(MainWindow &window, const char *objectName)
 bool checkRemoteUiObjects(MainWindow &window)
 {
     bool ok = true;
+    const qint64 largeDirectoryElapsed = measureLargeRemoteDirectoryPopulation();
+    if (largeDirectoryElapsed > 500)
+    {
+        QTextStream(stderr) << "Large remote directory UI population took "
+                            << largeDirectoryElapsed << " ms" << Qt::endl;
+        ok = false;
+    }
     {
         QTemporaryDir temporaryDirectory;
         if (!temporaryDirectory.isValid())
@@ -156,6 +204,7 @@ bool checkRemoteUiObjects(MainWindow &window)
     ok = requireChild<QLineEdit>(window, "quickPasswordEdit") && ok;
     ok = requireChild<QLineEdit>(window, "quickRemotePathEdit") && ok;
     ok = requireChild<QPushButton>(window, "quickConnectButton") && ok;
+    ok = requireChild<QTableWidget>(window, "localFileTable") && ok;
     ok = requireChild<QTabWidget>(window, "remoteTabs") && ok;
     ok = requireChild<QTabWidget>(window, "bottomTabs") && ok;
     ok = requireChild<QTabWidget>(window, "terminalTabs") && ok;
@@ -341,6 +390,30 @@ bool checkRemoteUiObjects(MainWindow &window)
         ok = false;
     }
 
+    QTableWidget *localFileTable = window.findChild<QTableWidget *>("localFileTable");
+    if (localFileTable != nullptr)
+    {
+        QHeaderView *header = localFileTable->horizontalHeader();
+        const int initialNameWidth = localFileTable->columnWidth(0);
+        if (header == nullptr
+            || header->sectionResizeMode(0) != QHeaderView::Interactive
+            || initialNameWidth != 240)
+        {
+            QTextStream(stderr) << "File name column should use a 240px interactive default width" << Qt::endl;
+            ok = false;
+        }
+        else
+        {
+            header->resizeSection(0, 280);
+            if (localFileTable->columnWidth(0) != 280)
+            {
+                QTextStream(stderr) << "File name column should allow manual resizing" << Qt::endl;
+                ok = false;
+            }
+            header->resizeSection(0, initialNameWidth);
+        }
+    }
+
     if (transferTable != nullptr)
     {
         if (transferTable->columnCount() < 10)
@@ -407,6 +480,25 @@ bool waitForRemoteConnected(QWidget *remotePanel, const QString &remotePath)
     return false;
 }
 
+bool waitForRemoteLoadFailure(QWidget *remotePanel, const QString &restoredPath)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        QApplication::processEvents();
+        QLineEdit *remotePathEdit = remotePanel == nullptr ? nullptr : remotePanel->findChild<QLineEdit *>("remotePathEdit");
+        QLabel *remoteStateLabel = remotePanel == nullptr ? nullptr : remotePanel->findChild<QLabel *>("remoteStateLabel");
+        if (remotePathEdit != nullptr && remoteStateLabel != nullptr
+            && remotePathEdit->text() == restoredPath
+            && remoteStateLabel->text().contains("无法加载远程目录"))
+        {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+}
+
 /**
  * @brief 持续驱动 Qt 事件循环，直到远程面板显示已断开或已取消状态。
  * @param remotePanel 持有远程状态标签的面板控件。
@@ -442,9 +534,18 @@ public:
 
     std::vector<FileItem> listDirectory(const std::string &path) override
     {
+        ++m_listDirectoryCallCount;
         std::this_thread::sleep_for(std::chrono::milliseconds(150));
         return FakeRemoteFileSystem::listDirectory(path);
     }
+
+    int listDirectoryCallCount() const
+    {
+        return m_listDirectoryCallCount.load();
+    }
+
+private:
+    std::atomic<int> m_listDirectoryCallCount{0};
 };
 
 /**
@@ -597,6 +698,74 @@ bool waitForTableRowAbsent(QTableWidget *table, const QString &name)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     return false;
+}
+
+bool waitForTablePermission(QTableWidget *table, const QString &name, const QString &permissions)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        QApplication::processEvents();
+        const int row = findTableRowByName(table, name);
+        if (row >= 0 && table->item(row, 4) != nullptr && table->item(row, 4)->text() == permissions)
+        {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+}
+
+QString joinRemotePathForCheck(QString directory, const QString &name);
+
+bool checkRemoteMixedDrop(MainWindow &window, const QString &remotePath)
+{
+    QTableWidget *localTable = window.findChild<QTableWidget *>("localFileTable");
+    QTreeWidget *transferTable = window.findChild<QTreeWidget *>("transferTable");
+    QTemporaryDir downloadDirectory;
+    if (localTable == nullptr || transferTable == nullptr || !downloadDirectory.isValid())
+    {
+        return false;
+    }
+    window.setLocalPathForTesting(downloadDirectory.path());
+
+    QJsonArray items;
+    QJsonObject fileItem;
+    fileItem.insert("path", joinRemotePathForCheck(remotePath, "readme.txt"));
+    fileItem.insert("isDirectory", false);
+    items.append(fileItem);
+    QJsonObject directoryItem;
+    directoryItem.insert("path", joinRemotePathForCheck(remotePath, "download"));
+    directoryItem.insert("isDirectory", true);
+    items.append(directoryItem);
+
+    QMimeData mimeData;
+    mimeData.setData(panel_shared::RemotePathMimeType, QJsonDocument(items).toJson(QJsonDocument::Compact));
+    QDragEnterEvent dragEnterEvent(QPoint(8, 8), Qt::CopyAction, &mimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(localTable->viewport(), &dragEnterEvent);
+    if (!dragEnterEvent.isAccepted())
+    {
+        QTextStream(stderr) << "Mixed remote drag was not accepted by the local panel" << Qt::endl;
+        return false;
+    }
+    QDropEvent dropEvent(QPointF(8, 8), Qt::CopyAction, &mimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(localTable->viewport(), &dropEvent);
+    if (!dropEvent.isAccepted())
+    {
+        QTextStream(stderr) << "Mixed remote drop was not accepted by the local panel" << Qt::endl;
+        return false;
+    }
+    if (!waitForTransferRow(transferTable, "readme.txt", "下载", "已完成"))
+    {
+        QTextStream(stderr) << "Dropped remote file was not downloaded as a file" << Qt::endl;
+        return false;
+    }
+    if (!waitForTransferRow(transferTable, "download", "下载", "已完成"))
+    {
+        QTextStream(stderr) << "Dropped remote directory was not downloaded as a directory" << Qt::endl;
+        return false;
+    }
+    return true;
 }
 
 bool checkAboutDialog(MainWindow &window)
@@ -986,15 +1155,25 @@ bool checkRemoteUiWorkflow(
 
     if (useFakeBackend)
     {
+        window.setRemotePermissionsForTesting(joinRemotePathForCheck(remotePath, "readme.txt"), 0600);
+        if (!waitForTablePermission(remoteTable, "readme.txt", "-rw-------"))
+        {
+            QTextStream(stderr) << "Remote permission update did not refresh the file table" << Qt::endl;
+            ok = false;
+        }
+    }
+
+    if (useFakeBackend)
+    {
         ok = checkExternalEditWorkflow(window, remotePath, remoteTable) && ok;
+        ok = checkRemoteMixedDrop(window, remotePath) && ok;
     }
 
     const QString directoryName = expectedNames.isEmpty() ? QString() : expectedNames.first();
     const QString expectedChildPath = joinRemotePathForCheck(remotePath, directoryName);
     remotePathEdit->setText(expectedChildPath);
     QMetaObject::invokeMethod(remotePathEdit, "returnPressed", Qt::DirectConnection);
-    QApplication::processEvents();
-    if (remotePathEdit->text() != expectedChildPath)
+    if (!waitForRemoteConnected(remotePanel, expectedChildPath))
     {
         QTextStream(stderr) << "Remote address bar jump is unexpected: " << remotePathEdit->text() << Qt::endl;
         ok = false;
@@ -1002,16 +1181,14 @@ bool checkRemoteUiWorkflow(
 
     remotePathEdit->setText(joinRemotePathForCheck(remotePath, "dirbridge_missing_path_for_smoke"));
     QMetaObject::invokeMethod(remotePathEdit, "returnPressed", Qt::DirectConnection);
-    QApplication::processEvents();
-    if (remotePathEdit->text() != expectedChildPath)
+    if (!waitForRemoteLoadFailure(remotePanel, expectedChildPath))
     {
-        QTextStream(stderr) << "Missing remote address changed the current path unexpectedly: " << remotePathEdit->text() << Qt::endl;
+        QTextStream(stderr) << "Missing remote address did not restore the current path: " << remotePathEdit->text() << Qt::endl;
         ok = false;
     }
 
     remoteUpButton->click();
-    QApplication::processEvents();
-    if (remotePathEdit->text() != remotePath)
+    if (!waitForRemoteConnected(remotePanel, remotePath))
     {
         QTextStream(stderr) << "Remote path after address-bar up navigation is unexpected: " << remotePathEdit->text() << Qt::endl;
         ok = false;
@@ -1024,24 +1201,21 @@ bool checkRemoteUiWorkflow(
         QTextStream(stderr) << "Remote directory double click could not be simulated" << Qt::endl;
         ok = false;
     }
-    QApplication::processEvents();
-    if (remotePathEdit->text() != expectedChildPath)
+    if (!waitForRemoteConnected(remotePanel, expectedChildPath))
     {
         QTextStream(stderr) << "Remote path after double click is unexpected: " << remotePathEdit->text() << Qt::endl;
         ok = false;
     }
 
     remoteUpButton->click();
-    QApplication::processEvents();
-    if (remotePathEdit->text() != remotePath)
+    if (!waitForRemoteConnected(remotePanel, remotePath))
     {
         QTextStream(stderr) << "Remote path after up navigation is unexpected: " << remotePathEdit->text() << Qt::endl;
         ok = false;
     }
 
     disconnectAction->trigger();
-    QApplication::processEvents();
-    if (!remoteStateLabel->text().contains("断开") || remotePathEdit->text() != "/")
+    if (!waitForRemoteDisconnected(remotePanel) || remotePathEdit->text() != "/")
     {
         QTextStream(stderr) << "Remote panel was not reset after disconnect" << Qt::endl;
         ok = false;
@@ -1249,6 +1423,84 @@ bool checkRemoteConnectionControlWorkflow(MainWindow &window)
         return false;
     }
 
+    return true;
+}
+
+/**
+ * @brief 验证慢速远程目录导航不会同步阻塞 UI 调用线程。
+ * @return 导航请求快速返回且最终加载目标目录时返回 true。
+ */
+bool checkRemoteNavigationResponsiveness()
+{
+    MainWindow window(DependencyCheckResult{});
+    window.setDialogsSuppressedForTesting(true);
+    auto fileSystem = std::make_unique<SlowFakeRemoteFileSystem>();
+    SlowFakeRemoteFileSystem *fileSystemObserver = fileSystem.get();
+    window.setRemoteFileSystemForTesting(std::move(fileSystem));
+
+    QComboBox *protocolCombo = window.findChild<QComboBox *>("quickProtocolCombo");
+    QLineEdit *hostEdit = window.findChild<QLineEdit *>("quickHostEdit");
+    QLineEdit *portEdit = window.findChild<QLineEdit *>("quickPortEdit");
+    QLineEdit *userEdit = window.findChild<QLineEdit *>("quickUserEdit");
+    QLineEdit *quickRemotePathEdit = window.findChild<QLineEdit *>("quickRemotePathEdit");
+    QPushButton *connectButton = window.findChild<QPushButton *>("quickConnectButton");
+    QTabWidget *remoteTabs = window.findChild<QTabWidget *>("remoteTabs");
+    if (protocolCombo == nullptr || hostEdit == nullptr || portEdit == nullptr || userEdit == nullptr
+        || quickRemotePathEdit == nullptr || connectButton == nullptr || remoteTabs == nullptr)
+    {
+        QTextStream(stderr) << "Remote navigation responsiveness prerequisites are incomplete" << Qt::endl;
+        return false;
+    }
+
+    const QString rootPath = "/home/testuser/remote_test";
+    const QString childPath = rootPath + "/download";
+    protocolCombo->setCurrentText("SFTP");
+    hostEdit->setText("slow-navigation-host");
+    portEdit->setText("22");
+    userEdit->setText("testuser");
+    quickRemotePathEdit->setText(rootPath);
+    connectButton->click();
+    if (!waitForRemoteConnected(remoteTabs->currentWidget(), rootPath))
+    {
+        QTextStream(stderr) << "Slow remote navigation fixture did not connect" << Qt::endl;
+        return false;
+    }
+    const int callsAfterConnect = fileSystemObserver->listDirectoryCallCount();
+    if (callsAfterConnect < 1)
+    {
+        QTextStream(stderr) << "Initial remote directory load did not issue a listing request" << Qt::endl;
+        return false;
+    }
+
+    QWidget *remotePanel = remoteTabs->currentWidget();
+    QLineEdit *remotePathEdit = remotePanel == nullptr ? nullptr : remotePanel->findChild<QLineEdit *>("remotePathEdit");
+    if (remotePathEdit == nullptr)
+    {
+        return false;
+    }
+
+    const auto startedAt = std::chrono::steady_clock::now();
+    remotePathEdit->setText(childPath);
+    QMetaObject::invokeMethod(remotePathEdit, "returnPressed", Qt::DirectConnection);
+    const auto requestElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - startedAt);
+    if (requestElapsed >= std::chrono::milliseconds(100))
+    {
+        QTextStream(stderr) << "Remote navigation blocked the UI thread for " << requestElapsed.count() << " ms" << Qt::endl;
+        return false;
+    }
+    if (!waitForRemoteConnected(remotePanel, childPath))
+    {
+        QTextStream(stderr) << "Slow remote navigation did not reach the requested path" << Qt::endl;
+        return false;
+    }
+    const int navigationCalls = fileSystemObserver->listDirectoryCallCount() - callsAfterConnect;
+    if (navigationCalls != 1)
+    {
+        QTextStream(stderr) << "Remote navigation should issue one listing request, got "
+                            << navigationCalls << Qt::endl;
+        return false;
+    }
     return true;
 }
 
@@ -1711,6 +1963,7 @@ bool checkRemoteUiWorkflow(MainWindow &window)
     return baseWorkflowOk
         && checkQuickSaveCreatesSeparateSite(window)
         && checkRemoteConnectionControlWorkflow(window)
+        && checkRemoteNavigationResponsiveness()
         && checkSessionManagerWorkflow(window)
         && checkRemoteMultiSessionWorkflow(window)
         && checkRemoteDirectoryOperationWorkflow(window)
