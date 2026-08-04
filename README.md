@@ -1,136 +1,171 @@
-# DirBridge
+<p align="center">
+  <img src="docs/images/dirbridge-wordmark.png" alt="DirBridge" width="680">
+</p>
 
-DirBridge 是一个面向 Windows 桌面场景的远程文件管理工具，目标是提供类似 Xftp 的本地与远程双栏文件管理体验。
+<p align="center">
+  <a href="https://github.com/shy117/DirBridge/releases/latest"><img src="https://img.shields.io/github/v/release/shy117/DirBridge?display_name=tag&sort=semver" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/shy117/DirBridge" alt="License"></a>
+  <img src="https://img.shields.io/badge/language-C%2B%2B-00599C" alt="Language: C++">
+</p>
 
-当前项目仍处于 MVP 开发阶段，版本号格式为 `vX.Y.Z`。具体版本变化见 [CHANGELOG.md](CHANGELOG.md)。
+<p align="center">
+  <strong>面向 Windows 的 FTP/SFTP 双栏文件管理与 SSH 终端工具</strong>
+</p>
 
-## 当前能力
+<p align="center">
+  <img src="docs/images/dirbridge-main-window.png" alt="DirBridge 主界面：本地与远程文件管理及 SSH 终端" width="100%">
+</p>
 
-- 本地文件浏览。
-- FTP / SFTP 远程目录浏览。
-- 站点配置保存和加载。
-- 多远程会话 Tab。
-- 远程新建、删除、重命名等基础文件操作。
-- 单文件上传和下载。
-- 拖拽上传、下载和远程面板内移动。
-- 全局传输队列。
-- 目录传输聚合进度。
-- 远程文件通过系统默认应用编辑，并在保存后自动同步。
-- 内嵌多标签 SSH 终端，支持从 SFTP 站点和远程文件标签直接打开。
-- 应用日志和基础配置。
+DirBridge 面向 Windows 桌面场景，将本地与远程文件管理、文件传输、远程编辑和 SSH 终端整合在一个界面中。项目仍在持续开发，适合个人使用、功能体验和测试；操作重要数据前建议保留备份。
 
-## 技术栈
+## 下载
 
-- C++17
-- Qt Widgets
-- CMake
-- libcurl
-- nlohmann/json
-- spdlog
-- Windows ConPTY / OpenSSH
-- Ghostty VT（项目固定版本的运行时 DLL）
+前往 [GitHub Releases](https://github.com/shy117/DirBridge/releases) 下载 Windows x64 发布包：
 
-## 构建环境要求
+- `DirBridge-vX.Y.Z-win64-setup.exe`：安装版，适合直接安装使用。
+- `DirBridge-vX.Y.Z-win64.zip`：便携版，解压后运行 `DirBridge.exe`。
 
-DirBridge 使用 C++17，并依赖标准库 `<filesystem>`。不建议为了兼容旧编译器降低 C++ 标准。更完整的构建兼容性、ABI 差异和依赖准备方式见 [docs/CMake依赖方案.md](docs/CMake依赖方案.md)。
-
-最低要求：
-
-- 64 位 Windows。
-- CMake 3.24 或更新版本。
-- Qt 5 或 Qt 6，需包含 Widgets 和 Svg 模块。
-- 支持 C++17 `<filesystem>` 的编译器和标准库。
-
-当前建议的编译器基线：
-
-- MinGW GCC 9 或更新版本。
-- MSVC 19.29 或更新版本。
-
-不支持：
-
-- GCC 7.3 / 旧版 MinGW。该环境缺少可用的 `<filesystem>`，会导致构建失败。
-
-已验证环境：
-
-- Windows + Qt 6 + MinGW：主要开发和发布验证环境。
-- Windows + Visual Studio 2022 + Qt 6 MSVC + vcpkg `curl[ssh]`：已验证可编译，Core 检查和依赖检查通过。
-- Windows + Visual Studio 2019 + Qt 5 MSVC + MSVC 19.29：已验证项目可编译，Core 检查通过。
-
-计划保持兼容但仍需补齐完整验证：
-
-- Qt 5 + MinGW。
+发布包已经包含 Qt、libcurl、MinGW 和 Ghostty VT 等随程序分发的运行组件，不需要配置源码构建环境。SSH 终端还需要 Windows 支持 ConPTY，并已安装系统 OpenSSH 客户端。
 
 ## 快速开始
 
-准备第三方依赖：
+1. 下载并安装程序，或解压便携版。
+2. 在顶部连接栏输入 FTP/SFTP 服务器信息直接连接，或将常用连接保存为站点。
+3. 在左侧会话管理器打开站点；中间本地面板和右侧远程面板可用于浏览、拖拽和文件操作。
+4. 在底部“传输”页查看上传、下载和目录任务；SFTP 站点或远程会话可直接打开 SSH 终端。
 
-    powershell -ExecutionPolicy Bypass -File scripts\setup_third_party.ps1
+保存站点时，密码使用 Windows 当前用户的数据保护能力加密存储。站点配置只对当前 Windows 用户可用，不应复制到其他账号或计算机作为明文凭据交换方式。
 
-SSH 终端还需要项目固定版本的 Ghostty VT 运行包。准备好与 `deps.lock.json` 匹配的已验证构建产物后，执行：
+## 主要功能
 
-    powershell -ExecutionPolicy Bypass -File scripts\setup_ghostty_vt_local.ps1 -SourceRoot <Ghostty VT 构建输出目录>
+### 文件管理
 
-使用 CMake preset 配置和构建。公开仓库中的 `CMakePresets.json` 不包含本机 Qt / MinGW 绝对路径；如果 Qt 或 MinGW 不在默认搜索路径中，请在本地创建不提交的 `CMakeUserPresets.json` 覆盖路径配置。
+- 本地与远程双栏目录浏览。
+- FTP/SFTP 站点保存、分组和多远程会话 Tab。
+- 按站点恢复远程文件树显示状态。
+- 新建文件和目录、删除、重命名及远程面板内移动。
+- 查看和修改远程文件、目录权限，并可递归应用到子目录。
+- 本地删除进入 Windows 回收站。
 
-    cmake --preset windows-mingw-debug
-    cmake --build --preset windows-mingw-debug
+### 文件传输
 
-项目当前主要验证环境是 Windows + MinGW + Qt 6。
+- 上传、下载以及本地与远程面板间拖拽传输。
+- 文件和多层目录传输。
+- 全局传输队列、聚合进度、经过时间和任务取消。
+- 传输列表刷新时保留滚动位置和任务选择。
+
+### 远程编辑
+
+- 使用 Windows 默认应用打开远程文件。
+- 外部应用保存后自动同步回原远程路径。
+- 编辑缓存、冲突检测和同步状态管理。
+
+### SSH 终端
+
+- 内嵌多标签 SSH 终端。
+- 从 SFTP 站点或远程文件会话直接打开终端。
+- 复用站点保存凭据，每个终端标签独立管理连接和生命周期。
+- 支持 ANSI 颜色、滚动历史、选择复制、粘贴、中文输入和常用终端键盘操作。
+
+## 平台与协议
+
+| 项目 | 支持情况 |
+|---|---|
+| 操作系统 | Windows x64 |
+| 远程文件协议 | FTP、SFTP |
+| SSH 终端 | Windows ConPTY + 系统 OpenSSH 客户端 |
+| 本地文件操作 | Windows 文件系统与回收站 |
+
+## 技术栈
+
+- C++17、Qt Widgets、CMake
+- libcurl、nlohmann/json、spdlog
+- Windows ConPTY、OpenSSH
+- Ghostty VT 终端状态和输入编码运行库
+
+## 从源码构建
+
+构建要求：
+
+- 64 位 Windows。
+- CMake 3.24 或更新版本。
+- Qt 5 或 Qt 6，并包含 Widgets 和 Svg 模块。
+- 支持 C++17 `<filesystem>` 的编译器和标准库。
+
+克隆仓库并准备第三方依赖：
+
+```powershell
+git clone https://github.com/shy117/DirBridge.git
+Set-Location DirBridge
+powershell -ExecutionPolicy Bypass -File scripts\setup_third_party.ps1
+```
+
+SSH 终端还需要与 `deps.lock.json` 匹配的 Ghostty VT 构建产物：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup_ghostty_vt_local.ps1 -SourceRoot <Ghostty VT 构建输出目录>
+```
+
+使用 MinGW preset 配置和构建：
+
+```powershell
+cmake --preset windows-mingw-debug
+cmake --build --preset windows-mingw-debug
+```
+
+默认构建产物位于：
+
+```text
+build/windows-mingw-debug/DirBridge.exe
+```
+
+公开仓库中的 `CMakePresets.json` 不包含本机 Qt 或编译器绝对路径。如相关工具不在默认搜索路径中，请创建不提交的 `CMakeUserPresets.json` 覆盖本机配置。
 
 MSVC 构建推荐在 Visual Studio Developer PowerShell 中使用 vcpkg preset：
 
-    cmake --preset windows-msvc-vcpkg-debug
-    cmake --build --preset windows-msvc-vcpkg-debug
+```powershell
+cmake --preset windows-msvc-vcpkg-debug
+cmake --build --preset windows-msvc-vcpkg-debug
+```
 
-MSVC 下的 libcurl ABI、vcpkg 依赖准备、运行时 PATH 和 `CMakeUserPresets.json` 细节见 [docs/CMake依赖方案.md](docs/CMake依赖方案.md)。
+依赖准备、ABI、vcpkg、运行时 PATH 和本机 preset 配置见 [CMake 依赖方案](docs/CMake依赖方案.md)。
 
-## 运行检查
+## 已验证构建环境
 
-构建完成后，建议先运行依赖检查：
+| 环境 | 状态 |
+|---|---|
+| Windows + Qt 6 + MinGW | 主要开发和发布验证环境 |
+| Visual Studio 2022 + Qt 6 MSVC + vcpkg `curl[ssh]` | 已验证构建和核心检查 |
+| Visual Studio 2019 + Qt 5 MSVC 19.29 | 已验证构建和核心检查 |
+| Qt 5 + MinGW | 计划保持兼容，仍需补齐完整验证 |
+| GCC 7.3 / 旧版 MinGW | 不支持，缺少可用的 C++17 `<filesystem>` |
 
-    .\build\windows-mingw-debug\DirBridge.exe --check-deps
+## 开发验证
 
-开发验证时还可以运行：
+构建完成后可运行：
 
-    .\build\windows-mingw-debug\DirBridge.exe --smoke-test
-    .\build\windows-mingw-debug\DirBridge.exe --ui-remote-smoke-test
-    .\build\windows-mingw-debug\DirBridge.exe --ui-remote-workflow-smoke-test
+```powershell
+ctest --test-dir build\windows-mingw-debug --output-on-failure
+.\build\windows-mingw-debug\DirBridge.exe --check-deps
+.\build\windows-mingw-debug\DirBridge.exe --smoke-test
+.\build\windows-mingw-debug\DirBridge.exe --ui-remote-smoke-test
+.\build\windows-mingw-debug\DirBridge.exe --ui-remote-workflow-smoke-test
+```
 
-如果使用单独的验证构建目录，请以实际构建输出路径为准。
+真实 FTP/SFTP 行为仍应在专用测试目录中验证，不要把服务器密码、Token 或其他凭据写入仓库。
 
 ## 文档
 
-项目文档入口：
-
-- [docs/README.md](docs/README.md)
-
-重点文档：
-
+- [完整文档索引](docs/README.md)
 - [总体技术方案](docs/00-总体技术方案.md)
-- [第一阶段 MVP](docs/01-第一阶段MVP.md)
 - [架构与分层](docs/02-架构与分层.md)
 - [远程文件外部编辑](docs/03-远程文件外部编辑.md)
-- [CMake 依赖方案](docs/CMake依赖方案.md)
-- [三方库管理](docs/三方库管理.md)
-- [运行环境说明](docs/运行环境说明.md)
 - [版本记录](CHANGELOG.md)
 
 ## 参与贡献
 
-欢迎围绕构建兼容性、远程文件操作、传输队列和 UI 体验提交改进。提交前建议至少运行：
-
-    cmake --build .\build\verify
-    .\build\verify\DirBridgeCoreChecks.exe
-    .\build\verify\DirBridge.exe --check-deps
-    .\build\verify\DirBridge.exe --smoke-test
-
-如果修改 UI 或远程会话流程，请同时运行：
-
-    .\build\verify\DirBridge.exe --ui-remote-smoke-test
-    .\build\verify\DirBridge.exe --ui-remote-workflow-smoke-test
+欢迎通过 Issue 提交缺陷报告和功能建议，也欢迎围绕构建兼容性、远程文件操作、传输流程和 UI 体验提交改进。提交代码前，请运行与改动范围对应的构建、核心检查和 UI 工作流验证。
 
 ## 许可证
 
-DirBridge 源码使用 Apache License 2.0，详见 [LICENSE](LICENSE)。
-
-第三方库和图标资源遵循各自许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。Windows 发布包应随附项目许可证和第三方许可证说明。
+DirBridge 源码使用 [Apache License 2.0](LICENSE)。第三方库、终端运行库和图标资源遵循各自许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

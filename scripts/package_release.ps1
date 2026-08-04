@@ -159,6 +159,17 @@ Write-Host "==> Deploying Qt runtime"
 foreach ($docName in @("README.md", "CHANGELOG.md", "RELEASE.md", "LICENSE", "THIRD_PARTY_NOTICES.md")) {
     Copy-IfExists -Source (Resolve-RepoPath $docName) -Destination (Join-Path $stageDir $docName)
 }
+
+$docsImageSource = Resolve-RepoPath "docs/images"
+if (Test-Path -LiteralPath $docsImageSource) {
+    $docsImageDestination = Join-Path $stageDir "docs/images"
+    New-Item -ItemType Directory -Force -Path $docsImageDestination | Out-Null
+    Get-ChildItem -LiteralPath $docsImageSource -File |
+        ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $docsImageDestination $_.Name) -Force
+        }
+}
+
 Copy-IfExists -Source (Resolve-RepoPath "installer/LICENSE.zh-CN.txt") -Destination (Join-Path $stageDir "LICENSE.zh-CN.txt")
 
 $licenseDir = Join-Path $stageDir "licenses"

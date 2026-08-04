@@ -5,11 +5,8 @@
 ## 发布版本
 
 - 版本格式：`vX.Y.Z`
-- 当前归档版本：`v0.7.1`
 - 平台：Windows x64
 - 状态：MVP 阶段预发布包
-
-`v0.7.1` 修复远程目录切换卡顿和远程拖拽类型丢失，增加远程权限修改与本地删除进入回收站，并优化顶部连接栏和文件列表名称列布局。
 
 ## 发布资产
 
@@ -36,6 +33,7 @@ build/release/
 - libcurl 运行库和 CA bundle
 - MinGW 运行库
 - `README.md`
+- `docs/images/` README 文档图片
 - `CHANGELOG.md`
 - `LICENSE`
 - `THIRD_PARTY_NOTICES.md`
