@@ -94,7 +94,7 @@ private:
     void finishUpload(const std::string &documentId, std::uint64_t version, const UploadResult &result);
     void handleStableFileChanged(const std::string &documentId);
     void handleFileUnavailable(const std::string &documentId);
-    void closeDocumentById(const std::string &documentId);
+    bool closeDocumentById(const std::string &documentId, bool preserveUnsynchronizedCache = false);
     void markDocumentSynchronized(const std::string &documentId);
     void restartInactivityTimer(ManagedDocument &managedDocument);
     void notifyState(const ExternalEditDocument &document);
@@ -106,6 +106,7 @@ private:
     std::deque<std::string> m_documentOrder;
     std::deque<PendingOperation> m_operations;
     std::set<std::string> m_queuedUploads;
+    std::string m_activeOperationDocumentId;
     bool m_operationActive = false;
     bool m_operationRetryScheduled = false;
 };

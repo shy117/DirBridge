@@ -88,7 +88,8 @@ void to_json(nlohmann::json &json, const SiteProfile &profile)
         {"passwordStorage", passwordStorageScheme()},
         {"passwordProtected", protectPassword(profile.password)},
         {"defaultRemotePath", profile.defaultRemotePath},
-        {"encoding", profile.encoding}
+        {"encoding", profile.encoding},
+        {"fileTreeVisible", profile.fileTreeVisible}
     };
 }
 
@@ -111,4 +112,5 @@ void from_json(const nlohmann::json &json, SiteProfile &profile)
     }
     profile.defaultRemotePath = json.value("defaultRemotePath", "/");
     profile.encoding = json.value("encoding", "UTF-8");
+    profile.fileTreeVisible = json.value("fileTreeVisible", true);
 }

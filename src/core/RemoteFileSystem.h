@@ -55,6 +55,16 @@ public:
         return {false, "remove is not implemented"};
     }
 
+    virtual RemoteOperationResult removeFile(const std::string &path)
+    {
+        return remove(path);
+    }
+
+    virtual RemoteOperationResult removeDirectory(const std::string &path)
+    {
+        return remove(path);
+    }
+
     virtual RemoteOperationResult rename(const std::string &sourcePath, const std::string &targetPath)
     {
         (void)sourcePath;

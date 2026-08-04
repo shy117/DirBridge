@@ -318,6 +318,7 @@ void MainWindow::closeRemoteTab(int index)
 
     updateRemoteConnectionActions();
     updateFileSplitterLayout();
+    updateFileTreeActionState();
     populateSessionManager();
 }
 
@@ -401,7 +402,12 @@ MainWindow::RemoteSession *MainWindow::createRemoteSession(const SiteProfile &pr
     session->fileSystem = std::shared_ptr<RemoteFileSystem>(std::move(fileSystem));
     session->connectionCanceled = std::make_shared<std::atomic_bool>(false);
     session->displayName = siteDisplayName(profile);
+    session->fileTreeVisible = profile.fileTreeVisible;
     session->panel = new FilePanel(FilePanel::Mode::RemotePlaceholder, m_remoteTabs);
+    session->panel->setFileTreeVisible(session->fileTreeVisible);
+    session->panel->setFileTreeVisibilityRequestedHandler([this, sessionPtr = session.get()](bool visible) {
+        setFileTreeVisibilityForSession(sessionPtr, visible);
+    });
     session->panel->setObjectName("remotePanel");
 
     RemoteSession *sessionPtr = session.get();
@@ -419,8 +425,8 @@ MainWindow::RemoteSession *MainWindow::createRemoteSession(const SiteProfile &pr
     sessionPtr->panel->setRemoteCreateFileRequestedHandler([this, sessionPtr](const QString &path) {
         createRemoteFile(*sessionPtr, path);
     });
-    sessionPtr->panel->setRemoteRemoveRequestedHandler([this, sessionPtr](const QString &path) {
-        removeRemotePath(*sessionPtr, path);
+    sessionPtr->panel->setRemoteRemoveRequestedHandler([this, sessionPtr](const QString &path, bool isDirectory) {
+        removeRemotePath(*sessionPtr, path, isDirectory ? FileItemType::Directory : FileItemType::File);
     });
     sessionPtr->panel->setRemoteRenameRequestedHandler([this, sessionPtr](const QString &sourcePath, const QString &targetPath) {
         renameRemotePath(*sessionPtr, sourcePath, targetPath);
@@ -468,6 +474,7 @@ MainWindow::RemoteSession *MainWindow::createRemoteSession(const SiteProfile &pr
     m_remoteTabs->setCurrentIndex(tabIndex);
     m_remotePanel = sessionPtr->panel;
     m_remoteSessions.push_back(std::move(session));
+    updateFileTreeActionState();
     updateFileSplitterLayout();
     return sessionPtr;
 }

@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <optional>
 #include <set>
 #include <vector>
 
@@ -88,6 +89,8 @@ public:
      * @param remotePath 当前会话中的远程文件绝对路径。
      */
     void editRemoteFileForTesting(const QString &remotePath);
+    void closeRemoteEditForTesting(const QString &remotePath);
+    void setCurrentRemoteFileTreeVisibleForTesting(bool visible);
 
     /**
      * @brief 为自动化 UI 测试替换外部编辑器启动行为。
@@ -164,6 +167,7 @@ private:
         bool connecting = false;
         std::uint64_t directoryLoadGeneration = 0;
         int activeRemoteOperationCount = 0;
+        bool fileTreeVisible = true;
         std::shared_ptr<std::atomic_bool> connectionCanceled;
         QString displayName;
     };
@@ -261,15 +265,26 @@ private:
      * @param path 要创建的远程文件绝对路径。
      */
     void createRemoteFile(RemoteSession &session, const QString &path);
-    void removeRemotePath(RemoteSession &session, const QString &path);
+    void startRemoteMutation(RemoteSession &session,
+                             const QString &errorTitle,
+                             const QString &successMessage,
+                             std::function<RemoteOperationResult(RemoteFileSystem &)> operation);
+    void removeRemotePath(RemoteSession &session, const QString &path, std::optional<FileItemType> knownType = std::nullopt);
     void removeRemotePath(const QString &path);
     void finishRemoteRemove(const QString &sessionId, const QString &path, const QString &errorMessage);
     void renameRemotePath(RemoteSession &session, const QString &sourcePath, const QString &targetPath);
     void setRemotePermissions(RemoteSession &session, const QString &path, int mode, bool recursive);
-    bool removeRemotePathRecursive(RemoteSession &session, const QString &path, QString *errorMessage = nullptr);
+    bool removeRemotePathRecursive(RemoteSession &session,
+                                   const QString &path,
+                                   QString *errorMessage = nullptr,
+                                   std::optional<FileItemType> knownType = std::nullopt);
     void moveRemotePaths(RemoteSession &session, const QStringList &sourcePaths, const QString &targetDirectory);
     void setRemoteConnectionState(RemoteSession &session, bool connected, const QString &message);
     void updateFileSplitterLayout();
+    void setAllFileTreesVisible(bool visible);
+    void setLocalFileTreeVisible(bool visible);
+    void setFileTreeVisibilityForSession(RemoteSession *session, bool visible);
+    void updateFileTreeActionState();
     /**
      * @brief 将传输任务加入队列并刷新传输表格。
      * @param job 待显示和调度的传输任务。
@@ -279,6 +294,7 @@ private:
      * @brief 根据子文件任务状态更新目录传输的聚合行。
      */
     void updateDirectoryTransferParents();
+    void refreshPreparingTransfer(const QString &parentJobId);
     /**
      * @brief 为目录传输创建可见的父任务行。
      * @param direction 上传或下载方向。
@@ -309,8 +325,6 @@ private:
     void finishSingleFileUploadPreparation(const QString &jobId, bool exists, const FileItem &existingItem, const QString &errorMessage);
     void uploadLocalPath(RemoteSession &session, const QString &localPath);
     void startLocalDirectoryUploadPreparation(RemoteSession &session, const QString &localDirectoryPath, const QString &remoteDirectoryPath, const QString &parentJobId);
-    bool enqueueLocalDirectoryUpload(RemoteSession &session, const QString &localDirectoryPath, const QString &remoteDirectoryPath, const QString &parentJobId = {}, QString *errorMessage = nullptr);
-    bool ensureRemoteDirectory(RemoteSession &session, const QString &remoteDirectoryPath, QString *errorMessage = nullptr);
     enum class UploadConflictAction
     {
         Overwrite,
@@ -326,6 +340,8 @@ private:
     void downloadRemoteFile(const QString &remotePath);
     void downloadRemotePath(RemoteSession &session, const QString &remotePath);
     void startRemoteDirectoryDownloadPreparation(RemoteSession &session, const QString &remoteDirectoryPath, const QString &localDirectoryPath, const QString &parentJobId);
+    void appendPreparedDirectoryTransferJobs(const QString &parentJobId, const std::vector<TransferJob> &jobs);
+    void finishPreparedDirectoryTransfer(const QString &parentJobId, const QString &errorMessage);
     void handlePreparedDirectoryTransfer(const QString &parentJobId, const std::vector<TransferJob> &jobs, const QString &errorMessage);
     bool enqueueRemoteDirectoryDownload(RemoteSession &session, const QString &remoteDirectoryPath, const QString &localDirectoryPath, const QString &parentJobId = {}, QString *errorMessage = nullptr);
     int siteIndexById(const std::string &siteId) const;
@@ -362,6 +378,7 @@ private:
 
     QAction *m_disconnectAction = nullptr;
     QAction *m_refreshAction = nullptr;
+    QAction *m_fileTreeAction = nullptr;
     QComboBox *m_protocolCombo = nullptr;
     QLineEdit *m_hostEdit = nullptr;
     QLineEdit *m_portEdit = nullptr;

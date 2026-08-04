@@ -197,7 +197,15 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
 
     if (selectedAction == fileTreeAction)
     {
-        setFileTreeVisible(fileTreeAction->isChecked());
+        const bool visible = fileTreeAction->isChecked();
+        if (m_fileTreeVisibilityRequested)
+        {
+            m_fileTreeVisibilityRequested(visible);
+        }
+        else
+        {
+            setFileTreeVisible(visible);
+        }
         return;
     }
 
@@ -337,7 +345,7 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
         const QString text = QString("确定删除远程项目？\n%1").arg(selectedPath);
         if (QMessageBox::question(this, "删除远程项目", text) == QMessageBox::Yes)
         {
-            m_remoteRemoveRequested(selectedPath);
+            m_remoteRemoveRequested(selectedPath, selectedIsDirectory);
         }
         return;
     }

@@ -48,15 +48,24 @@ bool FilePanel::isFileTreeVisible() const
 {
     if (m_localTree != nullptr)
     {
-        return m_localTree->isVisible();
+        return !m_localTree->isHidden();
     }
 
     if (m_remoteTree != nullptr)
     {
-        return m_remoteTree->isVisible();
+        return !m_remoteTree->isHidden();
     }
 
     return false;
+}
+
+/**
+ * @brief 设置文件树显示状态变更请求的统一回调。
+ * @param handler 接收用户选择的新显示状态。
+ */
+void FilePanel::setFileTreeVisibilityRequestedHandler(std::function<void(bool)> handler)
+{
+    m_fileTreeVisibilityRequested = std::move(handler);
 }
 
 /**
@@ -99,7 +108,7 @@ void FilePanel::setRemoteCreateFileRequestedHandler(std::function<void(const QSt
  * @brief 设置远程删除请求回调。
  * @param handler 接收远程项目路径的回调。
  */
-void FilePanel::setRemoteRemoveRequestedHandler(std::function<void(const QString &)> handler)
+void FilePanel::setRemoteRemoveRequestedHandler(std::function<void(const QString &, bool)> handler)
 {
     m_remoteRemoveRequested = std::move(handler);
 }
@@ -384,12 +393,12 @@ void FilePanel::setupUi()
     m_table->verticalHeader()->setVisible(false);
     m_table->setTextElideMode(Qt::ElideMiddle);
     m_table->horizontalHeader()->setSortIndicatorShown(m_mode == Mode::RemotePlaceholder);
-    m_table->horizontalHeader()->setStretchLastSection(true);
-    m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Interactive);
-    m_table->setColumnWidth(0, 240);
-    for (int column = 1; column < m_table->columnCount(); ++column)
+    m_table->horizontalHeader()->setStretchLastSection(false);
+    const QList<int> fileColumnWidths{175, 75, 80, 150, 80, 80};
+    for (int column = 0; column < fileColumnWidths.size(); ++column)
     {
-        m_table->horizontalHeader()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
+        m_table->horizontalHeader()->setSectionResizeMode(column, QHeaderView::Interactive);
+        m_table->setColumnWidth(column, fileColumnWidths.at(column));
     }
 
     m_contentSplitter->addWidget(m_table);

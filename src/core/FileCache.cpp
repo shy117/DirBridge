@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -149,7 +150,29 @@ FileCacheResult FileCache::commitDownloadedFile(const FileCacheEntry &entry) con
     }
     if (std::filesystem::exists(entry.workingFilePath, error) || error)
     {
-        return failure("editor cache working file already exists");
+        if (error)
+        {
+            return failure("unable to inspect existing editor cache working file: " + error.message());
+        }
+        const auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        const std::string recoveryBaseName = "recovered-" + std::to_string(timestamp);
+        const std::string extension = entry.workingFilePath.extension().string();
+        std::filesystem::path recoveryPath = entry.snapshotsDirectory / (recoveryBaseName + extension);
+        for (int suffix = 1; std::filesystem::exists(recoveryPath, error) && !error; ++suffix)
+        {
+            recoveryPath = entry.snapshotsDirectory
+                / (recoveryBaseName + "-" + std::to_string(suffix) + extension);
+        }
+        if (error)
+        {
+            return failure("unable to select editor cache recovery path: " + error.message());
+        }
+        std::filesystem::rename(entry.workingFilePath, recoveryPath, error);
+        if (error)
+        {
+            return failure("unable to preserve existing editor cache working file: " + error.message());
+        }
     }
 
     std::filesystem::rename(entry.downloadTemporaryPath, entry.workingFilePath, error);

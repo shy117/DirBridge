@@ -26,6 +26,7 @@ struct SiteProfile
     std::string password;
     std::string defaultRemotePath = "/";
     std::string encoding = "UTF-8";
+    bool fileTreeVisible = true;
 };
 
 std::string toString(RemoteProtocol protocol);

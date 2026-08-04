@@ -16,6 +16,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QStyle>
@@ -50,21 +51,11 @@ void MainWindow::setupMenuBar()
         viewMenu->addAction(sessionManagerAction);
     }
 
-    auto *fileTreeAction = viewMenu->addAction(fluentIcon("folder_add"), "文件树");
-    fileTreeAction->setCheckable(true);
-    fileTreeAction->setChecked(true);
-    connect(fileTreeAction, &QAction::toggled, this, [this](bool visible) {
-        if (m_localPanel != nullptr)
-        {
-            m_localPanel->setFileTreeVisible(visible);
-        }
-        for (const auto &session : m_remoteSessions)
-        {
-            if (session->panel != nullptr)
-            {
-                session->panel->setFileTreeVisible(visible);
-            }
-        }
+    m_fileTreeAction = viewMenu->addAction(fluentIcon("folder_add"), "文件树");
+    m_fileTreeAction->setCheckable(true);
+    m_fileTreeAction->setChecked(true);
+    connect(m_fileTreeAction, &QAction::toggled, this, [this](bool visible) {
+        setAllFileTreesVisible(visible);
     });
 
     m_disconnectAction = new QAction(fluentIcon("dismiss_circle"), "断开", this);
@@ -241,6 +232,9 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     auto *localTabs = new QTabWidget(m_fileSplitter);
     localTabs->setObjectName("localTabs");
     m_localPanel = new FilePanel(FilePanel::Mode::Local, localTabs);
+    m_localPanel->setFileTreeVisibilityRequestedHandler([this](bool visible) {
+        setLocalFileTreeVisible(visible);
+    });
     m_localPanel->setLocalUploadRequestedHandler([this](const QString &localPath) {
         RemoteSession *session = currentRemoteSession();
         if (session != nullptr)
@@ -279,6 +273,7 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     connect(m_remoteTabs, &QTabWidget::currentChanged, this, [this]() {
         RemoteSession *session = currentRemoteSession();
         m_remotePanel = session == nullptr ? dynamic_cast<FilePanel *>(m_remoteTabs->currentWidget()) : session->panel;
+        updateFileTreeActionState();
         updateRemoteConnectionActions();
         populateSessionManager();
     });
@@ -320,12 +315,13 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     m_transferTable = new QTreeWidget(transferTab);
     m_transferTable->setObjectName("transferTable");
     m_transferTable->setHeaderLabels({"名称", "状态", "进度", "大小", "本地路径", "<->", "远程路径", "速度", "估计剩余", "经过时间"});
-    m_transferTable->header()->setStretchLastSection(true);
-    m_transferTable->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    m_transferTable->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    m_transferTable->header()->setSectionResizeMode(2, QHeaderView::Fixed);
-    m_transferTable->header()->resizeSection(2, 140);
-    m_transferTable->header()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    m_transferTable->header()->setStretchLastSection(false);
+    const QList<int> transferColumnWidths{200, 60, 140, 140, 140, 40, 140, 80, 80, 80};
+    for (int column = 0; column < transferColumnWidths.size(); ++column)
+    {
+        m_transferTable->header()->setSectionResizeMode(column, QHeaderView::Interactive);
+        m_transferTable->setColumnWidth(column, transferColumnWidths.at(column));
+    }
     transferLayout->addWidget(transferToolbar);
     transferLayout->addWidget(m_transferTable, 1);
 
@@ -389,6 +385,102 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     setCentralWidget(m_workspaceSplitter);
     updateTerminalWorkspaceControls();
     updateTransferActionButtons();
+}
+
+/**
+ * @brief 统一设置本地面板和所有远程会话的文件树状态。
+ */
+void MainWindow::setAllFileTreesVisible(bool visible)
+{
+    if (m_localPanel != nullptr)
+    {
+        m_localPanel->setFileTreeVisible(visible);
+    }
+
+    bool siteChanged = false;
+    for (const std::unique_ptr<RemoteSession> &session : m_remoteSessions)
+    {
+        if (session == nullptr)
+        {
+            continue;
+        }
+        session->fileTreeVisible = visible;
+        session->profile.fileTreeVisible = visible;
+        if (session->panel != nullptr)
+        {
+            session->panel->setFileTreeVisible(visible);
+        }
+        const int siteIndex = siteIndexById(session->profile.id);
+        if (siteIndex >= 0 && m_sites.at(siteIndex).fileTreeVisible != visible)
+        {
+            m_sites.at(siteIndex).fileTreeVisible = visible;
+            siteChanged = true;
+        }
+    }
+    if (siteChanged)
+    {
+        saveSites();
+    }
+    updateFileTreeActionState();
+}
+
+/**
+ * @brief 仅设置本地面板的文件树状态。
+ */
+void MainWindow::setLocalFileTreeVisible(bool visible)
+{
+    if (m_localPanel != nullptr)
+    {
+        m_localPanel->setFileTreeVisible(visible);
+    }
+    updateFileTreeActionState();
+}
+
+/**
+ * @brief 仅应用并持久化指定远程会话的文件树显示状态。
+ */
+void MainWindow::setFileTreeVisibilityForSession(RemoteSession *session, bool visible)
+{
+    if (session == nullptr)
+    {
+        updateFileTreeActionState();
+        return;
+    }
+
+    session->fileTreeVisible = visible;
+    session->profile.fileTreeVisible = visible;
+    if (session->panel != nullptr)
+    {
+        session->panel->setFileTreeVisible(visible);
+    }
+
+    const int siteIndex = siteIndexById(session->profile.id);
+    if (siteIndex >= 0)
+    {
+        m_sites.at(siteIndex).fileTreeVisible = visible;
+        saveSites();
+    }
+    updateFileTreeActionState();
+}
+
+/**
+ * @brief 根据所有面板的文件树状态更新顶部全局开关。
+ */
+void MainWindow::updateFileTreeActionState()
+{
+    bool allVisible = m_localPanel == nullptr || m_localPanel->isFileTreeVisible();
+    for (const std::unique_ptr<RemoteSession> &session : m_remoteSessions)
+    {
+        if (session != nullptr)
+        {
+            allVisible = allVisible && session->fileTreeVisible;
+        }
+    }
+    if (m_fileTreeAction != nullptr)
+    {
+        const QSignalBlocker blocker(m_fileTreeAction);
+        m_fileTreeAction->setChecked(allVisible);
+    }
 }
 
 /**

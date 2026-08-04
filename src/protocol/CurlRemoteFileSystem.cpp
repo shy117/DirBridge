@@ -23,19 +23,6 @@
 
 namespace
 {
-struct CurlHandleDeleter
-{
-    void operator()(CURL *handle) const
-    {
-        if (handle != nullptr)
-        {
-            curl_easy_cleanup(handle);
-        }
-    }
-};
-
-using CurlHandle = std::unique_ptr<CURL, CurlHandleDeleter>;
-
 struct CurlStringDeleter
 {
     void operator()(char *value) const
@@ -523,50 +510,6 @@ void applyProfileOptions(CURL *handle, const SiteProfile &profile)
     }
 }
 
-RemoteOperationResult performQuoteAtUrl(const SiteProfile &profile, const std::string &url, const std::vector<std::string> &commands)
-{
-    ensureCurlInitialized();
-    CurlHandle handle(curl_easy_init());
-    if (!handle)
-    {
-        return {false, "failed to initialize libcurl easy handle"};
-    }
-
-    char errorBuffer[CURL_ERROR_SIZE] = {};
-    try
-    {
-        setCurlOption(handle.get(), CURLOPT_URL, url.c_str());
-        applyProfileOptions(handle.get(), profile);
-        setCurlLongOption(handle.get(), CURLOPT_NOBODY, 1L);
-        curl_easy_setopt(handle.get(), CURLOPT_ERRORBUFFER, errorBuffer);
-
-        curl_slist *rawList = nullptr;
-        for (const std::string &command : commands)
-        {
-            rawList = curl_slist_append(rawList, command.c_str());
-        }
-        CurlSlist commandList(rawList);
-        curl_easy_setopt(handle.get(), CURLOPT_QUOTE, commandList.get());
-
-        const CURLcode code = curl_easy_perform(handle.get());
-        if (code != CURLE_OK)
-        {
-            const std::string detail = errorBuffer[0] != '\0' ? errorBuffer : curl_easy_strerror(code);
-            return {false, detail};
-        }
-    }
-    catch (const std::exception &error)
-    {
-        return {false, error.what()};
-    }
-
-    return {true, "remote command succeeded"};
-}
-
-RemoteOperationResult performQuote(const SiteProfile &profile, const std::vector<std::string> &commands)
-{
-    return performQuoteAtUrl(profile, rootUrl(profile), commands);
-}
 }
 
 CurlRemoteFileSystem::~CurlRemoteFileSystem()
@@ -588,11 +531,16 @@ RemoteOperationResult CurlRemoteFileSystem::connect(const SiteProfile &profile)
         return {false, "only ftp, ftps and sftp are supported for directory browsing"};
     }
 
-    std::lock_guard<std::mutex> lock(m_directoryHandleMutex);
+    std::scoped_lock lock(m_directoryHandleMutex, m_transferHandleMutex);
     if (m_directoryHandle != nullptr)
     {
         curl_easy_cleanup(m_directoryHandle);
         m_directoryHandle = nullptr;
+    }
+    if (m_transferHandle != nullptr)
+    {
+        curl_easy_cleanup(m_transferHandle);
+        m_transferHandle = nullptr;
     }
     m_profile = profile;
     m_connected = true;
@@ -601,18 +549,78 @@ RemoteOperationResult CurlRemoteFileSystem::connect(const SiteProfile &profile)
 
 void CurlRemoteFileSystem::disconnect()
 {
-    std::lock_guard<std::mutex> lock(m_directoryHandleMutex);
+    std::scoped_lock lock(m_directoryHandleMutex, m_transferHandleMutex);
     m_connected = false;
     if (m_directoryHandle != nullptr)
     {
         curl_easy_cleanup(m_directoryHandle);
         m_directoryHandle = nullptr;
     }
+    if (m_transferHandle != nullptr)
+    {
+        curl_easy_cleanup(m_transferHandle);
+        m_transferHandle = nullptr;
+    }
 }
 
 bool CurlRemoteFileSystem::isConnected() const
 {
+    std::lock_guard<std::mutex> lock(m_directoryHandleMutex);
     return m_connected;
+}
+
+CURL *CurlRemoteFileSystem::prepareHandleLocked(CURL *&handle)
+{
+    ensureCurlInitialized();
+    if (handle == nullptr)
+    {
+        handle = curl_easy_init();
+    }
+    else
+    {
+        curl_easy_reset(handle);
+    }
+    if (handle == nullptr)
+    {
+        throw std::runtime_error("failed to initialize libcurl easy handle");
+    }
+    return handle;
+}
+
+RemoteOperationResult CurlRemoteFileSystem::performQuoteAtUrlLocked(
+    const std::string &url,
+    const std::vector<std::string> &commands)
+{
+    char errorBuffer[CURL_ERROR_SIZE] = {};
+    try
+    {
+        CURL *handle = prepareHandleLocked(m_directoryHandle);
+        setCurlOption(handle, CURLOPT_URL, url.c_str());
+        applyProfileOptions(handle, m_profile);
+        setCurlLongOption(handle, CURLOPT_NOBODY, 1L);
+        curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, errorBuffer);
+
+        curl_slist *rawList = nullptr;
+        for (const std::string &command : commands)
+        {
+            rawList = curl_slist_append(rawList, command.c_str());
+        }
+        CurlSlist commandList(rawList);
+        curl_easy_setopt(handle, CURLOPT_QUOTE, commandList.get());
+
+        const CURLcode code = curl_easy_perform(handle);
+        if (code != CURLE_OK)
+        {
+            const std::string detail = errorBuffer[0] != '\0' ? errorBuffer : curl_easy_strerror(code);
+            return {false, detail};
+        }
+    }
+    catch (const std::exception &error)
+    {
+        return {false, error.what()};
+    }
+
+    return {true, "remote command succeeded"};
 }
 
 std::vector<FileItem> CurlRemoteFileSystem::listDirectory(const std::string &path)
@@ -623,31 +631,19 @@ std::vector<FileItem> CurlRemoteFileSystem::listDirectory(const std::string &pat
         throw std::runtime_error("remote session is not connected");
     }
 
-    ensureCurlInitialized();
-    if (m_directoryHandle == nullptr)
-    {
-        m_directoryHandle = curl_easy_init();
-    }
-    else
-    {
-        curl_easy_reset(m_directoryHandle);
-    }
-    if (m_directoryHandle == nullptr)
-    {
-        throw std::runtime_error("failed to initialize libcurl easy handle");
-    }
+    CURL *handle = prepareHandleLocked(m_directoryHandle);
 
     std::string listing;
     char errorBuffer[CURL_ERROR_SIZE] = {};
-    const std::string url = directoryUrl(m_directoryHandle, m_profile, path);
+    const std::string url = directoryUrl(handle, m_profile, path);
 
-    setCurlOption(m_directoryHandle, CURLOPT_URL, url.c_str());
-    applyProfileOptions(m_directoryHandle, m_profile);
-    curl_easy_setopt(m_directoryHandle, CURLOPT_ERRORBUFFER, errorBuffer);
-    curl_easy_setopt(m_directoryHandle, CURLOPT_WRITEFUNCTION, writeStringCallback);
-    curl_easy_setopt(m_directoryHandle, CURLOPT_WRITEDATA, &listing);
+    setCurlOption(handle, CURLOPT_URL, url.c_str());
+    applyProfileOptions(handle, m_profile);
+    curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, errorBuffer);
+    curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, writeStringCallback);
+    curl_easy_setopt(handle, CURLOPT_WRITEDATA, &listing);
 
-    const CURLcode code = curl_easy_perform(m_directoryHandle);
+    const CURLcode code = curl_easy_perform(handle);
     if (code != CURLE_OK)
     {
         const std::string detail = errorBuffer[0] != '\0' ? errorBuffer : curl_easy_strerror(code);
@@ -666,6 +662,7 @@ std::vector<FileItem> CurlRemoteFileSystem::listDirectory(const std::string &pat
 
 RemoteOperationResult CurlRemoteFileSystem::createDirectory(const std::string &path)
 {
+    std::lock_guard<std::mutex> lock(m_directoryHandleMutex);
     if (!m_connected)
     {
         return {false, "remote session is not connected"};
@@ -674,15 +671,15 @@ RemoteOperationResult CurlRemoteFileSystem::createDirectory(const std::string &p
     const std::string normalizedPath = normalizeRemotePath(path);
     if (m_profile.protocol == RemoteProtocol::Sftp)
     {
-        return performQuote(m_profile, {"mkdir " + normalizedPath});
+        return performQuoteAtUrlLocked(rootUrl(m_profile), {"mkdir " + sftpCommandPath(normalizedPath)});
     }
 
-    return performQuoteAtUrl(m_profile, rootUrl(m_profile), {"MKD " + ftpCommandPath(normalizedPath)});
+    return performQuoteAtUrlLocked(rootUrl(m_profile), {"MKD " + ftpCommandPath(normalizedPath)});
 }
 
 RemoteOperationResult CurlRemoteFileSystem::createFile(const std::string &path)
 {
-    if (!m_connected)
+    if (!isConnected())
     {
         return {false, "remote session is not connected"};
     }
@@ -738,43 +735,53 @@ RemoteOperationResult CurlRemoteFileSystem::createFile(const std::string &path)
 
 RemoteOperationResult CurlRemoteFileSystem::remove(const std::string &path)
 {
+    const RemoteOperationResult fileResult = removeFile(path);
+    if (fileResult.success)
+    {
+        return fileResult;
+    }
+    const RemoteOperationResult directoryResult = removeDirectory(path);
+    if (directoryResult.success)
+    {
+        return directoryResult;
+    }
+    return {false, "remove failed: " + fileResult.message + "; " + directoryResult.message};
+}
+
+RemoteOperationResult CurlRemoteFileSystem::removeFile(const std::string &path)
+{
+    std::lock_guard<std::mutex> lock(m_directoryHandleMutex);
+    if (!m_connected)
+    {
+        return {false, "remote session is not connected"};
+    }
+    const std::string normalizedPath = normalizeRemotePath(path);
+    if (m_profile.protocol == RemoteProtocol::Sftp)
+    {
+        return performQuoteAtUrlLocked(rootUrl(m_profile), {"rm " + sftpCommandPath(normalizedPath)});
+    }
+    return performQuoteAtUrlLocked(rootUrl(m_profile), {"DELE " + ftpCommandPath(normalizedPath)});
+}
+
+RemoteOperationResult CurlRemoteFileSystem::removeDirectory(const std::string &path)
+{
+    std::lock_guard<std::mutex> lock(m_directoryHandleMutex);
     if (!m_connected)
     {
         return {false, "remote session is not connected"};
     }
 
     const std::string normalizedPath = normalizeRemotePath(path);
-    RemoteOperationResult fileResult;
-    RemoteOperationResult directoryResult;
     if (m_profile.protocol == RemoteProtocol::Sftp)
     {
-        fileResult = performQuote(m_profile, {"rm " + normalizedPath});
-        if (fileResult.success)
-        {
-            return fileResult;
-        }
-        directoryResult = performQuote(m_profile, {"rmdir " + normalizedPath});
+        return performQuoteAtUrlLocked(rootUrl(m_profile), {"rmdir " + sftpCommandPath(normalizedPath)});
     }
-    else
-    {
-        fileResult = performQuoteAtUrl(m_profile, rootUrl(m_profile), {"DELE " + ftpCommandPath(normalizedPath)});
-        if (fileResult.success)
-        {
-            return fileResult;
-        }
-        directoryResult = performQuoteAtUrl(m_profile, rootUrl(m_profile), {"RMD " + ftpCommandPath(normalizedPath)});
-    }
-
-    if (directoryResult.success)
-    {
-        return directoryResult;
-    }
-
-    return {false, "remove failed: " + fileResult.message + "; " + directoryResult.message};
+    return performQuoteAtUrlLocked(rootUrl(m_profile), {"RMD " + ftpCommandPath(normalizedPath)});
 }
 
 RemoteOperationResult CurlRemoteFileSystem::rename(const std::string &sourcePath, const std::string &targetPath)
 {
+    std::lock_guard<std::mutex> lock(m_directoryHandleMutex);
     if (!m_connected)
     {
         return {false, "remote session is not connected"};
@@ -784,17 +791,19 @@ RemoteOperationResult CurlRemoteFileSystem::rename(const std::string &sourcePath
     const std::string normalizedTargetPath = normalizeRemotePath(targetPath);
     if (m_profile.protocol == RemoteProtocol::Sftp)
     {
-        return performQuote(m_profile, {"rename " + normalizedSourcePath + " " + normalizedTargetPath});
+        return performQuoteAtUrlLocked(
+            rootUrl(m_profile),
+            {"rename " + sftpCommandPath(normalizedSourcePath) + " " + sftpCommandPath(normalizedTargetPath)});
     }
 
-    return performQuoteAtUrl(
-        m_profile,
+    return performQuoteAtUrlLocked(
         rootUrl(m_profile),
         {"RNFR " + ftpCommandPath(normalizedSourcePath), "RNTO " + ftpCommandPath(normalizedTargetPath)});
 }
 
 RemoteOperationResult CurlRemoteFileSystem::setPermissions(const std::string &path, int mode)
 {
+    std::lock_guard<std::mutex> lock(m_directoryHandleMutex);
     if (!m_connected)
     {
         return {false, "remote session is not connected"};
@@ -809,17 +818,17 @@ RemoteOperationResult CurlRemoteFileSystem::setPermissions(const std::string &pa
     const std::string normalizedPath = normalizeRemotePath(path);
     if (m_profile.protocol == RemoteProtocol::Sftp)
     {
-        return performQuote(m_profile, {"chmod " + modeText.str() + " " + sftpCommandPath(normalizedPath)});
+        return performQuoteAtUrlLocked(rootUrl(m_profile), {"chmod " + modeText.str() + " " + sftpCommandPath(normalizedPath)});
     }
 
-    return performQuoteAtUrl(
-        m_profile,
+    return performQuoteAtUrlLocked(
         rootUrl(m_profile),
         {"SITE CHMOD " + modeText.str() + " " + ftpCommandPath(normalizedPath)});
 }
 
 RemoteOperationResult CurlRemoteFileSystem::uploadFile(const std::string &localPath, const std::string &remotePath, TransferProgressCallback progress)
 {
+    std::lock_guard<std::mutex> lock(m_transferHandleMutex);
     if (!m_connected)
     {
         return {false, "remote session is not connected"};
@@ -832,47 +841,39 @@ RemoteOperationResult CurlRemoteFileSystem::uploadFile(const std::string &localP
         return {false, "failed to open local file for upload"};
     }
 
-    CurlHandle handle(curl_easy_init());
-    if (!handle)
-    {
-        std::fclose(file);
-        return {false, "failed to initialize libcurl easy handle"};
-    }
-
     char errorBuffer[CURL_ERROR_SIZE] = {};
-    const std::string url = fileUrl(handle.get(), m_profile, remotePath);
     try
     {
-        setCurlOption(handle.get(), CURLOPT_URL, url.c_str());
-        applyProfileOptions(handle.get(), m_profile);
-        setCurlLongOption(handle.get(), CURLOPT_UPLOAD, 1L);
-        curl_easy_setopt(handle.get(), CURLOPT_READFUNCTION, readFileCallback);
-        curl_easy_setopt(handle.get(), CURLOPT_READDATA, file);
-        curl_easy_setopt(handle.get(), CURLOPT_ERRORBUFFER, errorBuffer);
+        CURL *handle = prepareHandleLocked(m_transferHandle);
+        const std::string url = fileUrl(handle, m_profile, remotePath);
+        setCurlOption(handle, CURLOPT_URL, url.c_str());
+        applyProfileOptions(handle, m_profile);
+        setCurlLongOption(handle, CURLOPT_UPLOAD, 1L);
+        setCurlLongOption(handle, CURLOPT_UPLOAD_BUFFERSIZE, 256L * 1024L);
+        curl_easy_setopt(handle, CURLOPT_READFUNCTION, readFileCallback);
+        curl_easy_setopt(handle, CURLOPT_READDATA, file);
+        curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, errorBuffer);
         if (progress)
         {
-            curl_easy_setopt(handle.get(), CURLOPT_NOPROGRESS, 0L);
-            curl_easy_setopt(handle.get(), CURLOPT_XFERINFOFUNCTION, transferProgressCallback);
-            curl_easy_setopt(handle.get(), CURLOPT_XFERINFODATA, &progress);
+            curl_easy_setopt(handle, CURLOPT_NOPROGRESS, 0L);
+            curl_easy_setopt(handle, CURLOPT_XFERINFOFUNCTION, transferProgressCallback);
+            curl_easy_setopt(handle, CURLOPT_XFERINFODATA, &progress);
         }
 
         const std::uintmax_t size = std::filesystem::file_size(localFilesystemPath(localPath));
-        curl_easy_setopt(handle.get(), CURLOPT_INFILESIZE_LARGE, static_cast<curl_off_t>(size));
+        curl_easy_setopt(handle, CURLOPT_INFILESIZE_LARGE, static_cast<curl_off_t>(size));
 
-        const CURLcode code = curl_easy_perform(handle.get());
+        const CURLcode code = curl_easy_perform(handle);
         if (code != CURLE_OK)
         {
-            handle.reset();
             std::fclose(file);
             const std::string detail = errorBuffer[0] != '\0' ? errorBuffer : curl_easy_strerror(code);
             return {false, detail};
         }
-        handle.reset();
         std::fclose(file);
     }
     catch (const std::exception &error)
     {
-        handle.reset();
         std::fclose(file);
         return {false, error.what()};
     }
@@ -882,6 +883,7 @@ RemoteOperationResult CurlRemoteFileSystem::uploadFile(const std::string &localP
 
 RemoteOperationResult CurlRemoteFileSystem::downloadFile(const std::string &remotePath, const std::string &localPath, TransferProgressCallback progress)
 {
+    std::lock_guard<std::mutex> lock(m_transferHandleMutex);
     if (!m_connected)
     {
         return {false, "remote session is not connected"};
@@ -900,44 +902,36 @@ RemoteOperationResult CurlRemoteFileSystem::downloadFile(const std::string &remo
         return {false, "failed to open local file for download: " + localPath};
     }
 
-    CurlHandle handle(curl_easy_init());
-    if (!handle)
-    {
-        std::fclose(file);
-        return {false, "failed to initialize libcurl easy handle"};
-    }
-
     char errorBuffer[CURL_ERROR_SIZE] = {};
-    const std::string url = fileUrl(handle.get(), m_profile, remotePath);
     try
     {
-        setCurlOption(handle.get(), CURLOPT_URL, url.c_str());
-        applyProfileOptions(handle.get(), m_profile);
-        curl_easy_setopt(handle.get(), CURLOPT_WRITEFUNCTION, writeFileCallback);
-        curl_easy_setopt(handle.get(), CURLOPT_WRITEDATA, file);
-        curl_easy_setopt(handle.get(), CURLOPT_ERRORBUFFER, errorBuffer);
+        CURL *handle = prepareHandleLocked(m_transferHandle);
+        const std::string url = fileUrl(handle, m_profile, remotePath);
+        setCurlOption(handle, CURLOPT_URL, url.c_str());
+        applyProfileOptions(handle, m_profile);
+        setCurlLongOption(handle, CURLOPT_BUFFERSIZE, 256L * 1024L);
+        curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, writeFileCallback);
+        curl_easy_setopt(handle, CURLOPT_WRITEDATA, file);
+        curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, errorBuffer);
         if (progress)
         {
-            curl_easy_setopt(handle.get(), CURLOPT_NOPROGRESS, 0L);
-            curl_easy_setopt(handle.get(), CURLOPT_XFERINFOFUNCTION, transferProgressCallback);
-            curl_easy_setopt(handle.get(), CURLOPT_XFERINFODATA, &progress);
+            curl_easy_setopt(handle, CURLOPT_NOPROGRESS, 0L);
+            curl_easy_setopt(handle, CURLOPT_XFERINFOFUNCTION, transferProgressCallback);
+            curl_easy_setopt(handle, CURLOPT_XFERINFODATA, &progress);
         }
 
-        const CURLcode code = curl_easy_perform(handle.get());
+        const CURLcode code = curl_easy_perform(handle);
         if (code != CURLE_OK)
         {
-            handle.reset();
             std::fclose(file);
             std::filesystem::remove(targetPath);
             const std::string detail = errorBuffer[0] != '\0' ? errorBuffer : curl_easy_strerror(code);
             return {false, detail};
         }
-        handle.reset();
         std::fclose(file);
     }
     catch (const std::exception &error)
     {
-        handle.reset();
         std::fclose(file);
         std::filesystem::remove(targetPath);
         return {false, error.what()};

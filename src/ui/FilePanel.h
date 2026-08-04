@@ -42,6 +42,7 @@ public:
 
     void setFileTreeVisible(bool visible);
     bool isFileTreeVisible() const;
+    void setFileTreeVisibilityRequestedHandler(std::function<void(bool)> handler);
     void refresh();
     void setRemotePathRequestedHandler(std::function<void(const QString &, bool)> handler);
     void setRemoteRefreshRequestedHandler(std::function<void()> handler);
@@ -51,7 +52,7 @@ public:
      * @param handler 接收远程文件绝对路径的回调。
      */
     void setRemoteCreateFileRequestedHandler(std::function<void(const QString &)> handler);
-    void setRemoteRemoveRequestedHandler(std::function<void(const QString &)> handler);
+    void setRemoteRemoveRequestedHandler(std::function<void(const QString &, bool)> handler);
     void setRemoteRenameRequestedHandler(std::function<void(const QString &, const QString &)> handler);
     void setRemotePermissionsRequestedHandler(std::function<void(const QString &, int, bool)> handler);
     void setLocalUploadRequestedHandler(std::function<void(const QString &)> handler);
@@ -164,11 +165,12 @@ private:
     std::vector<FileItem> m_remoteItems;
     QStringList m_remoteKnownDirectories;
     QSet<QString> m_pendingLocalDeletes;
+    std::function<void(bool)> m_fileTreeVisibilityRequested;
     std::function<void(const QString &, bool)> m_remotePathRequested;
     std::function<void()> m_remoteRefreshRequested;
     std::function<void(const QString &)> m_remoteCreateDirectoryRequested;
     std::function<void(const QString &)> m_remoteCreateFileRequested;
-    std::function<void(const QString &)> m_remoteRemoveRequested;
+    std::function<void(const QString &, bool)> m_remoteRemoveRequested;
     std::function<void(const QString &, const QString &)> m_remoteRenameRequested;
     std::function<void(const QString &, int, bool)> m_remotePermissionsRequested;
     std::function<void(const QString &)> m_localUploadRequested;

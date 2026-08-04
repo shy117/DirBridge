@@ -813,6 +813,20 @@ void MainWindow::editRemoteFileForTesting(const QString &remotePath)
     }
 }
 
+void MainWindow::closeRemoteEditForTesting(const QString &remotePath)
+{
+    RemoteSession *session = currentRemoteSession();
+    if (session != nullptr && m_externalEditManager != nullptr)
+    {
+        m_externalEditManager->closeDocument(session->id, remotePath);
+    }
+}
+
+void MainWindow::setCurrentRemoteFileTreeVisibleForTesting(bool visible)
+{
+    setFileTreeVisibilityForSession(currentRemoteSession(), visible);
+}
+
 void MainWindow::setExternalEditorLauncherForTesting(std::function<bool(const QString &)> launcher)
 {
     if (m_externalEditManager != nullptr)

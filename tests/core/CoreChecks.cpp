@@ -162,6 +162,7 @@ void checkFakeRemoteFileSystem()
     require(!result.success, "remove root should fail");
 
     const std::filesystem::path tempRoot = std::filesystem::temp_directory_path() / "dirbridge-core-checks";
+    std::filesystem::remove_all(tempRoot);
     std::filesystem::create_directories(tempRoot);
     const std::filesystem::path uploadSource = tempRoot / "upload.txt";
     {
@@ -240,13 +241,26 @@ void checkExternalEditDocumentAndFileCache()
     require(cacheResult.success, "downloaded editor cache file should commit safely");
     require(!std::filesystem::exists(firstEntry.downloadTemporaryPath), "committed temporary editor cache file should be moved");
 
+    {
+        std::ofstream temporaryFile(firstEntry.downloadTemporaryPath, std::ios::binary);
+        temporaryFile << "fresh remote version";
+    }
+    cacheResult = cache.commitDownloadedFile(firstEntry);
+    require(cacheResult.success, "stale editor cache should be preserved without blocking a fresh download");
+    bool recoveredWorkingCopy = false;
+    for (const std::filesystem::directory_entry &snapshot : std::filesystem::directory_iterator(firstEntry.snapshotsDirectory))
+    {
+        recoveredWorkingCopy = recoveredWorkingCopy || snapshot.path().filename().string().rfind("recovered-", 0) == 0;
+    }
+    require(recoveredWorkingCopy, "replaced editor cache working file should be retained as a recovery snapshot");
+
     std::filesystem::path firstSnapshot;
     cacheResult = cache.createUploadSnapshot(firstEntry, 1, firstSnapshot);
     require(cacheResult.success, "first editor upload snapshot should be created");
     {
         std::ifstream snapshot(firstSnapshot, std::ios::binary);
         std::string content((std::istreambuf_iterator<char>(snapshot)), std::istreambuf_iterator<char>());
-        require(content == "first version", "editor upload snapshot content mismatch");
+        require(content == "fresh remote version", "editor upload snapshot content mismatch");
     }
     {
         std::ofstream workingFile(firstEntry.workingFilePath, std::ios::binary | std::ios::trunc);
@@ -255,7 +269,7 @@ void checkExternalEditDocumentAndFileCache()
     {
         std::ifstream snapshot(firstSnapshot, std::ios::binary);
         std::string content((std::istreambuf_iterator<char>(snapshot)), std::istreambuf_iterator<char>());
-        require(content == "first version", "editor upload snapshot should remain immutable after a later save");
+        require(content == "fresh remote version", "editor upload snapshot should remain immutable after a later save");
     }
     std::filesystem::path retriedSnapshot;
     cacheResult = cache.createUploadSnapshot(firstEntry, 1, retriedSnapshot);
@@ -526,11 +540,13 @@ void checkSiteProfileAndSettingsStore()
     const SiteProfile legacySite = legacySiteJson.get<SiteProfile>();
     require(legacySite.group.empty(), "legacy site without group should load with empty group");
     require(legacySite.password == "legacy-secret", "legacy plain-text site password should load");
+    require(legacySite.fileTreeVisible, "legacy site should default to a visible file tree");
 
     SiteProfile groupedSite = legacySite;
     groupedSite.id = "grouped-site";
     groupedSite.group = "生产";
     groupedSite.password = "stored-secret";
+    groupedSite.fileTreeVisible = false;
     nlohmann::json groupedJson = groupedSite;
     require(groupedJson.value("group", "") == "生产", "site group should serialize");
     require(!groupedJson.contains("password"), "site profile should not serialize plain password");
@@ -540,6 +556,7 @@ void checkSiteProfileAndSettingsStore()
     const SiteProfile roundTripSite = groupedJson.get<SiteProfile>();
     require(roundTripSite.group == "生产", "site group should round trip");
     require(roundTripSite.password == groupedSite.password, "protected password should round trip");
+    require(!roundTripSite.fileTreeVisible, "site file-tree visibility should round trip");
 
     const std::filesystem::path tempRoot = std::filesystem::temp_directory_path() / "dirbridge-settings-checks";
     std::filesystem::remove_all(tempRoot);
@@ -557,6 +574,7 @@ void checkSiteProfileAndSettingsStore()
     require(loadedSites.size() == 1, "site store should reload saved site");
     require(loadedSites.front().group == "生产", "site store should preserve group");
     require(loadedSites.front().password == "stored-secret", "site store should decrypt saved password");
+    require(!loadedSites.front().fileTreeVisible, "site store should preserve file-tree visibility");
 
     SettingsStore settingsStore(tempRoot / "settings.json");
     UserSettings emptySettings = settingsStore.load();

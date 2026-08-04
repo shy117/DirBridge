@@ -48,6 +48,8 @@ struct TransferJob
     double currentBytesPerSecond = 0.0;
     int totalChildren = 0;
     int finishedChildren = 0;
+    bool preparationFinished = true;
+    bool preparationFailed = false;
     std::string errorMessage;
 };
 

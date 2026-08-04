@@ -1,4 +1,5 @@
 #include "config/SiteProfile.h"
+#include "config/SiteStore.h"
 #include "protocol/CurlRemoteFileSystem.h"
 
 #include <chrono>
@@ -77,6 +78,65 @@ SiteProfile profileFromEnvironment()
     return profile;
 }
 
+std::string argumentValue(int argc, char **argv, const std::string &name, bool required = false)
+{
+    for (int index = 1; index < argc; ++index)
+    {
+        if (argv[index] != name)
+        {
+            continue;
+        }
+        if (index + 1 >= argc)
+        {
+            throw std::runtime_error("missing value for argument: " + name);
+        }
+        return argv[index + 1];
+    }
+    if (required)
+    {
+        throw std::runtime_error("missing argument: " + name);
+    }
+    return {};
+}
+
+bool hasArgument(int argc, char **argv, const std::string &name)
+{
+    for (int index = 1; index < argc; ++index)
+    {
+        if (argv[index] == name)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+SiteProfile profileFromArgumentsOrEnvironment(int argc, char **argv)
+{
+    const std::string siteConfigPath = argumentValue(argc, argv, "--site-config");
+    if (siteConfigPath.empty())
+    {
+        return profileFromEnvironment();
+    }
+
+    const std::string siteId = argumentValue(argc, argv, "--site-id", true);
+    const std::vector<SiteProfile> sites = SiteStore(siteConfigPath).load();
+    for (SiteProfile profile : sites)
+    {
+        if (profile.id != siteId)
+        {
+            continue;
+        }
+        const std::string remotePath = argumentValue(argc, argv, "--remote-path");
+        if (!remotePath.empty())
+        {
+            profile.defaultRemotePath = remotePath;
+        }
+        return profile;
+    }
+    throw std::runtime_error("site id was not found in site config: " + siteId);
+}
+
 std::string uniqueName(const std::string &prefix)
 {
     const auto now = std::chrono::system_clock::now().time_since_epoch();
@@ -135,7 +195,7 @@ void cleanupPrefix(CurlRemoteFileSystem &remote, const std::string &basePath, co
 }
 }
 
-int main()
+int main(int argc, char **argv)
 {
     CurlRemoteFileSystem remote;
     std::string uploadFilePath;
@@ -144,13 +204,22 @@ int main()
     std::string renamedDirectoryPath;
     try
     {
-        const SiteProfile profile = profileFromEnvironment();
-        const bool allowWrite = envValue("DIRBRIDGE_TEST_ALLOW_WRITE", false) == "1";
+        const SiteProfile profile = profileFromArgumentsOrEnvironment(argc, argv);
+        const bool allowWrite = hasArgument(argc, argv, "--allow-write")
+            || envValue("DIRBRIDGE_TEST_ALLOW_WRITE", false) == "1";
 
-        const std::string stopAfter = envValue("DIRBRIDGE_TEST_STOP_AFTER", false);
-        const std::string cleanPrefix = envValue("DIRBRIDGE_TEST_CLEAN_PREFIX", false);
-        const bool cleanOnly = envValue("DIRBRIDGE_TEST_CLEAN_ONLY", false) == "1";
-        const bool fileOnly = envValue("DIRBRIDGE_TEST_FILE_ONLY", false) == "1";
+        const std::string stopAfterArgument = argumentValue(argc, argv, "--stop-after");
+        const std::string stopAfter = stopAfterArgument.empty()
+            ? envValue("DIRBRIDGE_TEST_STOP_AFTER", false)
+            : stopAfterArgument;
+        const std::string cleanPrefixArgument = argumentValue(argc, argv, "--clean-prefix");
+        const std::string cleanPrefix = cleanPrefixArgument.empty()
+            ? envValue("DIRBRIDGE_TEST_CLEAN_PREFIX", false)
+            : cleanPrefixArgument;
+        const bool cleanOnly = hasArgument(argc, argv, "--clean-only")
+            || envValue("DIRBRIDGE_TEST_CLEAN_ONLY", false) == "1";
+        const bool fileOnly = hasArgument(argc, argv, "--file-only")
+            || envValue("DIRBRIDGE_TEST_FILE_ONLY", false) == "1";
 
         step("connecting " + toString(profile.protocol) + "://" + profile.host + ':' + std::to_string(profile.port)
             + " path=" + profile.defaultRemotePath);
@@ -189,14 +258,14 @@ int main()
 
         if (!allowWrite)
         {
-            step("write checks skipped; set DIRBRIDGE_TEST_ALLOW_WRITE=1 to enable them");
+            step("write checks skipped; use --allow-write to enable them");
             remote.disconnect();
             require(!remote.isConnected(), "remote did not report disconnected");
             step("DirBridgeRemoteCheck passed");
             return 0;
         }
 
-        const std::string directoryName = uniqueName("dirbridge_check_");
+        const std::string directoryName = uniqueName("dirbridge check ");
         const std::string directoryPath = joinRemotePath(profile.defaultRemotePath, directoryName);
         const std::string targetDirectoryPath = directoryPath + "_renamed";
         uploadFilePath = joinRemotePath(profile.defaultRemotePath, directoryName + ".txt");
@@ -226,7 +295,7 @@ int main()
             require(std::filesystem::is_regular_file(downloadTarget), "downloaded file is missing locally");
 
             step("removing file " + uploadFilePath);
-            result = remote.remove(uploadFilePath);
+            result = remote.removeFile(uploadFilePath);
             require(result.success, "remove uploaded file failed: " + result.message);
             uploadFilePath.clear();
 
@@ -313,18 +382,18 @@ int main()
         }
 
         step("removing file " + uploadFilePath);
-        result = remote.remove(uploadFilePath);
+        result = remote.removeFile(uploadFilePath);
         require(result.success, "remove uploaded file failed: " + result.message);
 
         uploadFilePath.clear();
 
         step("removing empty file " + createdFilePath);
-        result = remote.remove(createdFilePath);
+        result = remote.removeFile(createdFilePath);
         require(result.success, "remove created empty file failed: " + result.message);
         createdFilePath.clear();
 
         step("removing directory " + renamedDirectoryPath);
-        result = remote.remove(renamedDirectoryPath);
+        result = remote.removeDirectory(renamedDirectoryPath);
         require(result.success, "remove renamed directory failed: " + result.message);
         renamedDirectoryPath.clear();
 

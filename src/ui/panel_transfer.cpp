@@ -6,6 +6,7 @@
 #include <QDropEvent>
 #include <QDrag>
 #include <QDir>
+#include <QDateTime>
 #include <QEvent>
 #include <QFileInfo>
 #include <QHeaderView>
@@ -16,6 +17,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMap>
+#include <QLocale>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPushButton>
@@ -33,6 +35,41 @@ using namespace panel_shared;
 
 namespace
 {
+QString formattedModifiedTime(const QString &value)
+{
+    const QString normalized = value.simplified();
+    if (normalized.isEmpty())
+    {
+        return {};
+    }
+
+    QDateTime parsed = QDateTime::fromString(normalized, "yyyy-MM-dd HH:mm:ss");
+    if (!parsed.isValid())
+    {
+        parsed = QDateTime::fromString(normalized, Qt::ISODate);
+    }
+    if (!parsed.isValid())
+    {
+        const QStringList parts = normalized.split(' ');
+        if (parts.size() == 3 && parts.at(2).contains(':'))
+        {
+            const QDateTime now = QDateTime::currentDateTime();
+            parsed = QLocale::c().toDateTime(
+                QString("%1 %2 %3 %4").arg(parts.at(0), parts.at(1), QString::number(now.date().year()), parts.at(2)),
+                "MMM d yyyy HH:mm");
+            if (parsed.isValid() && parsed > now.addDays(1))
+            {
+                parsed = parsed.addYears(-1);
+            }
+        }
+        else if (parts.size() == 3)
+        {
+            parsed = QLocale::c().toDateTime(normalized, "MMM d yyyy");
+        }
+    }
+    return parsed.isValid() ? parsed.toString("yyyy/MM/dd HH:mm:ss") : value;
+}
+
 QByteArray encodeRemoteTransferItems(const QList<RemoteTransferItem> &items)
 {
     QJsonArray array;
@@ -375,7 +412,7 @@ void FilePanel::populateLocalDirectory(const QString &path)
         m_table->setItem(row, 0, nameItem);
         m_table->setItem(row, 1, createItem(entry.isDir() ? "" : formatFileSize(entry.size())));
         m_table->setItem(row, 2, createItem(entry.isDir() ? "文件夹" : entry.suffix().isEmpty() ? "文件" : entry.suffix()));
-        m_table->setItem(row, 3, createItem(entry.lastModified().toString("yyyy-MM-dd HH:mm:ss")));
+        m_table->setItem(row, 3, createItem(entry.lastModified().toString("yyyy/MM/dd HH:mm:ss")));
         m_table->setItem(row, 4, createItem(entry.permission(QFile::WriteUser) ? "可写" : "只读"));
         m_table->setItem(row, 5, createItem(entry.owner()));
     }
@@ -520,15 +557,11 @@ void FilePanel::populateRemoteItems(const QString &path, const std::vector<FileI
         m_table->setItem(row, 0, nameItem);
         m_table->setItem(row, 1, createItem(isDirectory ? "" : formatFileSize(entry.size)));
         m_table->setItem(row, 2, createItem(fileItemTypeText(entry.type)));
-        m_table->setItem(row, 3, createItem(QString::fromStdString(entry.modifiedTime)));
+        m_table->setItem(row, 3, createItem(formattedModifiedTime(QString::fromStdString(entry.modifiedTime))));
         m_table->setItem(row, 4, createItem(QString::fromStdString(entry.permissions)));
         m_table->setItem(row, 5, createItem(QString::fromStdString(entry.owner)));
     }
 
-    for (int column = 1; column < m_table->columnCount(); ++column)
-    {
-        header->setSectionResizeMode(column, QHeaderView::ResizeToContents);
-    }
     m_table->setUpdatesEnabled(tableUpdatesEnabled);
     if (tableUpdatesEnabled)
     {

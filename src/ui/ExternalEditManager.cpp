@@ -94,7 +94,11 @@ void ExternalEditManager::openRemoteFile(const QString &sessionId, const QString
 
     while (m_documents.size() >= maximumOpenExternalEditDocuments && !m_documentOrder.empty())
     {
-        closeDocumentById(m_documentOrder.front());
+        if (!closeDocumentById(m_documentOrder.front()))
+        {
+            showWarning("无法编辑远程文件", "已达到同时编辑文件数量上限，请先完成同步并关闭一个编辑文件。");
+            return;
+        }
     }
 
     const FileCacheResult cacheResult = m_cache.prepareEntry(cacheEntry);
@@ -162,7 +166,7 @@ void ExternalEditManager::closeSessionDocuments(const QString &sessionId)
 
         const std::string documentId = iterator->first;
         ++iterator;
-        closeDocumentById(documentId);
+        closeDocumentById(documentId, true);
     }
 }
 
@@ -253,6 +257,7 @@ void ExternalEditManager::startDownload(ManagedDocument &managedDocument)
     }
 
     m_operationActive = true;
+    m_activeOperationDocumentId = document.id();
     if (m_callbacks.beginBackgroundTask)
     {
         m_callbacks.beginBackgroundTask();
@@ -305,6 +310,7 @@ void ExternalEditManager::startDownload(ManagedDocument &managedDocument)
 void ExternalEditManager::finishDownload(const std::string &documentId, const DownloadResult &result)
 {
     m_operationActive = false;
+    m_activeOperationDocumentId.clear();
     ManagedDocument *managedDocument = findDocument(documentId);
     if (managedDocument == nullptr)
     {
@@ -377,6 +383,7 @@ void ExternalEditManager::startUpload(ManagedDocument &managedDocument)
     }
 
     m_operationActive = true;
+    m_activeOperationDocumentId = document.id();
     if (m_callbacks.beginBackgroundTask)
     {
         m_callbacks.beginBackgroundTask();
@@ -447,6 +454,7 @@ void ExternalEditManager::startUpload(ManagedDocument &managedDocument)
 void ExternalEditManager::finishUpload(const std::string &documentId, std::uint64_t version, const UploadResult &result)
 {
     m_operationActive = false;
+    m_activeOperationDocumentId.clear();
     ManagedDocument *managedDocument = findDocument(documentId);
     if (managedDocument == nullptr)
     {
@@ -510,22 +518,58 @@ void ExternalEditManager::handleFileUnavailable(const std::string &documentId)
     showWarning("编辑缓存不可用", "外部编辑器使用的本地文件暂时不可用，DirBridge 未删除任何缓存副本。");
 }
 
-void ExternalEditManager::closeDocumentById(const std::string &documentId)
+bool ExternalEditManager::closeDocumentById(const std::string &documentId, bool preserveUnsynchronizedCache)
 {
     const auto iterator = m_documents.find(documentId);
     if (iterator == m_documents.end())
     {
         m_documentOrder.erase(std::remove(m_documentOrder.begin(), m_documentOrder.end(), documentId), m_documentOrder.end());
-        return;
+        return true;
+    }
+
+    const bool operationPending = m_activeOperationDocumentId == documentId
+        || std::any_of(m_operations.begin(), m_operations.end(), [&documentId](const PendingOperation &operation) {
+            return operation.documentId == documentId;
+        });
+    const bool hasUnsynchronizedChanges = iterator->second.document->localVersion()
+        > iterator->second.document->synchronizedVersion();
+    if (!preserveUnsynchronizedCache && (operationPending || hasUnsynchronizedChanges))
+    {
+        showWarning(
+            "暂时无法关闭编辑",
+            operationPending ? "该文件仍有下载或同步任务，请等待任务完成后再关闭。"
+                             : "该文件仍有未同步的本地修改，请先等待同步成功后再关闭。");
+        return false;
     }
 
     iterator->second.inactivityTimer->stop();
     iterator->second.monitor->stopMonitoring();
+
+    if (!hasUnsynchronizedChanges && !operationPending)
+    {
+        const FileCacheResult cacheResult = m_cache.removeEntry(iterator->second.document->cacheEntry());
+        if (!cacheResult.success)
+        {
+            if (!preserveUnsynchronizedCache)
+            {
+                const QString filePath = QString::fromStdWString(iterator->second.document->cacheEntry().workingFilePath.wstring());
+                if (std::filesystem::exists(iterator->second.document->cacheEntry().workingFilePath))
+                {
+                    iterator->second.monitor->startMonitoring(filePath);
+                }
+                restartInactivityTimer(iterator->second);
+                showWarning("关闭编辑失败", QString("无法清理本地编辑缓存：%1").arg(QString::fromStdString(cacheResult.message)));
+                return false;
+            }
+        }
+    }
+
     iterator->second.document->close();
     notifyState(*iterator->second.document);
     m_queuedUploads.erase(documentId);
     m_documentOrder.erase(std::remove(m_documentOrder.begin(), m_documentOrder.end(), documentId), m_documentOrder.end());
     m_documents.erase(iterator);
+    return true;
 }
 
 void ExternalEditManager::markDocumentSynchronized(const std::string &documentId)

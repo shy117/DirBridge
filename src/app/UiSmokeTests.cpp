@@ -1,6 +1,7 @@
 #include "app/UiSmokeTests.h"
 
 #include "config/SiteProfile.h"
+#include "config/SiteStore.h"
 #include "core/DependencyCheck.h"
 #include "core/FakeRemoteFileSystem.h"
 #include "protocol/CurlRemoteFileSystem.h"
@@ -397,9 +398,9 @@ bool checkRemoteUiObjects(MainWindow &window)
         const int initialNameWidth = localFileTable->columnWidth(0);
         if (header == nullptr
             || header->sectionResizeMode(0) != QHeaderView::Interactive
-            || initialNameWidth != 240)
+            || initialNameWidth != 175)
         {
-            QTextStream(stderr) << "File name column should use a 240px interactive default width" << Qt::endl;
+            QTextStream(stderr) << "File name column should use a 175px interactive default width" << Qt::endl;
             ok = false;
         }
         else
@@ -433,6 +434,16 @@ bool checkRemoteUiObjects(MainWindow &window)
         {
             QTextStream(stderr) << "Transfer table should not contain placeholder rows" << Qt::endl;
             ok = false;
+        }
+        const QList<int> expectedTransferWidths{200, 60, 140, 140, 140, 40, 140, 80, 80, 80};
+        for (int column = 0; column < expectedTransferWidths.size(); ++column)
+        {
+            if (transferTable->header()->sectionResizeMode(column) != QHeaderView::Interactive
+                || transferTable->columnWidth(column) != expectedTransferWidths.at(column))
+            {
+                QTextStream(stderr) << "Transfer table default width mismatch at column " << column << Qt::endl;
+                ok = false;
+            }
         }
 
         if (cancelTransferButton != nullptr && cancelTransferButton->isEnabled())
@@ -1046,6 +1057,68 @@ bool checkExternalEditWorkflow(MainWindow &window,
         return false;
     }
 
+    const QString editedRemotePath = joinRemotePathForCheck(remotePath, "readme.txt");
+    const int rowAfterFirstUpload = findTableRowByName(remoteTable, "readme.txt");
+    if (rowAfterFirstUpload < 0 || remoteTable->item(rowAfterFirstUpload, 1) == nullptr)
+    {
+        QTextStream(stderr) << "External edit smoke lost the synchronized remote row" << Qt::endl;
+        return false;
+    }
+    const QString sizeAfterFirstUpload = remoteTable->item(rowAfterFirstUpload, 1)->text();
+    const QString firstCachePath = openedCachePath;
+    window.closeRemoteEditForTesting(editedRemotePath);
+    QApplication::processEvents(QEventLoop::AllEvents, 50);
+    if (QFileInfo::exists(firstCachePath))
+    {
+        QTextStream(stderr) << "External edit close did not remove the synchronized cache" << Qt::endl;
+        return false;
+    }
+
+    openedCachePath.clear();
+    window.editRemoteFileForTesting(editedRemotePath);
+    const auto reopenDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+    while (openedCachePath.isEmpty() && std::chrono::steady_clock::now() < reopenDeadline)
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    if (openedCachePath.isEmpty())
+    {
+        QTextStream(stderr) << "External edit smoke could not reopen a closed edit document" << Qt::endl;
+        return false;
+    }
+
+    const QByteArray reopenedContent("external edit smoke second synchronized version\n");
+    QSaveFile reopenedFile(openedCachePath);
+    if (!reopenedFile.open(QIODevice::WriteOnly)
+        || reopenedFile.write(reopenedContent) != reopenedContent.size()
+        || !reopenedFile.commit())
+    {
+        QTextStream(stderr) << "External edit smoke could not save the reopened cache file" << Qt::endl;
+        return false;
+    }
+
+    const auto secondUploadDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    bool secondUploadCompleted = false;
+    while (std::chrono::steady_clock::now() < secondUploadDeadline)
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        const int refreshedRow = findTableRowByName(remoteTable, "readme.txt");
+        if (refreshedRow >= 0
+            && remoteTable->item(refreshedRow, 1) != nullptr
+            && remoteTable->item(refreshedRow, 1)->text() != sizeAfterFirstUpload)
+        {
+            secondUploadCompleted = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    }
+    if (!secondUploadCompleted)
+    {
+        QTextStream(stderr) << "External edit smoke did not synchronize the reopened file" << Qt::endl;
+        return false;
+    }
+
     QTreeWidget *transferTable = window.findChild<QTreeWidget *>("transferTable");
     if (transferTable == nullptr || transferTable->topLevelItemCount() != 0)
     {
@@ -1505,6 +1578,89 @@ bool checkRemoteNavigationResponsiveness()
 }
 
 /**
+ * @brief 验证重新启动窗口后会从站点配置恢复文件树状态。
+ */
+bool checkPersistedFileTreeVisibilityAfterRestart()
+{
+    QTemporaryDir temporaryDirectory;
+    if (!temporaryDirectory.isValid())
+    {
+        QTextStream(stderr) << "Could not create persisted file-tree test directory" << Qt::endl;
+        return false;
+    }
+
+    const std::filesystem::path siteConfigPath = std::filesystem::path(temporaryDirectory.path().toStdWString()) / "sites.json";
+    SiteProfile profile;
+    profile.id = "persisted-file-tree-site";
+    profile.name = "Persisted File Tree Site";
+    profile.protocol = RemoteProtocol::Sftp;
+    profile.host = "fake-host";
+    profile.port = 22;
+    profile.username = "testuser";
+    profile.defaultRemotePath = "/home/testuser/remote_test";
+    profile.fileTreeVisible = false;
+    SiteStore(siteConfigPath).save({profile});
+
+    DependencyCheckResult dependencyCheck;
+    dependencyCheck.siteConfigPath = siteConfigPath.string();
+    MainWindow window(dependencyCheck);
+    window.setDialogsSuppressedForTesting(true);
+    window.setRemoteFileSystemForTesting(std::make_unique<FakeRemoteFileSystem>());
+
+    QTreeWidget *sessionTree = window.findChild<QTreeWidget *>("sessionManagerTree");
+    QTabWidget *remoteTabs = window.findChild<QTabWidget *>("remoteTabs");
+    QTreeWidgetItem *siteItem = nullptr;
+    if (sessionTree != nullptr)
+    {
+        QTreeWidgetItemIterator iterator(sessionTree);
+        while (*iterator != nullptr)
+        {
+            if ((*iterator)->text(0).contains("Persisted File Tree Site"))
+            {
+                siteItem = *iterator;
+                break;
+            }
+            ++iterator;
+        }
+    }
+    if (sessionTree == nullptr || remoteTabs == nullptr || siteItem == nullptr)
+    {
+        QTextStream(stderr) << "Persisted file-tree site was not loaded after restart" << Qt::endl;
+        return false;
+    }
+
+    QMetaObject::invokeMethod(
+        sessionTree,
+        "itemDoubleClicked",
+        Qt::DirectConnection,
+        Q_ARG(QTreeWidgetItem *, siteItem),
+        Q_ARG(int, 0));
+    if (!waitForRemoteConnected(remoteTabs->currentWidget(), QString::fromStdString(profile.defaultRemotePath)))
+    {
+        QTextStream(stderr) << "Persisted file-tree site did not reconnect" << Qt::endl;
+        return false;
+    }
+
+    QAction *fileTreeAction = findActionByText(window, "文件树");
+    QTreeWidget *remoteTree = remoteTabs->currentWidget()->findChild<QTreeWidget *>("remoteFileTree");
+    if (fileTreeAction == nullptr || fileTreeAction->isChecked() || remoteTree == nullptr || !remoteTree->isHidden())
+    {
+        QTextStream(stderr) << "Restarted site did not restore hidden file-tree state" << Qt::endl;
+        return false;
+    }
+
+    fileTreeAction->setChecked(true);
+    QApplication::processEvents();
+    const std::vector<SiteProfile> reloadedSites = SiteStore(siteConfigPath).load();
+    if (reloadedSites.size() != 1 || !reloadedSites.front().fileTreeVisible)
+    {
+        QTextStream(stderr) << "File-tree toggle was not persisted back to the site config" << Qt::endl;
+        return false;
+    }
+    return true;
+}
+
+/**
  * @brief 验证窗口关闭会等待使用远程后端的准备任务安全结束。
  * @return 关闭请求不会提前销毁仍有后台任务的主窗口时返回 true。
  */
@@ -1608,6 +1764,7 @@ bool checkSessionManagerWorkflow(MainWindow &window)
     grouped.username = "testuser";
     grouped.defaultRemotePath = "/home/testuser/remote_test";
     grouped.encoding = "UTF-8";
+    grouped.fileTreeVisible = false;
     window.saveSiteForTesting(grouped);
 
     SiteProfile ungrouped = grouped;
@@ -1689,6 +1846,13 @@ bool checkSessionManagerWorkflow(MainWindow &window)
         QTextStream(stderr) << "Session manager site double click did not connect remote session" << Qt::endl;
         return false;
     }
+    QAction *fileTreeAction = findActionByText(window, "文件树");
+    QTreeWidget *remoteTree = remoteTabs->currentWidget()->findChild<QTreeWidget *>("remoteFileTree");
+    if (fileTreeAction == nullptr || fileTreeAction->isChecked() || remoteTree == nullptr || !remoteTree->isHidden())
+    {
+        QTextStream(stderr) << "Saved site did not restore its hidden file-tree state" << Qt::endl;
+        return false;
+    }
 
     QStringList remoteTabContextActions;
     QTimer::singleShot(0, [&remoteTabContextActions]() {
@@ -1768,7 +1932,8 @@ bool checkRemoteMultiSessionWorkflow(MainWindow &window)
 {
     QTabWidget *remoteTabs = window.findChild<QTabWidget *>("remoteTabs");
     QAction *disconnectAction = findActionByText(window, "断开");
-    if (remoteTabs == nullptr || disconnectAction == nullptr)
+    QAction *fileTreeAction = findActionByText(window, "文件树");
+    if (remoteTabs == nullptr || disconnectAction == nullptr || fileTreeAction == nullptr)
     {
         QTextStream(stderr) << "Remote multi-session prerequisites are incomplete" << Qt::endl;
         return false;
@@ -1782,16 +1947,48 @@ bool checkRemoteMultiSessionWorkflow(MainWindow &window)
         return false;
     }
     const int firstIndex = remoteTabs->currentIndex();
+    window.setCurrentRemoteFileTreeVisibleForTesting(false);
+    QApplication::processEvents();
+    QTreeWidget *firstRemoteTree = remoteTabs->currentWidget()->findChild<QTreeWidget *>("remoteFileTree");
+    if (firstRemoteTree == nullptr || !firstRemoteTree->isHidden())
+    {
+        QTextStream(stderr) << "First session did not retain its hidden file-tree state" << Qt::endl;
+        return false;
+    }
     if (!connectFakeRemoteSession(window, secondPath))
     {
         return false;
     }
     const int secondIndex = remoteTabs->currentIndex();
+    QTreeWidget *secondRemoteTree = remoteTabs->currentWidget()->findChild<QTreeWidget *>("remoteFileTree");
+    if (fileTreeAction->isChecked() || secondRemoteTree == nullptr || secondRemoteTree->isHidden()
+        || firstRemoteTree == nullptr || !firstRemoteTree->isHidden())
+    {
+        QTextStream(stderr) << "Session-local file-tree toggle leaked into another session" << Qt::endl;
+        return false;
+    }
     if (remoteTabs->count() != initialCount + 2 || firstIndex == secondIndex)
     {
         QTextStream(stderr) << "Remote tabs were not added independently" << Qt::endl;
         return false;
     }
+
+    fileTreeAction->setChecked(true);
+    QApplication::processEvents();
+    if (!fileTreeAction->isChecked() || firstRemoteTree->isHidden() || secondRemoteTree->isHidden())
+    {
+        QTextStream(stderr) << "Global file-tree action did not show every session tree" << Qt::endl;
+        return false;
+    }
+    fileTreeAction->setChecked(false);
+    QApplication::processEvents();
+    if (fileTreeAction->isChecked() || !firstRemoteTree->isHidden() || !secondRemoteTree->isHidden())
+    {
+        QTextStream(stderr) << "Global file-tree action did not hide every session tree" << Qt::endl;
+        return false;
+    }
+    fileTreeAction->setChecked(true);
+    QApplication::processEvents();
 
     remoteTabs->setCurrentIndex(firstIndex);
     QApplication::processEvents();
@@ -1873,6 +2070,15 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
         dumpTransferRows(transferTable);
         return false;
     }
+    QTreeWidgetItem *selectedUploadParent = findTopLevelTransferRow(transferTable, "dirbridge-folder", "上传", "已完成");
+    if (selectedUploadParent == nullptr)
+    {
+        QTextStream(stderr) << "Directory upload parent row is missing before refresh-state check" << Qt::endl;
+        return false;
+    }
+    transferTable->setCurrentItem(selectedUploadParent);
+    selectedUploadParent->setSelected(true);
+    const QString selectedUploadId = selectedUploadParent->data(0, Qt::UserRole).toString();
     const QString uploadedDirectory = "/home/testuser/remote_test/dirbridge-folder";
     const QString movedDirectory = "/home/testuser/remote_test/upload/dirbridge-folder";
     window.moveRemotePathsForTesting({uploadedDirectory}, "/home/testuser/remote_test/upload");
@@ -1883,6 +2089,12 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
     {
         QTextStream(stderr) << "Directory download did not complete" << Qt::endl;
         dumpTransferRows(transferTable);
+        return false;
+    }
+    if (transferTable->currentItem() == nullptr
+        || transferTable->currentItem()->data(0, Qt::UserRole).toString() != selectedUploadId)
+    {
+        QTextStream(stderr) << "Transfer table refresh did not preserve the selected job" << Qt::endl;
         return false;
     }
     const std::filesystem::path downloadedFile = downloadRoot / "dirbridge-folder" / "nested" / "inside.txt";
@@ -1964,6 +2176,7 @@ bool checkRemoteUiWorkflow(MainWindow &window)
         && checkQuickSaveCreatesSeparateSite(window)
         && checkRemoteConnectionControlWorkflow(window)
         && checkRemoteNavigationResponsiveness()
+        && checkPersistedFileTreeVisibilityAfterRestart()
         && checkSessionManagerWorkflow(window)
         && checkRemoteMultiSessionWorkflow(window)
         && checkRemoteDirectoryOperationWorkflow(window)
