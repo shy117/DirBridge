@@ -142,6 +142,26 @@ public:
     bool removeSiteForTesting(const std::string &siteId);
 
     /**
+     * @brief 在自动化 UI 测试中创建独立站点分组。
+     */
+    bool createSiteGroupForTesting(const QString &groupName);
+
+    /**
+     * @brief 在自动化 UI 测试中删除独立站点分组。
+     */
+    bool deleteSiteGroupForTesting(const QString &groupName);
+
+    /**
+     * @brief 在自动化 UI 测试中删除单条最近会话记录。
+     */
+    bool removeRecentSessionForTesting(const std::string &siteId);
+
+    /**
+     * @brief 在自动化 UI 测试中清空最近会话记录。
+     */
+    void clearRecentSessionsForTesting();
+
+    /**
      * @brief 在自动化 UI 测试中重命名站点分组。
      * @param oldGroup 原分组名称；为空时表示未分组站点。
      * @param newGroup 新分组名称；为空时表示移动到未分组。
@@ -348,8 +368,13 @@ private:
     void connectSiteAtIndex(int index, const QString &initialRemotePath = {});
     void editSiteAtIndex(int index);
     void deleteSiteAtIndex(int index);
+    bool createSiteGroup(const QString &groupName);
+    bool deleteSiteGroup(const QString &groupName);
     bool renameSiteGroup(const QString &oldGroup, const QString &newGroup);
     void promptRenameSiteGroup(const QString &oldGroup);
+    void promptCreateSiteGroup();
+    void removeRecentSession(const std::string &siteId);
+    void clearRecentSessions();
     void recordRecentSession(const RemoteSession &session);
     void connectRecentSession(const std::string &siteId, const QString &lastRemotePath);
     void fillQuickConnectFromItem(QTreeWidgetItem *item);
@@ -359,6 +384,7 @@ private:
     SiteStore m_siteStore;
     SettingsStore m_settingsStore;
     std::vector<SiteProfile> m_sites;
+    std::vector<std::string> m_siteGroups;
     UserSettings m_settings;
     std::unique_ptr<RemoteFileSystem> m_testingRemoteFileSystem;
     std::unique_ptr<ExternalEditManager> m_externalEditManager;
