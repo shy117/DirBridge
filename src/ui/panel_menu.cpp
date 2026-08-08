@@ -1,6 +1,7 @@
 #include "ui/FilePanel.h"
 #include "ui/panel_shared.h"
 
+#include <QAbstractItemView>
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
@@ -13,7 +14,6 @@
 #include <QFileInfo>
 #include <QGroupBox>
 #include <QHBoxLayout>
-#include <QInputDialog>
 #include <QIODevice>
 #include <QLabel>
 #include <QLineEdit>
@@ -262,17 +262,7 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
             return;
         }
 
-        bool ok = false;
-        const QString name = QInputDialog::getText(this, "新建远程文件夹", "文件夹名称：", QLineEdit::Normal, QString(), &ok).trimmed();
-        if (!ok)
-        {
-            return;
-        }
-        if (!isValidRemoteName(name))
-        {
-            showInvalidRemoteNameWarning(this);
-            return;
-        }
+        const QString name = nextAvailableName("新建文件夹");
         if (m_remoteCreateDirectoryRequested)
         {
             m_remoteCreateDirectoryRequested(remoteChildPath(name));
@@ -288,17 +278,7 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
             return;
         }
 
-        bool ok = false;
-        const QString name = QInputDialog::getText(this, "新建远程文件", "文件名称：", QLineEdit::Normal, QString(), &ok).trimmed();
-        if (!ok)
-        {
-            return;
-        }
-        if (!isValidRemoteName(name))
-        {
-            showInvalidRemoteNameWarning(this);
-            return;
-        }
+        const QString name = nextAvailableName("新建文件");
         if (m_remoteCreateFileRequested)
         {
             m_remoteCreateFileRequested(remoteChildPath(name));
@@ -384,22 +364,7 @@ void FilePanel::renameSelectedEntry()
         return;
     }
 
-    const QFileInfo info(selectedPath);
-    bool ok = false;
-    const QString newName = QInputDialog::getText(this, "重命名远程项目", "新名称：", QLineEdit::Normal, info.fileName(), &ok).trimmed();
-    if (!ok)
-    {
-        return;
-    }
-    if (!isValidRemoteName(newName))
-    {
-        showInvalidRemoteNameWarning(this);
-        return;
-    }
-    if (newName != info.fileName())
-    {
-        m_remoteRenameRequested(selectedPath, remoteSiblingPath(selectedPath, newName));
-    }
+    beginInlineRenameForPath(selectedPath);
 }
 
 /**
@@ -578,18 +543,7 @@ void FilePanel::showRemotePermissionsDialog(const QString &path, bool isDirector
  */
 void FilePanel::createLocalDirectory()
 {
-    bool ok = false;
-    const QString name = QInputDialog::getText(this, "新建本地文件夹", "文件夹名称：", QLineEdit::Normal, QString(), &ok).trimmed();
-    if (!ok)
-    {
-        return;
-    }
-    if (!isValidRemoteName(name))
-    {
-        showInvalidRemoteNameWarning(this);
-        return;
-    }
-
+    const QString name = nextAvailableName("新建文件夹");
     const QString path = QDir(m_currentPath).filePath(name);
     if (!QDir().mkdir(path))
     {
@@ -597,6 +551,16 @@ void FilePanel::createLocalDirectory()
         return;
     }
     refresh();
+    for (int row = 0; row < m_table->rowCount(); ++row)
+    {
+        QTableWidgetItem *nameItem = m_table->item(row, 0);
+        if (nameItem != nullptr && nameItem->data(Qt::UserRole).toString() == path)
+        {
+            m_table->selectRow(row);
+            break;
+        }
+    }
+    beginInlineRenameForPath(path);
 }
 
 /**
@@ -604,18 +568,7 @@ void FilePanel::createLocalDirectory()
  */
 void FilePanel::createLocalFile()
 {
-    bool ok = false;
-    const QString name = QInputDialog::getText(this, "新建本地文件", "文件名称：", QLineEdit::Normal, QString(), &ok).trimmed();
-    if (!ok)
-    {
-        return;
-    }
-    if (!isValidRemoteName(name))
-    {
-        showInvalidRemoteNameWarning(this);
-        return;
-    }
-
+    const QString name = nextAvailableName("新建文件");
     const QString path = QDir(m_currentPath).filePath(name);
     if (QFileInfo::exists(path))
     {
@@ -631,6 +584,16 @@ void FilePanel::createLocalFile()
     }
     file.close();
     refresh();
+    for (int row = 0; row < m_table->rowCount(); ++row)
+    {
+        QTableWidgetItem *nameItem = m_table->item(row, 0);
+        if (nameItem != nullptr && nameItem->data(Qt::UserRole).toString() == path)
+        {
+            m_table->selectRow(row);
+            break;
+        }
+    }
+    beginInlineRenameForPath(path);
 }
 
 /**
@@ -707,11 +670,143 @@ void FilePanel::renameLocalPath(const QString &path)
         showFileOperationWarning(this, "重命名本地项目失败", QString("项目不存在：%1").arg(path));
         return;
     }
+    beginInlineRenameForPath(path);
+}
 
-    bool ok = false;
-    const QString newName = QInputDialog::getText(this, "重命名本地项目", "新名称：", QLineEdit::Normal, info.fileName(), &ok).trimmed();
-    if (!ok)
+/**
+ * @brief 为当前目录中的新建项目选择不冲突的默认名称。
+ * @param baseName 默认名称。
+ * @return 不与现有文件或目录冲突的名称。
+ */
+QString FilePanel::nextAvailableName(const QString &baseName) const
+{
+    auto nameExists = [this](const QString &name) {
+        if (m_mode == Mode::Local)
+        {
+            return QFileInfo::exists(QDir(m_currentPath).filePath(name));
+        }
+
+        const QString foldedName = name.toCaseFolded();
+        for (const FileItem &item : m_remoteItems)
+        {
+            if (QString::fromStdString(item.name).toCaseFolded() == foldedName)
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    QString candidate = baseName;
+    int suffix = 2;
+    while (nameExists(candidate))
     {
+        candidate = QString("%1 (%2)").arg(baseName).arg(suffix++);
+    }
+    return candidate;
+}
+
+/**
+ * @brief 在表格名称列上创建内联重命名编辑器。
+ * @param path 要重命名的项目路径。
+ */
+void FilePanel::beginInlineRenameForPath(const QString &path)
+{
+    if (path.isEmpty() || m_table == nullptr)
+    {
+        return;
+    }
+
+    if (m_inlineRenameEditor != nullptr)
+    {
+        cancelInlineRename();
+    }
+
+    int row = -1;
+    QTableWidgetItem *nameItem = nullptr;
+    for (int index = 0; index < m_table->rowCount(); ++index)
+    {
+        QTableWidgetItem *candidate = m_table->item(index, 0);
+        if (candidate != nullptr && candidate->data(Qt::UserRole).toString() == path)
+        {
+            row = index;
+            nameItem = candidate;
+            break;
+        }
+    }
+    if (row < 0 || nameItem == nullptr)
+    {
+        return;
+    }
+
+    const QString originalName = nameItem->text();
+    if (originalName.isEmpty())
+    {
+        return;
+    }
+
+    m_table->scrollToItem(nameItem, QAbstractItemView::EnsureVisible);
+    m_table->selectRow(row);
+    const QRect itemRect = m_table->visualItemRect(nameItem);
+    if (!itemRect.isValid())
+    {
+        return;
+    }
+
+    auto *editor = new QLineEdit(m_table->viewport());
+    editor->setObjectName("inlineRenameEditor");
+    editor->setText(originalName);
+    editor->selectAll();
+    editor->setGeometry(itemRect.adjusted(1, 1, -1, -1));
+    editor->installEventFilter(this);
+
+    m_inlineRenameEditor = editor;
+    m_inlineRenameItem = nameItem;
+    m_inlineRenamePath = path;
+    m_inlineRenameOriginalName = originalName;
+    m_inlineRenameFinishing = false;
+    connect(editor, &QLineEdit::editingFinished, this, [this]() {
+        if (!m_inlineRenameFinishing && m_inlineRenameEditor != nullptr)
+        {
+            finishInlineRename(true);
+        }
+    });
+    editor->show();
+    editor->raise();
+    editor->setFocus(Qt::OtherFocusReason);
+}
+
+/**
+ * @brief 提交或取消当前内联重命名。
+ * @param accepted 是否提交编辑内容。
+ */
+void FilePanel::finishInlineRename(bool accepted)
+{
+    if (m_inlineRenameEditor == nullptr || m_inlineRenameFinishing)
+    {
+        return;
+    }
+
+    m_inlineRenameFinishing = true;
+    QLineEdit *editor = m_inlineRenameEditor;
+    const QString sourcePath = m_inlineRenamePath;
+    const QString originalName = m_inlineRenameOriginalName;
+    const QString newName = accepted ? editor->text().trimmed() : originalName;
+    editor->removeEventFilter(this);
+    m_inlineRenameEditor = nullptr;
+    m_inlineRenameItem = nullptr;
+    m_inlineRenamePath.clear();
+    m_inlineRenameOriginalName.clear();
+    editor->clearFocus();
+    editor->deleteLater();
+    m_inlineRenameFinishing = false;
+
+    if (!accepted || newName.isEmpty() || newName == originalName)
+    {
+        if (accepted && newName.isEmpty())
+        {
+            showInvalidRemoteNameWarning(this);
+        }
         return;
     }
     if (!isValidRemoteName(newName))
@@ -719,23 +814,56 @@ void FilePanel::renameLocalPath(const QString &path)
         showInvalidRemoteNameWarning(this);
         return;
     }
-    if (newName == info.fileName())
+
+    if (m_mode == Mode::Local)
     {
+        const QString targetPath = QDir(QFileInfo(sourcePath).absolutePath()).filePath(newName);
+        if (QFileInfo::exists(targetPath))
+        {
+            showFileOperationWarning(this, "重命名本地项目失败", QString("目标已存在：%1").arg(targetPath));
+            return;
+        }
+        if (!QFile::rename(sourcePath, targetPath))
+        {
+            showFileOperationWarning(this, "重命名本地项目失败", QString("无法重命名：%1").arg(sourcePath));
+            return;
+        }
+        refresh();
+        for (int row = 0; row < m_table->rowCount(); ++row)
+        {
+            QTableWidgetItem *nameItem = m_table->item(row, 0);
+            if (nameItem != nullptr && nameItem->data(Qt::UserRole).toString() == targetPath)
+            {
+                m_table->selectRow(row);
+                break;
+            }
+        }
         return;
     }
 
-    const QString targetPath = QDir(info.absolutePath()).filePath(newName);
-    if (QFileInfo::exists(targetPath))
+    const QString sourceName = QFileInfo(sourcePath).fileName();
+    const QString foldedName = newName.toCaseFolded();
+    for (const FileItem &item : m_remoteItems)
     {
-        showFileOperationWarning(this, "重命名本地项目失败", QString("目标已存在：%1").arg(targetPath));
-        return;
+        const QString itemPath = QString::fromStdString(item.path);
+        if (itemPath != sourcePath && QString::fromStdString(item.name).toCaseFolded() == foldedName)
+        {
+            showFileOperationWarning(this, "重命名远程项目失败", "目标项目已存在，请使用其他名称。");
+            return;
+        }
     }
-    if (!QFile::rename(path, targetPath))
+    if (m_remoteRenameRequested && !sourceName.isEmpty())
     {
-        showFileOperationWarning(this, "重命名本地项目失败", QString("无法重命名：%1").arg(path));
-        return;
+        m_remoteRenameRequested(sourcePath, remoteSiblingPath(sourcePath, newName));
     }
-    refresh();
+}
+
+/**
+ * @brief 取消当前内联重命名并保留原名称。
+ */
+void FilePanel::cancelInlineRename()
+{
+    finishInlineRename(false);
 }
 
 /**

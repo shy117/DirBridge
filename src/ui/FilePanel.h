@@ -75,6 +75,11 @@ public:
      * @param handler 接收远程源路径列表和目标远程目录的回调。
      */
     void setRemoteFilesDroppedOnRemoteHandler(std::function<void(const QStringList &, const QString &)> handler);
+    /**
+     * @brief 在远程目录刷新后选中新建项目并进入内联重命名。
+     * @param path 新建项目的远程绝对路径。
+     */
+    void queueInlineRenameForPath(const QString &path);
     QString currentPath() const;
     void setRemoteSummary(const QString &curlVersion, bool hasFtp, bool hasSftp);
     void setRemoteKnownDirectories(const QStringList &directories);
@@ -136,6 +141,10 @@ private:
     void finishLocalRemove(const QString &path, bool removed);
     void renameLocalPath(const QString &path);
     void renameSelectedEntry();
+    void beginInlineRenameForPath(const QString &path);
+    void finishInlineRename(bool accepted);
+    void cancelInlineRename();
+    QString nextAvailableName(const QString &baseName) const;
     void showLocalProperties(const QString &path) const;
     void startDragFromSelection();
     bool canAcceptTransferDrop(const QMimeData *mimeData) const;
@@ -165,6 +174,12 @@ private:
     std::vector<FileItem> m_remoteItems;
     QStringList m_remoteKnownDirectories;
     QSet<QString> m_pendingLocalDeletes;
+    QString m_pendingInlineRenamePath;
+    QLineEdit *m_inlineRenameEditor = nullptr;
+    QTableWidgetItem *m_inlineRenameItem = nullptr;
+    QString m_inlineRenamePath;
+    QString m_inlineRenameOriginalName;
+    bool m_inlineRenameFinishing = false;
     std::function<void(bool)> m_fileTreeVisibilityRequested;
     std::function<void(const QString &, bool)> m_remotePathRequested;
     std::function<void()> m_remoteRefreshRequested;

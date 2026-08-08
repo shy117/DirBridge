@@ -14,6 +14,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMap>
@@ -123,6 +124,16 @@ QList<RemoteTransferItem> decodeRemoteTransferItems(const QByteArray &payload)
  */
 bool FilePanel::eventFilter(QObject *watched, QEvent *event)
 {
+    if (watched == m_inlineRenameEditor && event->type() == QEvent::KeyPress)
+    {
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        if (keyEvent->key() == Qt::Key_Escape)
+        {
+            cancelInlineRename();
+            return true;
+        }
+    }
+
     if (m_table == nullptr || watched != m_table->viewport())
     {
         return QWidget::eventFilter(watched, event);
@@ -426,6 +437,8 @@ void FilePanel::populateLocalDirectory(const QString &path)
  */
 void FilePanel::populateRemotePlaceholder()
 {
+    cancelInlineRename();
+    m_pendingInlineRenamePath.clear();
     m_pathEdit->setText("/");
     m_pathEdit->setEnabled(false);
     m_refreshButton->setEnabled(false);
@@ -458,6 +471,8 @@ void FilePanel::setRemoteConnecting(const QString &status)
         return;
     }
 
+    cancelInlineRename();
+    m_pendingInlineRenamePath.clear();
     m_currentPath.clear();
     m_remoteItems.clear();
     m_pathEdit->setText("/");
@@ -571,6 +586,21 @@ void FilePanel::populateRemoteItems(const QString &path, const std::vector<FileI
     m_table->horizontalHeader()->setSortIndicator(m_remoteSortColumn, m_remoteSortOrder);
     m_stateLabel->setText(status.isEmpty() ? QString("%1 个远程项目").arg(items.size()) : status);
     updateRemoteTree(m_currentPath, items);
+
+    if (!m_pendingInlineRenamePath.isEmpty())
+    {
+        const QString pendingPath = m_pendingInlineRenamePath;
+        for (int row = 0; row < m_table->rowCount(); ++row)
+        {
+            QTableWidgetItem *nameItem = m_table->item(row, 0);
+            if (nameItem != nullptr && nameItem->data(Qt::UserRole).toString() == pendingPath)
+            {
+                m_pendingInlineRenamePath.clear();
+                beginInlineRenameForPath(pendingPath);
+                break;
+            }
+        }
+    }
 }
 
 /**
