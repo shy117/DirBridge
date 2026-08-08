@@ -24,11 +24,13 @@ void to_json(nlohmann::json &json, const UserSettings &settings)
 {
     json = nlohmann::json{
         {"version", 1},
-        {"recentSessions", settings.recentSessions}
+        {"recentSessions", settings.recentSessions},
+        {"localFileTreeVisible", settings.localFileTreeVisible}
     };
 }
 
 void from_json(const nlohmann::json &json, UserSettings &settings)
 {
     settings.recentSessions = json.value("recentSessions", std::vector<RecentSession>{});
+    settings.localFileTreeVisible = json.value("localFileTreeVisible", true);
 }

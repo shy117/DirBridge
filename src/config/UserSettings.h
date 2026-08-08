@@ -17,6 +17,7 @@ struct RecentSession
 struct UserSettings
 {
     std::vector<RecentSession> recentSessions;
+    bool localFileTreeVisible = true;
 };
 
 void to_json(nlohmann::json &json, const RecentSession &session);
