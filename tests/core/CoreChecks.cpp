@@ -579,6 +579,7 @@ void checkSiteProfileAndSettingsStore()
     SettingsStore settingsStore(tempRoot / "settings.json");
     UserSettings emptySettings = settingsStore.load();
     require(emptySettings.recentSessions.empty(), "missing settings file should load defaults");
+    require(emptySettings.localFileTreeVisible, "missing settings file should show the local file tree by default");
 
     UserSettings settings;
     RecentSession recent;
@@ -587,12 +588,22 @@ void checkSiteProfileAndSettingsStore()
     recent.lastRemotePath = "/remote/path";
     recent.lastOpenedAt = "2026-06-16T12:00:00";
     settings.recentSessions.push_back(recent);
+    settings.localFileTreeVisible = false;
     settingsStore.save(settings);
 
     const UserSettings loadedSettings = settingsStore.load();
     require(loadedSettings.recentSessions.size() == 1, "settings store should reload recent sessions");
     require(loadedSettings.recentSessions.front().siteId == groupedSite.id, "recent session site id mismatch");
     require(loadedSettings.recentSessions.front().lastRemotePath == "/remote/path", "recent session path mismatch");
+    require(!loadedSettings.localFileTreeVisible, "settings store should preserve local file-tree visibility");
+
+    const std::filesystem::path legacySettingsPath = tempRoot / "legacy-settings.json";
+    {
+        std::ofstream output(legacySettingsPath, std::ios::trunc);
+        output << R"({"version":1,"recentSessions":[]})";
+    }
+    require(SettingsStore(legacySettingsPath).load().localFileTreeVisible,
+        "legacy settings without local file-tree visibility should default to visible");
 }
 }
 
