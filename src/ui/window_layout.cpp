@@ -9,6 +9,8 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDockWidget>
+#include <QDir>
+#include <QFileInfo>
 #include <QHeaderView>
 #include <QKeySequence>
 #include <QLabel>
@@ -29,6 +31,22 @@
 #include <QWidget>
 
 using namespace window_shared;
+
+namespace
+{
+QString localTabTitle(const QString &path)
+{
+    const QString cleanedPath = QDir::cleanPath(path);
+    const QString nativePath = QDir::toNativeSeparators(cleanedPath);
+    const QFileInfo info(cleanedPath);
+    if (cleanedPath.isEmpty() || QDir(cleanedPath).isRoot() || info.fileName().isEmpty())
+    {
+        return QString("本地：%1").arg(nativePath);
+    }
+
+    return QString("本地：%1").arg(info.fileName());
+}
+}
 
 /**
  * @brief 构建主菜单，并绑定窗口级常用操作。
@@ -53,7 +71,7 @@ void MainWindow::setupMenuBar()
 
     m_fileTreeAction = viewMenu->addAction(fluentIcon("folder_add"), "文件树");
     m_fileTreeAction->setCheckable(true);
-    m_fileTreeAction->setChecked(true);
+    m_fileTreeAction->setChecked(m_localPanel == nullptr || m_localPanel->isFileTreeVisible());
     connect(m_fileTreeAction, &QAction::toggled, this, [this](bool visible) {
         setAllFileTreesVisible(visible);
     });
@@ -232,8 +250,16 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     auto *localTabs = new QTabWidget(m_fileSplitter);
     localTabs->setObjectName("localTabs");
     m_localPanel = new FilePanel(FilePanel::Mode::Local, localTabs);
+    m_localPanel->setFileTreeVisible(m_settings.localFileTreeVisible);
     m_localPanel->setFileTreeVisibilityRequestedHandler([this](bool visible) {
         setLocalFileTreeVisible(visible);
+    });
+    m_localPanel->setLocalPathChangedHandler([this, localTabs](const QString &path) {
+        const int tabIndex = localTabs->indexOf(m_localPanel);
+        if (tabIndex >= 0)
+        {
+            localTabs->setTabText(tabIndex, localTabTitle(path));
+        }
     });
     m_localPanel->setLocalUploadRequestedHandler([this](const QString &localPath) {
         RemoteSession *session = currentRemoteSession();
@@ -263,7 +289,7 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
             }
         }
     });
-    localTabs->addTab(m_localPanel, "本地：桌面");
+    localTabs->addTab(m_localPanel, localTabTitle(m_localPanel->currentPath()));
 
     m_remoteTabs = new QTabWidget(m_fileSplitter);
     m_remoteTabs->setObjectName("remoteTabs");
@@ -397,6 +423,9 @@ void MainWindow::setAllFileTreesVisible(bool visible)
         m_localPanel->setFileTreeVisible(visible);
     }
 
+    const bool localStateChanged = m_settings.localFileTreeVisible != visible;
+    m_settings.localFileTreeVisible = visible;
+
     bool siteChanged = false;
     for (const std::unique_ptr<RemoteSession> &session : m_remoteSessions)
     {
@@ -421,6 +450,10 @@ void MainWindow::setAllFileTreesVisible(bool visible)
     {
         saveSites();
     }
+    if (localStateChanged)
+    {
+        saveSettings();
+    }
     updateFileTreeActionState();
 }
 
@@ -432,6 +465,12 @@ void MainWindow::setLocalFileTreeVisible(bool visible)
     if (m_localPanel != nullptr)
     {
         m_localPanel->setFileTreeVisible(visible);
+    }
+    if (m_settings.localFileTreeVisible != visible)
+    {
+        m_settings.localFileTreeVisible = visible;
+        saveSettings();
+        return;
     }
     updateFileTreeActionState();
 }
