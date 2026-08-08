@@ -22,12 +22,15 @@
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QStorageInfo>
 #include <QStyle>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QToolTip>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QUrl>
+#include <QCursor>
 
 #include <algorithm>
 
@@ -113,6 +116,95 @@ QList<RemoteTransferItem> decodeRemoteTransferItems(const QByteArray &payload)
     }
     return items;
 }
+
+QString normalizedLocalPath(const QString &path)
+{
+    return QDir::cleanPath(QDir::fromNativeSeparators(QFileInfo(path).absoluteFilePath()));
+}
+
+bool sameLocalPath(const QString &left, const QString &right)
+{
+    return normalizedLocalPath(left).compare(normalizedLocalPath(right), Qt::CaseInsensitive) == 0;
+}
+
+bool isPathInside(const QString &candidate, const QString &parent)
+{
+    const QString normalizedCandidate = normalizedLocalPath(candidate);
+    QString normalizedParent = normalizedLocalPath(parent);
+    if (sameLocalPath(normalizedCandidate, normalizedParent))
+    {
+        return true;
+    }
+    if (!normalizedParent.endsWith('/'))
+    {
+        normalizedParent.append('/');
+    }
+    return normalizedCandidate.startsWith(normalizedParent, Qt::CaseInsensitive);
+}
+
+QString localVolumeRoot(const QString &path)
+{
+    const QStorageInfo storage(path);
+    if (storage.isValid() && !storage.rootPath().isEmpty())
+    {
+        return QDir::cleanPath(QDir::fromNativeSeparators(storage.rootPath()));
+    }
+    return QDir::cleanPath(QDir::fromNativeSeparators(QFileInfo(path).absolutePath()));
+}
+
+bool isSameLocalVolume(const QString &left, const QString &right)
+{
+    return localVolumeRoot(left).compare(localVolumeRoot(right), Qt::CaseInsensitive) == 0;
+}
+
+bool removeLocalPathRecursively(const QString &path)
+{
+    const QFileInfo info(path);
+    if (!info.exists())
+    {
+        return true;
+    }
+    if (info.isDir() && !info.isSymLink())
+    {
+        return QDir(path).removeRecursively();
+    }
+    return QFile::remove(path);
+}
+
+bool copyLocalPathRecursively(const QString &sourcePath, const QString &targetPath)
+{
+    const QFileInfo sourceInfo(sourcePath);
+    if (sourceInfo.isDir() && !sourceInfo.isSymLink())
+    {
+        if (!QDir().mkpath(targetPath))
+        {
+            return false;
+        }
+
+        const QDir sourceDirectory(sourcePath);
+        const QFileInfoList children = sourceDirectory.entryInfoList(
+            QDir::AllEntries | QDir::NoDotAndDotDot,
+            QDir::DirsFirst | QDir::Name | QDir::IgnoreCase);
+        for (const QFileInfo &child : children)
+        {
+            const QString childTarget = QDir(targetPath).filePath(child.fileName());
+            if (!copyLocalPathRecursively(child.absoluteFilePath(), childTarget))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    return QFile::copy(sourcePath, targetPath);
+}
+
+QString dropTargetDisplayName(const QString &path)
+{
+    const QString normalized = QDir::cleanPath(QDir::fromNativeSeparators(path));
+    const QString name = QFileInfo(normalized).fileName();
+    return name.isEmpty() ? QDir::toNativeSeparators(normalized) : name;
+}
 } // namespace
 
 /**
@@ -123,12 +215,16 @@ QList<RemoteTransferItem> decodeRemoteTransferItems(const QByteArray &payload)
  */
 bool FilePanel::eventFilter(QObject *watched, QEvent *event)
 {
-    if (m_table == nullptr || watched != m_table->viewport())
+    const bool isTableViewport = m_table != nullptr && watched == m_table->viewport();
+    const bool isLocalTreeViewport = m_localTree != nullptr && watched == m_localTree->viewport();
+    const bool isRemoteTreeViewport = m_remoteTree != nullptr && watched == m_remoteTree->viewport();
+    const bool isDropViewport = isTableViewport || isLocalTreeViewport || isRemoteTreeViewport;
+    if (!isDropViewport)
     {
         return QWidget::eventFilter(watched, event);
     }
 
-    if (event->type() == QEvent::MouseButtonPress)
+    if (isTableViewport && event->type() == QEvent::MouseButtonPress)
     {
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
         if (mouseEvent->button() == Qt::LeftButton)
@@ -138,7 +234,7 @@ bool FilePanel::eventFilter(QObject *watched, QEvent *event)
         return QWidget::eventFilter(watched, event);
     }
 
-    if (event->type() == QEvent::MouseMove)
+    if (isTableViewport && event->type() == QEvent::MouseMove)
     {
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
         if ((mouseEvent->buttons() & Qt::LeftButton) != 0
@@ -150,31 +246,79 @@ bool FilePanel::eventFilter(QObject *watched, QEvent *event)
         return QWidget::eventFilter(watched, event);
     }
 
+    auto dropPosition = [event]() {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        return static_cast<QDragMoveEvent *>(event)->position().toPoint();
+#else
+        return static_cast<QDragMoveEvent *>(event)->pos();
+#endif
+    };
+
+    auto dropAction = [this, watched](const QMimeData *mimeData, const QString &targetDirectory) {
+        if (m_mode == Mode::RemotePlaceholder && mimeData->hasFormat(RemotePathMimeType))
+        {
+            return Qt::MoveAction;
+        }
+        if (m_mode == Mode::Local && mimeData->hasUrls() && watched == m_localTree->viewport())
+        {
+            for (const QUrl &url : mimeData->urls())
+            {
+                if (url.isLocalFile())
+                {
+                    return isSameLocalVolume(url.toLocalFile(), targetDirectory) ? Qt::MoveAction : Qt::CopyAction;
+                }
+            }
+        }
+        return Qt::CopyAction;
+    };
+
     if (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove)
     {
         auto *dragEvent = static_cast<QDragMoveEvent *>(event);
-        if (canAcceptTransferDrop(dragEvent->mimeData()))
+        if (canAcceptTransferDrop(dragEvent->mimeData(), watched))
         {
-            dragEvent->acceptProposedAction();
+            const QString targetDirectory = dropTargetDirectory(watched, dropPosition());
+            dragEvent->setDropAction(dropAction(dragEvent->mimeData(), targetDirectory));
+            dragEvent->accept();
+            showTransferDropHint(watched, dragEvent->mimeData(), targetDirectory);
             return true;
         }
+        QToolTip::hideText();
+        return QWidget::eventFilter(watched, event);
+    }
+
+    if (event->type() == QEvent::DragLeave)
+    {
+        QToolTip::hideText();
         return QWidget::eventFilter(watched, event);
     }
 
     if (event->type() == QEvent::Drop)
     {
         auto *dropEvent = static_cast<QDropEvent *>(event);
-        if (canAcceptTransferDrop(dropEvent->mimeData()))
+        if (canAcceptTransferDrop(dropEvent->mimeData(), watched))
         {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
             const QPoint dropPosition = dropEvent->position().toPoint();
 #else
             const QPoint dropPosition = dropEvent->pos();
 #endif
-            handleTransferDrop(dropEvent->mimeData(), dropPosition);
-            dropEvent->acceptProposedAction();
+            handleTransferDrop(dropEvent->mimeData(), dropPosition, watched);
+            const QString targetDirectory = dropTargetDirectory(watched, dropPosition);
+            if (dropEvent->mimeData()->hasFormat(RemotePathMimeType)
+                || (m_mode == Mode::Local && watched == m_localTree->viewport() && dropEvent->mimeData()->hasUrls()))
+            {
+                dropEvent->setDropAction(dropAction(dropEvent->mimeData(), targetDirectory));
+            }
+            else
+            {
+                dropEvent->setDropAction(Qt::CopyAction);
+            }
+            dropEvent->accept();
+            QToolTip::hideText();
             return true;
         }
+        QToolTip::hideText();
         return QWidget::eventFilter(watched, event);
     }
 
@@ -233,7 +377,7 @@ void FilePanel::startDragFromSelection()
 
     auto *drag = new QDrag(this);
     drag->setMimeData(mimeData);
-    drag->exec(Qt::CopyAction);
+    drag->exec(Qt::CopyAction | Qt::MoveAction, Qt::CopyAction);
 }
 
 /**
@@ -241,7 +385,7 @@ void FilePanel::startDragFromSelection()
  * @param mimeData 拖放数据。
  * @return 可以接收时返回 true。
  */
-bool FilePanel::canAcceptTransferDrop(const QMimeData *mimeData) const
+bool FilePanel::canAcceptTransferDrop(const QMimeData *mimeData, QObject *watched) const
 {
     if (mimeData == nullptr)
     {
@@ -256,7 +400,11 @@ bool FilePanel::canAcceptTransferDrop(const QMimeData *mimeData) const
 
     if (m_mode == Mode::Local)
     {
-        return m_remoteFilesDroppedOnLocal != nullptr && mimeData->hasFormat(RemotePathMimeType);
+        if (mimeData->hasFormat(RemotePathMimeType))
+        {
+            return m_remoteFilesDroppedOnLocal != nullptr;
+        }
+        return watched == m_localTree->viewport() && mimeData->hasUrls();
     }
 
     return false;
@@ -267,9 +415,9 @@ bool FilePanel::canAcceptTransferDrop(const QMimeData *mimeData) const
  * @param mimeData 拖放数据。
  * @param position 投放位置。
  */
-void FilePanel::handleTransferDrop(const QMimeData *mimeData, const QPoint &position)
+void FilePanel::handleTransferDrop(const QMimeData *mimeData, const QPoint &position, QObject *watched)
 {
-    if (!canAcceptTransferDrop(mimeData))
+    if (!canAcceptTransferDrop(mimeData, watched))
     {
         return;
     }
@@ -285,7 +433,7 @@ void FilePanel::handleTransferDrop(const QMimeData *mimeData, const QPoint &posi
             }
             if (!remotePaths.isEmpty())
             {
-                m_remoteFilesDroppedOnRemote(remotePaths, remoteDropTargetDirectory(position));
+                m_remoteFilesDroppedOnRemote(remotePaths, dropTargetDirectory(watched, position));
             }
             return;
         }
@@ -310,11 +458,189 @@ void FilePanel::handleTransferDrop(const QMimeData *mimeData, const QPoint &posi
         return;
     }
 
+    if (mimeData->hasUrls() && watched == m_localTree->viewport())
+    {
+        QStringList localPaths;
+        for (const QUrl &url : mimeData->urls())
+        {
+            if (url.isLocalFile() && QFileInfo::exists(url.toLocalFile()))
+            {
+                localPaths.append(QFileInfo(url.toLocalFile()).absoluteFilePath());
+            }
+        }
+        if (!localPaths.isEmpty())
+        {
+            handleLocalPathDrop(localPaths, dropTargetDirectory(watched, position));
+        }
+        return;
+    }
+
     const QList<RemoteTransferItem> remoteItems = decodeRemoteTransferItems(mimeData->data(RemotePathMimeType));
     if (!remoteItems.isEmpty())
     {
         m_remoteFilesDroppedOnLocal(remoteItems);
     }
+}
+
+/**
+ * @brief 计算表格或文件树上的拖放目标目录。
+ * @param watched 接收拖放事件的视口。
+ * @param position 视口内的拖放位置。
+ * @return 目标目录路径。
+ */
+QString FilePanel::dropTargetDirectory(QObject *watched, const QPoint &position) const
+{
+    if (m_mode == Mode::RemotePlaceholder)
+    {
+        if (m_remoteTree != nullptr && watched == m_remoteTree->viewport())
+        {
+            if (QTreeWidgetItem *item = m_remoteTree->itemAt(position); item != nullptr)
+            {
+                const QString path = item->data(0, Qt::UserRole).toString();
+                if (!path.isEmpty())
+                {
+                    return path;
+                }
+            }
+            return m_currentPath.isEmpty() ? "/" : m_currentPath;
+        }
+        return remoteDropTargetDirectory(position);
+    }
+
+    if (m_localTree != nullptr && watched == m_localTree->viewport())
+    {
+        if (QTreeWidgetItem *item = m_localTree->itemAt(position); item != nullptr)
+        {
+            const QString path = item->data(0, Qt::UserRole).toString();
+            if (!path.isEmpty() && QFileInfo(path).isDir())
+            {
+                return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+            }
+        }
+    }
+    return QDir::cleanPath(m_currentPath);
+}
+
+/**
+ * @brief 显示当前拖放目标和移动/复制动作提示。
+ * @param watched 接收拖放事件的视口。
+ * @param mimeData 拖放数据。
+ * @param targetDirectory 目标目录。
+ */
+void FilePanel::showTransferDropHint(QObject *watched, const QMimeData *mimeData, const QString &targetDirectory)
+{
+    auto *widget = qobject_cast<QWidget *>(watched);
+    if (widget == nullptr || targetDirectory.isEmpty())
+    {
+        QToolTip::hideText();
+        return;
+    }
+
+    QString actionText;
+    if (m_mode == Mode::Local && mimeData->hasUrls() && watched == m_localTree->viewport())
+    {
+        for (const QUrl &url : mimeData->urls())
+        {
+            if (url.isLocalFile())
+            {
+                actionText = isSameLocalVolume(url.toLocalFile(), targetDirectory) ? "移动到" : "复制到";
+                break;
+            }
+        }
+    }
+    else if (m_mode == Mode::RemotePlaceholder && mimeData->hasFormat(RemotePathMimeType)
+        && watched == m_remoteTree->viewport())
+    {
+        actionText = "移动到";
+    }
+    else if (m_mode == Mode::RemotePlaceholder && mimeData->hasUrls())
+    {
+        actionText = "上传到";
+    }
+    else if (m_mode == Mode::Local && mimeData->hasFormat(RemotePathMimeType))
+    {
+        actionText = "下载到";
+    }
+
+    if (actionText.isEmpty())
+    {
+        QToolTip::hideText();
+        return;
+    }
+    QToolTip::showText(QCursor::pos(), QString("%1“%2”").arg(actionText, dropTargetDisplayName(targetDirectory)), widget);
+}
+
+/**
+ * @brief 将本地项目移动或复制到本地文件树目标目录。
+ * @param sourcePaths 本地源项目列表。
+ * @param targetDirectory 目标目录。
+ */
+void FilePanel::handleLocalPathDrop(const QStringList &sourcePaths, const QString &targetDirectory)
+{
+    if (sourcePaths.isEmpty() || targetDirectory.isEmpty() || !QFileInfo(targetDirectory).isDir())
+    {
+        return;
+    }
+
+    struct LocalDropItem
+    {
+        QString source;
+        QString target;
+        bool move = false;
+    };
+    QList<LocalDropItem> items;
+    QSet<QString> targets;
+    for (const QString &sourcePath : sourcePaths)
+    {
+        const QFileInfo sourceInfo(sourcePath);
+        if (!sourceInfo.exists())
+        {
+            showFileOperationWarning(this, "本地拖放失败", QString("源项目不存在：%1").arg(sourcePath));
+            return;
+        }
+
+        const QString source = sourceInfo.absoluteFilePath();
+        if (sameLocalPath(source, targetDirectory) || (sourceInfo.isDir() && isPathInside(targetDirectory, source)))
+        {
+            showFileOperationWarning(this, "本地拖放失败", "不能将项目拖到自身或其子目录中。");
+            return;
+        }
+
+        const QString target = QDir(targetDirectory).filePath(sourceInfo.fileName());
+        const QString normalizedTarget = normalizedLocalPath(target).toCaseFolded();
+        if (QFileInfo::exists(target) || targets.contains(normalizedTarget))
+        {
+            showFileOperationWarning(this, "本地拖放失败", QString("目标项目已存在：%1").arg(target));
+            return;
+        }
+        targets.insert(normalizedTarget);
+        items.append({source, target, isSameLocalVolume(source, targetDirectory)});
+    }
+
+    for (const LocalDropItem &item : items)
+    {
+        bool success = false;
+        if (item.move)
+        {
+            success = QFile::rename(item.source, item.target);
+        }
+        else
+        {
+            success = copyLocalPathRecursively(item.source, item.target);
+            if (!success)
+            {
+                removeLocalPathRecursively(item.target);
+            }
+        }
+
+        if (!success)
+        {
+            showFileOperationWarning(this, "本地拖放失败", QString("无法将项目处理到：%1").arg(item.target));
+            refresh();
+            return;
+        }
+    }
+    refresh();
 }
 
 /**
