@@ -1,6 +1,7 @@
 #include "ui/FilePanel.h"
 #include "ui/panel_shared.h"
 
+#include <QAbstractItemDelegate>
 #include <QAbstractItemView>
 #include <QDesktopServices>
 #include <QDir>
@@ -464,6 +465,20 @@ void FilePanel::connectSignals()
     connect(m_table, &QTableWidget::customContextMenuRequested, this, [this](const QPoint &position) {
         showUnifiedContextMenu(position);
     });
+    connect(m_table->itemDelegate(), &QAbstractItemDelegate::commitData, this, [this](QWidget *editor) {
+        if (editor == m_inlineRenameEditor)
+        {
+            m_inlineRenameCommitRequested = true;
+        }
+    });
+    connect(m_table->itemDelegate(), &QAbstractItemDelegate::closeEditor, this,
+        [this](QWidget *editor, QAbstractItemDelegate::EndEditHint hint) {
+            if (editor != m_inlineRenameEditor)
+            {
+                return;
+            }
+            finishInlineRename(m_inlineRenameCommitRequested && hint != QAbstractItemDelegate::RevertModelCache);
+        });
     connect(m_table->horizontalHeader(), &QHeaderView::sectionClicked, this, [this](int column) {
         if (m_mode == Mode::RemotePlaceholder && column >= 0 && column <= 3)
         {

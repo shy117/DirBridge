@@ -179,6 +179,7 @@ private:
     QTableWidgetItem *m_inlineRenameItem = nullptr;
     QString m_inlineRenamePath;
     QString m_inlineRenameOriginalName;
+    bool m_inlineRenameCommitRequested = false;
     bool m_inlineRenameFinishing = false;
     std::function<void(bool)> m_fileTreeVisibilityRequested;
     std::function<void(const QString &, bool)> m_remotePathRequested;

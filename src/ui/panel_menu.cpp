@@ -1,6 +1,7 @@
 #include "ui/FilePanel.h"
 #include "ui/panel_shared.h"
 
+#include <QAbstractItemDelegate>
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QCheckBox>
@@ -753,27 +754,33 @@ void FilePanel::beginInlineRenameForPath(const QString &path)
         return;
     }
 
-    auto *editor = new QLineEdit(m_table->viewport());
-    editor->setObjectName("inlineRenameEditor");
-    editor->setText(originalName);
-    editor->selectAll();
-    editor->setGeometry(itemRect.adjusted(1, 1, -1, -1));
-    editor->installEventFilter(this);
-
-    m_inlineRenameEditor = editor;
     m_inlineRenameItem = nameItem;
     m_inlineRenamePath = path;
     m_inlineRenameOriginalName = originalName;
+    m_inlineRenameCommitRequested = false;
     m_inlineRenameFinishing = false;
-    connect(editor, &QLineEdit::editingFinished, this, [this]() {
-        if (!m_inlineRenameFinishing && m_inlineRenameEditor != nullptr)
-        {
-            finishInlineRename(true);
-        }
-    });
-    editor->show();
-    editor->raise();
-    editor->setFocus(Qt::OtherFocusReason);
+    m_table->editItem(nameItem);
+
+    auto *editor = m_table->viewport()->findChild<QLineEdit *>(QString(), Qt::FindDirectChildrenOnly);
+    if (editor == nullptr)
+    {
+        m_inlineRenameItem = nullptr;
+        m_inlineRenamePath.clear();
+        m_inlineRenameOriginalName.clear();
+        return;
+    }
+    editor->setObjectName("inlineRenameEditor");
+    const bool isDirectory = nameItem->data(Qt::UserRole + 1).toBool();
+    if (isDirectory)
+    {
+        editor->selectAll();
+    }
+    else
+    {
+        const QString baseName = QFileInfo(originalName).completeBaseName();
+        editor->setSelection(0, baseName.isEmpty() ? originalName.size() : baseName.size());
+    }
+    m_inlineRenameEditor = editor;
 }
 
 /**
@@ -782,23 +789,25 @@ void FilePanel::beginInlineRenameForPath(const QString &path)
  */
 void FilePanel::finishInlineRename(bool accepted)
 {
-    if (m_inlineRenameEditor == nullptr || m_inlineRenameFinishing)
+    if (m_inlineRenameItem == nullptr || m_inlineRenameFinishing)
     {
         return;
     }
 
     m_inlineRenameFinishing = true;
-    QLineEdit *editor = m_inlineRenameEditor;
+    QTableWidgetItem *nameItem = m_inlineRenameItem;
     const QString sourcePath = m_inlineRenamePath;
     const QString originalName = m_inlineRenameOriginalName;
-    const QString newName = accepted ? editor->text().trimmed() : originalName;
-    editor->removeEventFilter(this);
+    const QString newName = accepted ? nameItem->text().trimmed() : originalName;
+    {
+        const QSignalBlocker blocker(m_table);
+        nameItem->setText(originalName);
+    }
     m_inlineRenameEditor = nullptr;
     m_inlineRenameItem = nullptr;
     m_inlineRenamePath.clear();
     m_inlineRenameOriginalName.clear();
-    editor->clearFocus();
-    editor->deleteLater();
+    m_inlineRenameCommitRequested = false;
     m_inlineRenameFinishing = false;
 
     if (!accepted || newName.isEmpty() || newName == originalName)
@@ -863,7 +872,18 @@ void FilePanel::finishInlineRename(bool accepted)
  */
 void FilePanel::cancelInlineRename()
 {
-    finishInlineRename(false);
+    if (m_inlineRenameEditor == nullptr || m_table == nullptr)
+    {
+        finishInlineRename(false);
+        return;
+    }
+
+    QWidget *editor = m_inlineRenameEditor;
+    m_table->itemDelegate()->closeEditor(editor, QAbstractItemDelegate::RevertModelCache);
+    if (m_inlineRenameEditor == editor)
+    {
+        finishInlineRename(false);
+    }
 }
 
 /**

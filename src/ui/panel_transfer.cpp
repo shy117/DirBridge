@@ -14,7 +14,6 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMap>
@@ -124,16 +123,6 @@ QList<RemoteTransferItem> decodeRemoteTransferItems(const QByteArray &payload)
  */
 bool FilePanel::eventFilter(QObject *watched, QEvent *event)
 {
-    if (watched == m_inlineRenameEditor && event->type() == QEvent::KeyPress)
-    {
-        auto *keyEvent = static_cast<QKeyEvent *>(event);
-        if (keyEvent->key() == Qt::Key_Escape)
-        {
-            cancelInlineRename();
-            return true;
-        }
-    }
-
     if (m_table == nullptr || watched != m_table->viewport())
     {
         return QWidget::eventFilter(watched, event);
