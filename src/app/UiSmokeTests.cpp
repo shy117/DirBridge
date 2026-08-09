@@ -11,6 +11,7 @@
 #include "ui/panel_shared.h"
 
 #include <QAction>
+#include <QAbstractItemView>
 #include <QApplication>
 #include <QComboBox>
 #include <QDockWidget>
@@ -40,6 +41,7 @@
 #include <QShortcut>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QStorageInfo>
 #include <QToolButton>
 #include <QStringList>
 #include <QTableWidget>
@@ -858,6 +860,107 @@ bool waitForTablePermission(QTableWidget *table, const QString &name, const QStr
 }
 
 QString joinRemotePathForCheck(QString directory, const QString &name);
+
+QTreeWidgetItem *findTreeItemByPath(QTreeWidgetItem *item, const QString &path)
+{
+    if (item == nullptr)
+    {
+        return nullptr;
+    }
+    if (item->data(0, Qt::UserRole).toString().compare(path, Qt::CaseInsensitive) == 0)
+    {
+        return item;
+    }
+    for (int index = 0; index < item->childCount(); ++index)
+    {
+        if (QTreeWidgetItem *found = findTreeItemByPath(item->child(index), path); found != nullptr)
+        {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+/**
+ * @brief 验证本地文件树仅接收拖放以及同盘本地项目移动。
+ * @return 文件树行为和同盘移动结果符合预期时返回 true。
+ */
+bool checkFileTreeDropWorkflow()
+{
+    QTemporaryDir temporaryDirectory;
+    if (!temporaryDirectory.isValid())
+    {
+        QTextStream(stderr) << "Unable to create temporary directory for file tree drop smoke test" << Qt::endl;
+        return false;
+    }
+
+    const QString sourcePath = QDir(temporaryDirectory.path()).filePath("move-source.txt");
+    const QString targetDirectory = QDir(temporaryDirectory.path()).filePath("target");
+    if (!QDir().mkpath(targetDirectory))
+    {
+        return false;
+    }
+    QFile sourceFile(sourcePath);
+    if (!sourceFile.open(QIODevice::WriteOnly | QIODevice::NewOnly))
+    {
+        return false;
+    }
+    sourceFile.write("tree drop");
+    sourceFile.close();
+
+    FilePanel localPanel(FilePanel::Mode::Local);
+    localPanel.resize(900, 600);
+    localPanel.show();
+    localPanel.setLocalPathForTesting(temporaryDirectory.path());
+    QApplication::processEvents();
+    auto *localTree = localPanel.findChild<QTreeWidget *>("localFileTree");
+    if (localTree == nullptr || localTree->dragEnabled() || localTree->dragDropMode() != QAbstractItemView::DropOnly)
+    {
+        QTextStream(stderr) << "Local file tree is not configured as a drop-only target" << Qt::endl;
+        return false;
+    }
+
+    QTreeWidgetItem *targetItem = nullptr;
+    for (int index = 0; index < localTree->topLevelItemCount() && targetItem == nullptr; ++index)
+    {
+        targetItem = findTreeItemByPath(localTree->topLevelItem(index), targetDirectory);
+    }
+    if (targetItem == nullptr)
+    {
+        QTextStream(stderr) << "Local file tree target directory is missing" << Qt::endl;
+        return false;
+    }
+
+    const QPoint targetPosition = localTree->visualItemRect(targetItem).center();
+    QMimeData mimeData;
+    mimeData.setUrls({QUrl::fromLocalFile(sourcePath)});
+    QDragEnterEvent dragEnterEvent(targetPosition, Qt::CopyAction, &mimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(localTree->viewport(), &dragEnterEvent);
+    if (!dragEnterEvent.isAccepted())
+    {
+        QTextStream(stderr) << "Local file tree did not accept a local drag" << Qt::endl;
+        return false;
+    }
+
+    QDropEvent dropEvent(QPointF(targetPosition), Qt::CopyAction, &mimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(localTree->viewport(), &dropEvent);
+    QApplication::processEvents();
+    const QString movedPath = QDir(targetDirectory).filePath("move-source.txt");
+    if (!dropEvent.isAccepted() || QFileInfo::exists(sourcePath) || !QFileInfo::exists(movedPath))
+    {
+        QTextStream(stderr) << "Same-volume local tree drop did not move the source" << Qt::endl;
+        return false;
+    }
+
+    FilePanel remotePanel(FilePanel::Mode::RemotePlaceholder);
+    auto *remoteTree = remotePanel.findChild<QTreeWidget *>("remoteFileTree");
+    if (remoteTree == nullptr || remoteTree->dragEnabled() || remoteTree->dragDropMode() != QAbstractItemView::DropOnly)
+    {
+        QTextStream(stderr) << "Remote file tree is not configured as a drop-only target" << Qt::endl;
+        return false;
+    }
+    return true;
+}
 
 bool checkRemoteMixedDrop(MainWindow &window, const QString &remotePath)
 {
@@ -2365,6 +2468,7 @@ bool checkRemoteUiWorkflow(MainWindow &window)
         {"download", "upload", "edit", "readme.txt"},
         true);
     return checkFileCreateRenameWorkflow()
+        && checkFileTreeDropWorkflow()
         && baseWorkflowOk
         && checkQuickSaveCreatesSeparateSite(window)
         && checkRemoteConnectionControlWorkflow(window)

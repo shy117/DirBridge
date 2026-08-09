@@ -148,8 +148,11 @@ private:
     QString nextAvailableName(const QString &baseName) const;
     void showLocalProperties(const QString &path) const;
     void startDragFromSelection();
-    bool canAcceptTransferDrop(const QMimeData *mimeData) const;
-    void handleTransferDrop(const QMimeData *mimeData, const QPoint &position);
+    bool canAcceptTransferDrop(const QMimeData *mimeData, QObject *watched = nullptr) const;
+    void handleTransferDrop(const QMimeData *mimeData, const QPoint &position, QObject *watched = nullptr);
+    void handleLocalPathDrop(const QStringList &sourcePaths, const QString &targetDirectory);
+    void showTransferDropHint(QObject *watched, const QMimeData *mimeData, const QString &targetDirectory);
+    QString dropTargetDirectory(QObject *watched, const QPoint &position) const;
     QString remoteDropTargetDirectory(const QPoint &position) const;
     QList<RemoteTransferItem> selectedFileTransferItems() const;
     QString remoteChildPath(const QString &name) const;

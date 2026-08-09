@@ -401,6 +401,10 @@ void FilePanel::setupUi()
         m_localTree->setObjectName("localFileTree");
         m_localTree->setHeaderHidden(true);
         m_localTree->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        m_localTree->setAcceptDrops(true);
+        m_localTree->setDragEnabled(false);
+        m_localTree->setDragDropMode(QAbstractItemView::DropOnly);
+        m_localTree->setDropIndicatorShown(true);
         m_localTree->setMinimumWidth(180);
         m_contentSplitter->addWidget(m_localTree);
     }
@@ -409,6 +413,10 @@ void FilePanel::setupUi()
         m_remoteTree = new QTreeWidget(m_contentSplitter);
         m_remoteTree->setObjectName("remoteFileTree");
         m_remoteTree->setHeaderHidden(true);
+        m_remoteTree->setAcceptDrops(true);
+        m_remoteTree->setDragEnabled(false);
+        m_remoteTree->setDragDropMode(QAbstractItemView::DropOnly);
+        m_remoteTree->setDropIndicatorShown(true);
         m_remoteTree->setMinimumWidth(160);
         m_contentSplitter->addWidget(m_remoteTree);
     }
@@ -441,6 +449,14 @@ void FilePanel::setupUi()
 
     m_contentSplitter->addWidget(m_table);
     m_table->viewport()->installEventFilter(this);
+    if (m_localTree != nullptr)
+    {
+        m_localTree->viewport()->installEventFilter(this);
+    }
+    if (m_remoteTree != nullptr)
+    {
+        m_remoteTree->viewport()->installEventFilter(this);
+    }
     auto *renameShortcut = new QShortcut(QKeySequence(Qt::Key_F2), m_table);
     renameShortcut->setObjectName(objectPrefix + "RenameShortcut");
     renameShortcut->setContext(Qt::WidgetShortcut);
