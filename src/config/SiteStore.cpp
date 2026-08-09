@@ -34,7 +34,24 @@ std::vector<SiteProfile> SiteStore::load() const
     return document.value("sites", std::vector<SiteProfile>{});
 }
 
-void SiteStore::save(const std::vector<SiteProfile> &sites) const
+std::vector<std::string> SiteStore::loadGroups() const
+{
+    if (!std::filesystem::exists(m_path))
+    {
+        return {};
+    }
+
+    std::ifstream input(m_path);
+    if (!input)
+    {
+        throw std::runtime_error("Failed to open site config for reading: " + m_path.string());
+    }
+
+    const nlohmann::json document = nlohmann::json::parse(input);
+    return document.value("groups", std::vector<std::string>{});
+}
+
+void SiteStore::save(const std::vector<SiteProfile> &sites, const std::vector<std::string> &groups) const
 {
     std::filesystem::create_directories(m_path.parent_path());
 
@@ -42,6 +59,7 @@ void SiteStore::save(const std::vector<SiteProfile> &sites) const
     document["version"] = 1;
     document["passwordStorage"] = passwordStorageScheme();
     document["sites"] = sites;
+    document["groups"] = groups;
 
     std::ofstream output(m_path);
     if (!output)

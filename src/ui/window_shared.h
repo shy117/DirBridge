@@ -20,7 +20,9 @@ enum class SessionTreeItemType
 {
     Group = 1,
     Site = 2,
-    Recent = 3
+    Recent = 3,
+    SitesRoot = 4,
+    RecentRoot = 5
 };
 
 inline constexpr int sessionItemTypeRole = Qt::UserRole;

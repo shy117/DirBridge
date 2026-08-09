@@ -563,7 +563,8 @@ void checkSiteProfileAndSettingsStore()
     std::filesystem::create_directories(tempRoot);
 
     SiteStore siteStore(tempRoot / "sites.json");
-    siteStore.save({groupedSite});
+    const std::vector<std::string> storedGroups = {"生产", "空分组"};
+    siteStore.save({groupedSite}, storedGroups);
     {
         std::ifstream savedSites(siteStore.path());
         const std::string savedText((std::istreambuf_iterator<char>(savedSites)), std::istreambuf_iterator<char>());
@@ -575,6 +576,17 @@ void checkSiteProfileAndSettingsStore()
     require(loadedSites.front().group == "生产", "site store should preserve group");
     require(loadedSites.front().password == "stored-secret", "site store should decrypt saved password");
     require(!loadedSites.front().fileTreeVisible, "site store should preserve file-tree visibility");
+    const std::vector<std::string> loadedGroups = siteStore.loadGroups();
+    require(loadedGroups == storedGroups, "site store should preserve independent groups");
+
+    nlohmann::json legacySites;
+    legacySites["version"] = 1;
+    legacySites["sites"] = std::vector<SiteProfile>{groupedSite};
+    {
+        std::ofstream output(siteStore.path(), std::ios::trunc);
+        output << legacySites.dump(4);
+    }
+    require(siteStore.loadGroups().empty(), "legacy site store without groups should load an empty group list");
 
     SettingsStore settingsStore(tempRoot / "settings.json");
     UserSettings emptySettings = settingsStore.load();

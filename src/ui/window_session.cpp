@@ -70,9 +70,29 @@ void MainWindow::populateSessionManager()
 
     m_sessionTree->clear();
     auto *sitesRoot = new QTreeWidgetItem(m_sessionTree, {"站点"});
+    sitesRoot->setData(0, sessionItemTypeRole, static_cast<int>(SessionTreeItemType::SitesRoot));
     sitesRoot->setExpanded(true);
 
     std::map<QString, QTreeWidgetItem *> groupItems;
+    for (const std::string &storedGroup : m_siteGroups)
+    {
+        const QString groupName = QString::fromStdString(storedGroup).trimmed();
+        if (groupName.isEmpty() || groupName == QString("未分组"))
+        {
+            continue;
+        }
+        if (groupItems.find(groupName) != groupItems.end())
+        {
+            continue;
+        }
+
+        auto *groupItem = new QTreeWidgetItem(sitesRoot, {groupName});
+        groupItem->setData(0, sessionItemTypeRole, static_cast<int>(SessionTreeItemType::Group));
+        groupItem->setData(0, groupNameRole, QString::fromStdString(storedGroup));
+        groupItem->setExpanded(true);
+        groupItems.emplace(groupName, groupItem);
+    }
+
     const RemoteSession *currentSession = currentRemoteSession();
     const QString currentSiteId = currentSession == nullptr ? QString() : QString::fromStdString(currentSession->profile.id);
     for (int index = 0; index < static_cast<int>(m_sites.size()); ++index)
@@ -112,6 +132,7 @@ void MainWindow::populateSessionManager()
     }
 
     auto *recentRoot = new QTreeWidgetItem(m_sessionTree, {"最近会话"});
+    recentRoot->setData(0, sessionItemTypeRole, static_cast<int>(SessionTreeItemType::RecentRoot));
     recentRoot->setExpanded(true);
     for (const RecentSession &recent : m_settings.recentSessions)
     {
@@ -147,23 +168,36 @@ void MainWindow::showSessionManagerContextMenu(const QPoint &position)
     }
 
     QTreeWidgetItem *item = m_sessionTree->itemAt(position);
-    QMenu menu(m_sessionTree);
-    menu.addAction(fluentIcon("folder_add"), "新建站点", this, [this]() {
-        editSiteAtIndex(-1);
-    });
-
     const auto itemType = item == nullptr
         ? SessionTreeItemType{}
         : static_cast<SessionTreeItemType>(item->data(0, sessionItemTypeRole).toInt());
-    if (item != nullptr && itemType == SessionTreeItemType::Group)
+    const QString initialGroup = itemType == SessionTreeItemType::Group
+        ? item->data(0, groupNameRole).toString().trimmed()
+        : QString();
+
+    QMenu menu(m_sessionTree);
+    menu.addAction(fluentIcon("folder_add"), "新建站点", this, [this, initialGroup]() {
+        editSiteAtIndex(-1, initialGroup);
+    });
+    if (item == nullptr || itemType == SessionTreeItemType::SitesRoot)
+    {
+        menu.addSeparator();
+        menu.addAction(fluentIcon("folder_add"), "新建分组", this, [this]() {
+            promptCreateSiteGroup();
+        });
+    }
+    else if (itemType == SessionTreeItemType::Group)
     {
         const QString oldGroup = item->data(0, groupNameRole).toString();
         menu.addSeparator();
         menu.addAction(fluentIcon("edit"), "重命名分组", this, [this, oldGroup]() {
             promptRenameSiteGroup(oldGroup);
         });
+        menu.addAction(fluentIcon("delete"), "删除分组", this, [this, oldGroup]() {
+            deleteSiteGroup(oldGroup);
+        });
     }
-    else if (item != nullptr && itemType == SessionTreeItemType::Site)
+    else if (itemType == SessionTreeItemType::Site)
     {
         const int index = item->data(0, siteIndexRole).toInt();
         menu.addSeparator();
@@ -189,14 +223,26 @@ void MainWindow::showSessionManagerContextMenu(const QPoint &position)
             deleteSiteAtIndex(index);
         });
     }
-    else if (item != nullptr && itemType == SessionTreeItemType::Recent && !item->isDisabled())
+    else if (itemType == SessionTreeItemType::Recent)
     {
         const std::string siteId = item->data(0, siteIdRole).toString().toStdString();
         const QString lastRemotePath = item->data(0, remotePathRole).toString();
         menu.addSeparator();
-        menu.addAction(fluentIcon("checkmark_circle"), "连接", this, [this, siteId, lastRemotePath]() {
+        QAction *connectAction = menu.addAction(fluentIcon("checkmark_circle"), "连接", this, [this, siteId, lastRemotePath]() {
             connectRecentSession(siteId, lastRemotePath);
         });
+        connectAction->setEnabled(!item->isDisabled());
+        menu.addAction(fluentIcon("delete"), "删除记录", this, [this, siteId]() {
+            removeRecentSession(siteId);
+        });
+    }
+    else if (itemType == SessionTreeItemType::RecentRoot)
+    {
+        menu.addSeparator();
+        QAction *clearAction = menu.addAction(fluentIcon("delete"), "清空最近会话", this, [this]() {
+            clearRecentSessions();
+        });
+        clearAction->setEnabled(!m_settings.recentSessions.empty());
     }
 
     menu.exec(m_sessionTree->viewport()->mapToGlobal(position));
@@ -582,8 +628,9 @@ void MainWindow::connectSiteAtIndex(int index, const QString &initialRemotePath)
 /**
  * @brief 打开站点编辑流程，可用于新增站点或编辑既有站点。
  * @param index 站点索引；传入负值时表示新增站点。
+ * @param initialGroup 新增站点时预填的分组名称；编辑既有站点时忽略。
  */
-void MainWindow::editSiteAtIndex(int index)
+void MainWindow::editSiteAtIndex(int index, const QString &initialGroup)
 {
     SiteProfile profile;
     if (index >= 0 && index < static_cast<int>(m_sites.size()))
@@ -596,6 +643,11 @@ void MainWindow::editSiteAtIndex(int index)
         profile.port = defaultPortForProtocol(profile.protocol);
         profile.defaultRemotePath = "/";
         profile.encoding = "UTF-8";
+        const QString normalizedInitialGroup = initialGroup.trimmed();
+        if (normalizedInitialGroup != QString("未分组"))
+        {
+            profile.group = normalizedInitialGroup.toStdString();
+        }
     }
 
     if (!editSiteProfileDialog(this, profile))
@@ -613,6 +665,8 @@ void MainWindow::editSiteAtIndex(int index)
         m_sites.push_back(profile);
         appendLog("INFO", QString("已新增站点：%1").arg(siteDisplayName(profile)));
     }
+
+    ensureSiteGroupStored(profile.group);
     saveSites();
 }
 
@@ -652,6 +706,94 @@ void MainWindow::deleteSiteAtIndex(int index)
 }
 
 /**
+ * @brief 创建可持久化的独立站点分组。
+ * @param groupName 新分组名称。
+ * @return 名称有效且未重复时返回 true。
+ */
+bool MainWindow::createSiteGroup(const QString &groupName)
+{
+    const QString normalizedGroupName = groupName.trimmed();
+    if (normalizedGroupName.isEmpty() || normalizedGroupName == QString("未分组"))
+    {
+        return false;
+    }
+
+    const bool exists = std::any_of(m_siteGroups.begin(), m_siteGroups.end(), [&normalizedGroupName](const std::string &storedGroup) {
+        return QString::fromStdString(storedGroup).trimmed().compare(normalizedGroupName, Qt::CaseInsensitive) == 0;
+    });
+    if (exists)
+    {
+        return false;
+    }
+
+    m_siteGroups.push_back(normalizedGroupName.toStdString());
+    saveSites();
+    appendLog("INFO", QString("已新建站点分组：%1").arg(normalizedGroupName));
+    return true;
+}
+
+/**
+ * @brief 删除独立站点分组，并将其中站点移到未分组。
+ * @param groupName 待删除的分组名称。
+ * @return 分组存在且已删除时返回 true。
+ */
+bool MainWindow::deleteSiteGroup(const QString &groupName)
+{
+    const QString normalizedGroupName = groupName.trimmed();
+    if (normalizedGroupName.isEmpty() || normalizedGroupName == QString("未分组"))
+    {
+        return false;
+    }
+
+    const auto group = std::find_if(m_siteGroups.begin(), m_siteGroups.end(), [&normalizedGroupName](const std::string &storedGroup) {
+        return QString::fromStdString(storedGroup).trimmed().compare(normalizedGroupName, Qt::CaseInsensitive) == 0;
+    });
+    if (group == m_siteGroups.end())
+    {
+        return false;
+    }
+
+    const auto matchesGroup = [&normalizedGroupName](const SiteProfile &site) {
+        return QString::fromStdString(site.group).trimmed().compare(normalizedGroupName, Qt::CaseInsensitive) == 0;
+    };
+    const auto affectedSiteCount = static_cast<int>(std::count_if(m_sites.begin(), m_sites.end(), matchesGroup));
+    if (!m_dialogsSuppressedForTesting)
+    {
+        const QString message = affectedSiteCount == 0
+            ? QString("确定删除空分组“%1”吗？").arg(normalizedGroupName)
+            : QString("分组“%1”包含 %2 个站点，删除后站点将移动到“未分组”，是否继续？")
+                .arg(normalizedGroupName)
+                .arg(affectedSiteCount);
+        if (QMessageBox::question(this, "删除分组", message) != QMessageBox::Yes)
+        {
+            return false;
+        }
+    }
+
+    for (SiteProfile &site : m_sites)
+    {
+        if (matchesGroup(site))
+        {
+            site.group.clear();
+        }
+    }
+    for (const std::unique_ptr<RemoteSession> &session : m_remoteSessions)
+    {
+        if (session != nullptr && matchesGroup(session->profile))
+        {
+            session->profile.group.clear();
+        }
+    }
+
+    m_siteGroups.erase(std::remove_if(m_siteGroups.begin(), m_siteGroups.end(), [&normalizedGroupName](const std::string &storedGroup) {
+        return QString::fromStdString(storedGroup).trimmed().compare(normalizedGroupName, Qt::CaseInsensitive) == 0;
+    }), m_siteGroups.end());
+    saveSites();
+    appendLog("INFO", QString("已删除站点分组：%1").arg(normalizedGroupName));
+    return true;
+}
+
+/**
  * @brief 批量重命名站点分组，并同步更新当前已打开会话的分组信息。
  * @param oldGroup 原分组名称。
  * @param newGroup 新分组名称。
@@ -666,20 +808,65 @@ bool MainWindow::renameSiteGroup(const QString &oldGroup, const QString &newGrou
         return false;
     }
 
+    if (normalizedNewGroup == QString("未分组"))
+    {
+        return false;
+    }
+
+    const bool newGroupAlreadyExists = !normalizedNewGroup.isEmpty()
+        && std::any_of(m_siteGroups.begin(), m_siteGroups.end(), [&normalizedNewGroup, &normalizedOldGroup](const std::string &storedGroup) {
+            const QString storedName = QString::fromStdString(storedGroup).trimmed();
+            return storedName.compare(normalizedNewGroup, Qt::CaseInsensitive) == 0
+                && storedName.compare(normalizedOldGroup, Qt::CaseInsensitive) != 0;
+        });
+    if (newGroupAlreadyExists)
+    {
+        return false;
+    }
+
+    bool oldGroupExists = false;
+    for (std::string &storedGroup : m_siteGroups)
+    {
+        const QString storedName = QString::fromStdString(storedGroup).trimmed();
+        if (storedName.compare(normalizedOldGroup, Qt::CaseInsensitive) != 0)
+        {
+            continue;
+        }
+
+        oldGroupExists = true;
+        if (normalizedNewGroup.isEmpty())
+        {
+            storedGroup.clear();
+        }
+        else
+        {
+            storedGroup = normalizedNewGroup.toStdString();
+        }
+        break;
+    }
+
     std::vector<std::string> changedSiteIds;
     for (SiteProfile &site : m_sites)
     {
-        if (QString::fromStdString(site.group).trimmed() == normalizedOldGroup)
+        if (QString::fromStdString(site.group).trimmed().compare(normalizedOldGroup, Qt::CaseInsensitive) == 0)
         {
             site.group = normalizedNewGroup.toStdString();
             changedSiteIds.push_back(site.id);
         }
     }
 
-    if (changedSiteIds.empty())
+    if (!oldGroupExists && changedSiteIds.empty())
     {
         return false;
     }
+
+    if (!normalizedNewGroup.isEmpty() && !oldGroupExists)
+    {
+        m_siteGroups.push_back(normalizedNewGroup.toStdString());
+    }
+    m_siteGroups.erase(std::remove_if(m_siteGroups.begin(), m_siteGroups.end(), [](const std::string &storedGroup) {
+        return QString::fromStdString(storedGroup).trimmed().isEmpty();
+    }), m_siteGroups.end());
 
     for (const std::unique_ptr<RemoteSession> &session : m_remoteSessions)
     {
@@ -701,6 +888,30 @@ bool MainWindow::renameSiteGroup(const QString &oldGroup, const QString &newGrou
 }
 
 /**
+ * @brief 弹出输入框，引导用户创建站点分组。
+ */
+void MainWindow::promptCreateSiteGroup()
+{
+    bool ok = false;
+    const QString groupName = QInputDialog::getText(
+        this,
+        "新建分组",
+        "分组名称：",
+        QLineEdit::Normal,
+        {},
+        &ok).trimmed();
+    if (!ok)
+    {
+        return;
+    }
+
+    if (!createSiteGroup(groupName))
+    {
+        statusBar()->showMessage("分组名称为空、保留名称或已存在。");
+    }
+}
+
+/**
  * @brief 弹出输入框，引导用户重命名站点分组。
  * @param oldGroup 待重命名的原始分组名称。
  */
@@ -717,6 +928,12 @@ void MainWindow::promptRenameSiteGroup(const QString &oldGroup)
         &ok).trimmed();
     if (!ok)
     {
+        return;
+    }
+
+    if (newGroup.isEmpty())
+    {
+        statusBar()->showMessage("分组名称不能为空，请使用删除分组。");
         return;
     }
 
@@ -754,6 +971,48 @@ void MainWindow::recordRecentSession(const RemoteSession &session)
         m_settings.recentSessions.resize(10);
     }
     saveSettings();
+}
+
+/**
+ * @brief 删除指定站点的最近会话记录。
+ * @param siteId 站点 id。
+ */
+void MainWindow::removeRecentSession(const std::string &siteId)
+{
+    const auto oldSize = m_settings.recentSessions.size();
+    m_settings.recentSessions.erase(
+        std::remove_if(m_settings.recentSessions.begin(), m_settings.recentSessions.end(), [&siteId](const RecentSession &recent) {
+            return recent.siteId == siteId;
+        }),
+        m_settings.recentSessions.end());
+    if (m_settings.recentSessions.size() == oldSize)
+    {
+        return;
+    }
+
+    saveSettings();
+    appendLog("INFO", QString("已删除最近会话记录：%1").arg(QString::fromStdString(siteId)));
+}
+
+/**
+ * @brief 清空全部最近会话记录。
+ */
+void MainWindow::clearRecentSessions()
+{
+    if (m_settings.recentSessions.empty())
+    {
+        return;
+    }
+
+    if (!m_dialogsSuppressedForTesting
+        && QMessageBox::question(this, "清空最近会话", "确定清空全部最近会话记录吗？") != QMessageBox::Yes)
+    {
+        return;
+    }
+
+    m_settings.recentSessions.clear();
+    saveSettings();
+    appendLog("INFO", "已清空最近会话记录");
 }
 
 /**

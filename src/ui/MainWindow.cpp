@@ -732,6 +732,7 @@ void MainWindow::saveSiteForTesting(const SiteProfile &profile)
     {
         *existing = profile;
     }
+    ensureSiteGroupStored(profile.group);
     saveSites();
 }
 
@@ -747,6 +748,28 @@ bool MainWindow::removeSiteForTesting(const std::string &siteId)
     }
     saveSites();
     return true;
+}
+
+bool MainWindow::createSiteGroupForTesting(const QString &groupName)
+{
+    return createSiteGroup(groupName);
+}
+
+bool MainWindow::deleteSiteGroupForTesting(const QString &groupName)
+{
+    return deleteSiteGroup(groupName);
+}
+
+bool MainWindow::removeRecentSessionForTesting(const std::string &siteId)
+{
+    const auto oldSize = m_settings.recentSessions.size();
+    removeRecentSession(siteId);
+    return m_settings.recentSessions.size() != oldSize;
+}
+
+void MainWindow::clearRecentSessionsForTesting()
+{
+    clearRecentSessions();
 }
 
 bool MainWindow::renameSiteGroupForTesting(const QString &oldGroup, const QString &newGroup)
@@ -862,10 +885,29 @@ void MainWindow::loadSites()
     try
     {
         m_sites = m_siteStore.load();
+        m_siteGroups = m_siteStore.loadGroups();
+        bool migratedGroups = false;
+        for (const SiteProfile &site : m_sites)
+        {
+            if (site.group.empty())
+            {
+                continue;
+            }
+            if (std::find(m_siteGroups.begin(), m_siteGroups.end(), site.group) == m_siteGroups.end())
+            {
+                m_siteGroups.push_back(site.group);
+                migratedGroups = true;
+            }
+        }
+        if (migratedGroups)
+        {
+            m_siteStore.save(m_sites, m_siteGroups);
+        }
     }
     catch (const std::exception &error)
     {
         m_sites.clear();
+        m_siteGroups.clear();
         appendLog("ERROR", QString("加载站点配置失败：%1").arg(error.what()));
     }
 }
@@ -874,7 +916,7 @@ void MainWindow::saveSites()
 {
     try
     {
-        m_siteStore.save(m_sites);
+        m_siteStore.save(m_sites, m_siteGroups);
         populateSessionManager();
     }
     catch (const std::exception &error)
@@ -882,6 +924,26 @@ void MainWindow::saveSites()
         appendLog("ERROR", QString("保存站点配置失败：%1").arg(error.what()));
         showCriticalMessage("保存站点配置失败", error.what());
     }
+}
+
+bool MainWindow::ensureSiteGroupStored(const std::string &groupName)
+{
+    const QString normalizedGroupName = QString::fromStdString(groupName).trimmed();
+    if (normalizedGroupName.isEmpty() || normalizedGroupName == QString("未分组"))
+    {
+        return false;
+    }
+
+    const bool exists = std::any_of(m_siteGroups.begin(), m_siteGroups.end(), [&normalizedGroupName](const std::string &storedGroup) {
+        return QString::fromStdString(storedGroup).trimmed().compare(normalizedGroupName, Qt::CaseInsensitive) == 0;
+    });
+    if (exists)
+    {
+        return false;
+    }
+
+    m_siteGroups.push_back(normalizedGroupName.toStdString());
+    return true;
 }
 
 void MainWindow::loadSettings()

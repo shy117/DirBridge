@@ -14,7 +14,8 @@ public:
 
     const std::filesystem::path &path() const;
     std::vector<SiteProfile> load() const;
-    void save(const std::vector<SiteProfile> &sites) const;
+    std::vector<std::string> loadGroups() const;
+    void save(const std::vector<SiteProfile> &sites, const std::vector<std::string> &groups = {}) const;
     SiteProfile createDefaultSite() const;
 
 private:
