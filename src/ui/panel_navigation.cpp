@@ -69,6 +69,15 @@ void FilePanel::setFileTreeVisibilityRequestedHandler(std::function<void(bool)> 
 }
 
 /**
+ * @brief 设置本地路径成功变化时的回调。
+ * @param handler 接收规范化后的本地绝对路径。
+ */
+void FilePanel::setLocalPathChangedHandler(std::function<void(const QString &)> handler)
+{
+    m_localPathChanged = std::move(handler);
+}
+
+/**
  * @brief 设置远程路径跳转请求回调。
  * @param handler 接收目标路径与是否写入历史记录的回调。
  */
@@ -558,6 +567,10 @@ void FilePanel::navigateTo(const QString &path, bool addToHistory)
     populateLocalDirectory(m_currentPath);
     updateLocalTreeSelection(m_currentPath);
     updateNavigationButtons();
+    if (m_localPathChanged)
+    {
+        m_localPathChanged(m_currentPath);
+    }
 }
 
 /**

@@ -1738,6 +1738,68 @@ bool checkWindowCloseDuringUploadPreparation()
 }
 
 /**
+ * @brief 验证本地标签名称和本地文件树状态能够同步并持久化。
+ * @return 有效目录导航会更新标签、无效导航不会污染标签且重启能恢复本地树状态时返回 true。
+ */
+bool checkLocalPanelStateWorkflow()
+{
+    QTemporaryDir tempRoot;
+    if (!tempRoot.isValid())
+    {
+        return false;
+    }
+
+    const std::filesystem::path configRoot = tempRoot.path().toStdString();
+    const std::filesystem::path childDirectory = configRoot / "local-state-dir";
+    std::filesystem::create_directories(childDirectory);
+
+    DependencyCheckResult dependencyCheck;
+    dependencyCheck.siteConfigPath = (configRoot / "sites.json").string();
+    {
+        MainWindow window(dependencyCheck);
+        window.setDialogsSuppressedForTesting(true);
+        QTabWidget *localTabs = window.findChild<QTabWidget *>("localTabs");
+        QTreeWidget *localTree = window.findChild<QTreeWidget *>("localFileTree");
+        if (localTabs == nullptr || localTree == nullptr || localTabs->count() != 1)
+        {
+            return false;
+        }
+
+        window.setLocalPathForTesting(QString::fromStdString(childDirectory.string()));
+        QApplication::processEvents();
+        if (localTabs->tabText(0) != "本地：local-state-dir")
+        {
+            return false;
+        }
+
+        const QString titleBeforeInvalidNavigation = localTabs->tabText(0);
+        window.setLocalPathForTesting(QString::fromStdString((configRoot / "不存在的目录").string()));
+        QApplication::processEvents();
+        if (localTabs->tabText(0) != titleBeforeInvalidNavigation)
+        {
+            return false;
+        }
+
+        QAction *fileTreeAction = findActionByText(window, "文件树");
+        if (fileTreeAction == nullptr)
+        {
+            return false;
+        }
+        fileTreeAction->setChecked(false);
+        QApplication::processEvents();
+        if (!localTree->isHidden())
+        {
+            return false;
+        }
+    }
+
+    MainWindow restoredWindow(dependencyCheck);
+    restoredWindow.setDialogsSuppressedForTesting(true);
+    QTreeWidget *restoredTree = restoredWindow.findChild<QTreeWidget *>("localFileTree");
+    return restoredTree != nullptr && restoredTree->isHidden();
+}
+
+/**
  * @brief 验证 v0.5.0 会话管理器的分组和最近会话行为。
  * @param window 待测试的主窗口。
  * @return 已保存站点、分组和最近会话能在假远程标签页下正常工作时返回 true。
@@ -2177,6 +2239,7 @@ bool checkRemoteUiWorkflow(MainWindow &window)
         && checkRemoteConnectionControlWorkflow(window)
         && checkRemoteNavigationResponsiveness()
         && checkPersistedFileTreeVisibilityAfterRestart()
+        && checkLocalPanelStateWorkflow()
         && checkSessionManagerWorkflow(window)
         && checkRemoteMultiSessionWorkflow(window)
         && checkRemoteDirectoryOperationWorkflow(window)

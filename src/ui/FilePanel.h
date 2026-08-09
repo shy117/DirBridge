@@ -43,6 +43,7 @@ public:
     void setFileTreeVisible(bool visible);
     bool isFileTreeVisible() const;
     void setFileTreeVisibilityRequestedHandler(std::function<void(bool)> handler);
+    void setLocalPathChangedHandler(std::function<void(const QString &)> handler);
     void refresh();
     void setRemotePathRequestedHandler(std::function<void(const QString &, bool)> handler);
     void setRemoteRefreshRequestedHandler(std::function<void()> handler);
@@ -166,6 +167,7 @@ private:
     QStringList m_remoteKnownDirectories;
     QSet<QString> m_pendingLocalDeletes;
     std::function<void(bool)> m_fileTreeVisibilityRequested;
+    std::function<void(const QString &)> m_localPathChanged;
     std::function<void(const QString &, bool)> m_remotePathRequested;
     std::function<void()> m_remoteRefreshRequested;
     std::function<void(const QString &)> m_remoteCreateDirectoryRequested;
