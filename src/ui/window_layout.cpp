@@ -208,6 +208,7 @@ void MainWindow::setupQuickConnectBar()
             return;
         }
         m_sites.push_back(profile);
+        ensureSiteGroupStored(profile.group);
         saveSites();
         appendLog("INFO", QString("已新建站点：%1").arg(siteDisplayName(profile)));
     });

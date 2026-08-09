@@ -202,6 +202,7 @@ private:
 
     void loadSites();
     void saveSites();
+    bool ensureSiteGroupStored(const std::string &groupName);
     void loadSettings();
     void saveSettings();
     void setupMenuBar();
@@ -366,7 +367,7 @@ private:
     bool enqueueRemoteDirectoryDownload(RemoteSession &session, const QString &remoteDirectoryPath, const QString &localDirectoryPath, const QString &parentJobId = {}, QString *errorMessage = nullptr);
     int siteIndexById(const std::string &siteId) const;
     void connectSiteAtIndex(int index, const QString &initialRemotePath = {});
-    void editSiteAtIndex(int index);
+    void editSiteAtIndex(int index, const QString &initialGroup = {});
     void deleteSiteAtIndex(int index);
     bool createSiteGroup(const QString &groupName);
     bool deleteSiteGroup(const QString &groupName);

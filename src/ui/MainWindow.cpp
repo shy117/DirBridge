@@ -732,14 +732,7 @@ void MainWindow::saveSiteForTesting(const SiteProfile &profile)
     {
         *existing = profile;
     }
-    const QString groupName = QString::fromStdString(profile.group).trimmed();
-    if (!groupName.isEmpty()
-        && std::none_of(m_siteGroups.begin(), m_siteGroups.end(), [&groupName](const std::string &storedGroup) {
-            return QString::fromStdString(storedGroup).trimmed().compare(groupName, Qt::CaseInsensitive) == 0;
-        }))
-    {
-        m_siteGroups.push_back(groupName.toStdString());
-    }
+    ensureSiteGroupStored(profile.group);
     saveSites();
 }
 
@@ -931,6 +924,26 @@ void MainWindow::saveSites()
         appendLog("ERROR", QString("保存站点配置失败：%1").arg(error.what()));
         showCriticalMessage("保存站点配置失败", error.what());
     }
+}
+
+bool MainWindow::ensureSiteGroupStored(const std::string &groupName)
+{
+    const QString normalizedGroupName = QString::fromStdString(groupName).trimmed();
+    if (normalizedGroupName.isEmpty() || normalizedGroupName == QString("未分组"))
+    {
+        return false;
+    }
+
+    const bool exists = std::any_of(m_siteGroups.begin(), m_siteGroups.end(), [&normalizedGroupName](const std::string &storedGroup) {
+        return QString::fromStdString(storedGroup).trimmed().compare(normalizedGroupName, Qt::CaseInsensitive) == 0;
+    });
+    if (exists)
+    {
+        return false;
+    }
+
+    m_siteGroups.push_back(normalizedGroupName.toStdString());
+    return true;
 }
 
 void MainWindow::loadSettings()

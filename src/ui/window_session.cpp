@@ -168,14 +168,17 @@ void MainWindow::showSessionManagerContextMenu(const QPoint &position)
     }
 
     QTreeWidgetItem *item = m_sessionTree->itemAt(position);
-    QMenu menu(m_sessionTree);
-    menu.addAction(fluentIcon("folder_add"), "新建站点", this, [this]() {
-        editSiteAtIndex(-1);
-    });
-
     const auto itemType = item == nullptr
         ? SessionTreeItemType{}
         : static_cast<SessionTreeItemType>(item->data(0, sessionItemTypeRole).toInt());
+    const QString initialGroup = itemType == SessionTreeItemType::Group
+        ? item->data(0, groupNameRole).toString().trimmed()
+        : QString();
+
+    QMenu menu(m_sessionTree);
+    menu.addAction(fluentIcon("folder_add"), "新建站点", this, [this, initialGroup]() {
+        editSiteAtIndex(-1, initialGroup);
+    });
     if (item == nullptr || itemType == SessionTreeItemType::SitesRoot)
     {
         menu.addSeparator();
@@ -625,8 +628,9 @@ void MainWindow::connectSiteAtIndex(int index, const QString &initialRemotePath)
 /**
  * @brief 打开站点编辑流程，可用于新增站点或编辑既有站点。
  * @param index 站点索引；传入负值时表示新增站点。
+ * @param initialGroup 新增站点时预填的分组名称；编辑既有站点时忽略。
  */
-void MainWindow::editSiteAtIndex(int index)
+void MainWindow::editSiteAtIndex(int index, const QString &initialGroup)
 {
     SiteProfile profile;
     if (index >= 0 && index < static_cast<int>(m_sites.size()))
@@ -639,6 +643,11 @@ void MainWindow::editSiteAtIndex(int index)
         profile.port = defaultPortForProtocol(profile.protocol);
         profile.defaultRemotePath = "/";
         profile.encoding = "UTF-8";
+        const QString normalizedInitialGroup = initialGroup.trimmed();
+        if (normalizedInitialGroup != QString("未分组"))
+        {
+            profile.group = normalizedInitialGroup.toStdString();
+        }
     }
 
     if (!editSiteProfileDialog(this, profile))
@@ -657,14 +666,7 @@ void MainWindow::editSiteAtIndex(int index)
         appendLog("INFO", QString("已新增站点：%1").arg(siteDisplayName(profile)));
     }
 
-    const QString groupName = QString::fromStdString(profile.group).trimmed();
-    if (!groupName.isEmpty()
-        && std::none_of(m_siteGroups.begin(), m_siteGroups.end(), [&groupName](const std::string &storedGroup) {
-            return QString::fromStdString(storedGroup).trimmed().compare(groupName, Qt::CaseInsensitive) == 0;
-        }))
-    {
-        m_siteGroups.push_back(groupName.toStdString());
-    }
+    ensureSiteGroupStored(profile.group);
     saveSites();
 }
 
