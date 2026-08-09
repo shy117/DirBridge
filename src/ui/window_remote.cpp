@@ -304,7 +304,7 @@ void MainWindow::startRemoteConnection(RemoteSession &session)
                 catch (const std::exception &error)
                 {
                     result->detail = QString::fromUtf8(error.what());
-                    result->finalMessage = QString("站点已连接，但无法加载默认目录“%1”。%2")
+                    result->finalMessage = QString("站点连接未完成，无法加载默认目录“%1”。%2")
                         .arg(defaultRemotePath, userFacingRemoteError(result->detail));
                     result->fileSystem->disconnect();
                     result->connected = false;

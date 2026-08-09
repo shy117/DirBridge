@@ -11,6 +11,7 @@
 #include "ui/panel_shared.h"
 
 #include <QAction>
+#include <QAbstractItemDelegate>
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QComboBox>
@@ -33,7 +34,6 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QKeyEvent>
 #include <QProgressBar>
 #include <QPointer>
 #include <QPushButton>
@@ -173,7 +173,10 @@ bool checkFileCreateRenameWorkflow()
     }
     const QString renamedPath = QDir(temporaryDirectory.path()).filePath("renamed.txt");
     editor->setText("renamed.txt");
-    QMetaObject::invokeMethod(editor, "editingFinished", Qt::DirectConnection);
+    auto *delegate = table->itemDelegate();
+    delegate->commitData(editor);
+    delegate->closeEditor(editor, QAbstractItemDelegate::NoHint);
+    QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     QApplication::processEvents();
     if (!QFileInfo::exists(renamedPath) || QFileInfo::exists(originalPath))
     {
@@ -207,8 +210,8 @@ bool checkFileCreateRenameWorkflow()
         return false;
     }
     editor->setText("cancelled.txt");
-    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
-    QApplication::sendEvent(editor, &escape);
+    delegate->closeEditor(editor, QAbstractItemDelegate::RevertModelCache);
+    QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     QApplication::processEvents();
     if (!QFileInfo::exists(renamedPath) || QFileInfo::exists(QDir(temporaryDirectory.path()).filePath("cancelled.txt")))
     {
