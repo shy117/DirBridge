@@ -287,12 +287,27 @@ bool FilePanel::eventFilter(QObject *watched, QEvent *event)
         {
             return true;
         }
-        QTableWidgetItem *item = m_table->itemAt(position);
-        QTableWidgetItem *nameItem = item == nullptr ? nullptr : m_table->item(item->row(), 0);
+        const int row = m_table->rowAt(position.y());
+        QTableWidgetItem *nameItem = row < 0 ? nullptr : m_table->item(row, 0);
         return nameItem != nullptr && nameItem->data(Qt::UserRole + 1).toBool();
     };
 
-    if (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove)
+    if (event->type() == QEvent::DragEnter)
+    {
+        auto *dragEvent = static_cast<QDragEnterEvent *>(event);
+        if (canAcceptTransferDrop(dragEvent->mimeData(), watched))
+        {
+            const QPoint position = dropPosition();
+            const QString targetDirectory = dropTargetDirectory(watched, position);
+            dragEvent->setDropAction(dropAction(dragEvent->mimeData(), targetDirectory));
+            dragEvent->accept();
+            return true;
+        }
+        QToolTip::hideText();
+        return QWidget::eventFilter(watched, event);
+    }
+
+    if (event->type() == QEvent::DragMove)
     {
         auto *dragEvent = static_cast<QDragMoveEvent *>(event);
         if (canAcceptTransferDrop(dragEvent->mimeData(), watched))
@@ -556,9 +571,10 @@ QString FilePanel::dropTargetDirectory(QObject *watched, const QPoint &position)
     }
     if (m_table != nullptr && watched == m_table->viewport())
     {
-        if (QTableWidgetItem *item = m_table->itemAt(position); item != nullptr)
+        const int row = m_table->rowAt(position.y());
+        if (row >= 0)
         {
-            QTableWidgetItem *nameItem = m_table->item(item->row(), 0);
+            QTableWidgetItem *nameItem = m_table->item(row, 0);
             if (nameItem != nullptr && nameItem->data(Qt::UserRole + 1).toBool())
             {
                 const QString path = nameItem->data(Qt::UserRole).toString();
@@ -748,13 +764,13 @@ QString FilePanel::remoteDropTargetDirectory(const QPoint &position) const
         return {};
     }
 
-    QTableWidgetItem *item = m_table->itemAt(position);
-    if (item == nullptr)
+    const int row = m_table->rowAt(position.y());
+    if (row < 0)
     {
         return m_currentPath.isEmpty() ? "/" : m_currentPath;
     }
 
-    QTableWidgetItem *nameItem = m_table->item(item->row(), 0);
+    QTableWidgetItem *nameItem = m_table->item(row, 0);
     if (nameItem == nullptr)
     {
         return m_currentPath.isEmpty() ? "/" : m_currentPath;
