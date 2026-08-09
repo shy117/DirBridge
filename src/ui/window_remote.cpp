@@ -652,6 +652,12 @@ void MainWindow::createRemoteDirectory(RemoteSession &session, const QString &pa
         QString("远程目录已创建：%1").arg(path),
         [path](RemoteFileSystem &fileSystem) {
             return fileSystem.createDirectory(path.toStdString());
+        },
+        [path](RemoteSession &currentSession) {
+            if (currentSession.panel != nullptr)
+            {
+                currentSession.panel->queueInlineRenameForPath(path);
+            }
         });
 }
 
@@ -674,6 +680,12 @@ void MainWindow::createRemoteFile(RemoteSession &session, const QString &path)
         QString("远程文件已创建：%1").arg(path),
         [path](RemoteFileSystem &fileSystem) {
             return fileSystem.createFile(path.toStdString());
+        },
+        [path](RemoteSession &currentSession) {
+            if (currentSession.panel != nullptr)
+            {
+                currentSession.panel->queueInlineRenameForPath(path);
+            }
         });
 }
 
@@ -684,7 +696,8 @@ void MainWindow::startRemoteMutation(
     RemoteSession &session,
     const QString &errorTitle,
     const QString &successMessage,
-    std::function<RemoteOperationResult(RemoteFileSystem &)> operation)
+    std::function<RemoteOperationResult(RemoteFileSystem &)> operation,
+    std::function<void(RemoteSession &)> successHandler)
 {
     if (!session.connected || session.fileSystem == nullptr || !operation)
     {
@@ -703,13 +716,14 @@ void MainWindow::startRemoteMutation(
         fileSystem,
         errorTitle,
         successMessage,
+        successHandler,
         operation = std::move(operation)]() mutable {
         const RemoteOperationResult result = operation(*fileSystem);
         if (window == nullptr)
         {
             return;
         }
-        QMetaObject::invokeMethod(window.data(), [window, sessionId, errorTitle, successMessage, result]() {
+        QMetaObject::invokeMethod(window.data(), [window, sessionId, errorTitle, successMessage, successHandler, result]() {
             if (window == nullptr)
             {
                 return;
@@ -729,6 +743,10 @@ void MainWindow::startRemoteMutation(
             }
 
             window->appendLog("INFO", successMessage);
+            if (successHandler)
+            {
+                successHandler(*currentSession);
+            }
             if (currentSession->connected && !currentSession->currentPath.isEmpty())
             {
                 window->loadRemotePath(*currentSession, currentSession->currentPath, false);

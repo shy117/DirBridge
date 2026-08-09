@@ -289,7 +289,8 @@ private:
     void startRemoteMutation(RemoteSession &session,
                              const QString &errorTitle,
                              const QString &successMessage,
-                             std::function<RemoteOperationResult(RemoteFileSystem &)> operation);
+                             std::function<RemoteOperationResult(RemoteFileSystem &)> operation,
+                             std::function<void(RemoteSession &)> successHandler = {});
     void removeRemotePath(RemoteSession &session, const QString &path, std::optional<FileItemType> knownType = std::nullopt);
     void removeRemotePath(const QString &path);
     void finishRemoteRemove(const QString &sessionId, const QString &path, const QString &errorMessage);

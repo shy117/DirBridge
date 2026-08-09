@@ -1,6 +1,7 @@
 #include "ui/FilePanel.h"
 #include "ui/panel_shared.h"
 
+#include <QAbstractItemDelegate>
 #include <QAbstractItemView>
 #include <QDesktopServices>
 #include <QDir>
@@ -205,6 +206,30 @@ void FilePanel::setRemoteFilesDroppedOnRemoteHandler(std::function<void(const QS
 }
 
 /**
+ * @brief 记录远程新建项目，待目录刷新后进入内联重命名。
+ * @param path 新建项目的远程绝对路径。
+ */
+void FilePanel::queueInlineRenameForPath(const QString &path)
+{
+    if (m_mode != Mode::RemotePlaceholder || path.isEmpty())
+    {
+        return;
+    }
+
+    m_pendingInlineRenamePath = path;
+    for (int row = 0; row < m_table->rowCount(); ++row)
+    {
+        QTableWidgetItem *nameItem = m_table->item(row, 0);
+        if (nameItem != nullptr && nameItem->data(Qt::UserRole).toString() == path)
+        {
+            m_pendingInlineRenamePath.clear();
+            beginInlineRenameForPath(path);
+            return;
+        }
+    }
+}
+
+/**
  * @brief 返回当前面板路径。
  * @return 本地目录或远程目录路径。
  */
@@ -286,6 +311,8 @@ void FilePanel::setRemoteDisconnected(const QString &status)
         return;
     }
 
+    cancelInlineRename();
+    m_pendingInlineRenamePath.clear();
     m_history.clear();
     m_historyIndex = -1;
     populateRemotePlaceholder();
@@ -303,6 +330,8 @@ void FilePanel::setRemoteError(const QString &status)
         return;
     }
 
+    cancelInlineRename();
+    m_pendingInlineRenamePath.clear();
     m_stateLabel->setText(status);
     m_pathEdit->setText(m_currentPath.isEmpty() ? "/" : m_currentPath);
     updateRemoteNavigationButtons();
@@ -445,6 +474,20 @@ void FilePanel::connectSignals()
     connect(m_table, &QTableWidget::customContextMenuRequested, this, [this](const QPoint &position) {
         showUnifiedContextMenu(position);
     });
+    connect(m_table->itemDelegate(), &QAbstractItemDelegate::commitData, this, [this](QWidget *editor) {
+        if (editor == m_inlineRenameEditor)
+        {
+            m_inlineRenameCommitRequested = true;
+        }
+    });
+    connect(m_table->itemDelegate(), &QAbstractItemDelegate::closeEditor, this,
+        [this](QWidget *editor, QAbstractItemDelegate::EndEditHint hint) {
+            if (editor != m_inlineRenameEditor)
+            {
+                return;
+            }
+            finishInlineRename(m_inlineRenameCommitRequested && hint != QAbstractItemDelegate::RevertModelCache);
+        });
     connect(m_table->horizontalHeader(), &QHeaderView::sectionClicked, this, [this](int column) {
         if (m_mode == Mode::RemotePlaceholder && column >= 0 && column <= 3)
         {

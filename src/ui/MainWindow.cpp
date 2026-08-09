@@ -86,6 +86,52 @@ QIcon fluentIcon(const QString &name)
  */
 QString userFacingRemoteError(const QString &detail)
 {
+    if (detail.contains("already exists", Qt::CaseInsensitive)
+        || detail.contains("already exist", Qt::CaseInsensitive)
+        || detail.contains("file exists", Qt::CaseInsensitive)
+        || detail.contains("target item already exists", Qt::CaseInsensitive))
+    {
+        return "目标项目已存在，请使用其他名称。";
+    }
+    if (detail.contains("directory is not empty", Qt::CaseInsensitive)
+        || detail.contains("not empty", Qt::CaseInsensitive))
+    {
+        return "目录非空，请先清理目录内容。";
+    }
+    if (detail.contains("permission denied", Qt::CaseInsensitive)
+        || detail.contains("access denied", Qt::CaseInsensitive)
+        || detail.contains("operation not permitted", Qt::CaseInsensitive)
+        || detail.contains("write-protected", Qt::CaseInsensitive))
+    {
+        return "权限不足，请检查账号权限或目标目录权限。";
+    }
+    if (detail.contains("no such file", Qt::CaseInsensitive)
+        || detail.contains("no such directory", Qt::CaseInsensitive)
+        || (detail.contains("not found", Qt::CaseInsensitive)
+            && !detail.contains("host not found", Qt::CaseInsensitive))
+        || detail.contains("does not exist", Qt::CaseInsensitive)
+        || detail.contains("parent directory does not exist", Qt::CaseInsensitive))
+    {
+        return "文件或目录不存在，请检查目标路径。";
+    }
+    if (detail.contains("name is empty", Qt::CaseInsensitive)
+        || detail.contains("invalid name", Qt::CaseInsensitive)
+        || detail.contains("invalid path", Qt::CaseInsensitive)
+        || detail.contains("path is invalid", Qt::CaseInsensitive)
+        || detail.contains("bad path", Qt::CaseInsensitive)
+        || detail.contains("couldn't parse url", Qt::CaseInsensitive)
+        || detail.contains("cannot contain", Qt::CaseInsensitive))
+    {
+        return "名称或路径无效，请检查输入内容。";
+    }
+    if (detail.contains("not implemented", Qt::CaseInsensitive)
+        || detail.contains("not supported", Qt::CaseInsensitive)
+        || detail.contains("unsupported", Qt::CaseInsensitive)
+        || detail.contains("unknown command", Qt::CaseInsensitive)
+        || detail.contains("command not understood", Qt::CaseInsensitive))
+    {
+        return "服务器不支持此操作。";
+    }
     if (detail.contains("Connection timed out", Qt::CaseInsensitive))
     {
         return "连接超时，请检查主机地址、端口、网络或服务器状态。";
@@ -101,14 +147,11 @@ QString userFacingRemoteError(const QString &detail)
     }
     if (detail.contains("Authentication", Qt::CaseInsensitive)
         || detail.contains("Login denied", Qt::CaseInsensitive)
-        || detail.contains("Access denied", Qt::CaseInsensitive))
+        || detail.contains("invalid credentials", Qt::CaseInsensitive)
+        || detail.contains("wrong password", Qt::CaseInsensitive)
+        || detail.contains("could not authenticate", Qt::CaseInsensitive))
     {
-        return "认证失败，请检查用户名、密码或服务器权限。";
-    }
-    if (detail.contains("No such file", Qt::CaseInsensitive)
-        || detail.contains("not found", Qt::CaseInsensitive))
-    {
-        return "远程目录不存在或当前账号没有访问权限。";
+        return "认证失败，请检查用户名、密码或认证配置。";
     }
     if (detail.trimmed().isEmpty())
     {

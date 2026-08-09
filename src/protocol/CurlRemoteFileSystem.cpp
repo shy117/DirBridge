@@ -623,9 +623,9 @@ RemoteOperationResult CurlRemoteFileSystem::performQuoteAtUrlLocked(
     return {true, "remote command succeeded"};
 }
 
-RemoteOperationResult CurlRemoteFileSystem::performFtpCommandInDirectoryLocked(
+RemoteOperationResult CurlRemoteFileSystem::performFtpCommandsInDirectoryLocked(
     const std::string &directoryPath,
-    const std::string &command)
+    const std::vector<std::string> &commands)
 {
     char errorBuffer[CURL_ERROR_SIZE] = {};
     try
@@ -637,7 +637,12 @@ RemoteOperationResult CurlRemoteFileSystem::performFtpCommandInDirectoryLocked(
         setCurlLongOption(handle, CURLOPT_NOBODY, 1L);
         curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, errorBuffer);
 
-        CurlSlist commandList(curl_slist_append(nullptr, command.c_str()));
+        curl_slist *rawList = nullptr;
+        for (const std::string &command : commands)
+        {
+            rawList = curl_slist_append(rawList, command.c_str());
+        }
+        CurlSlist commandList(rawList);
         curl_easy_setopt(handle, CURLOPT_PREQUOTE, commandList.get());
 
         const CURLcode code = curl_easy_perform(handle);
@@ -793,9 +798,9 @@ RemoteOperationResult CurlRemoteFileSystem::removeFile(const std::string &path)
         return performQuoteAtUrlLocked(rootUrl(m_profile), {"rm " + sftpCommandPath(normalizedPath)});
     }
 
-    return performFtpCommandInDirectoryLocked(
+    return performFtpCommandsInDirectoryLocked(
         remoteParentPath(normalizedPath),
-        "DELE " + remoteBaseName(normalizedPath));
+        {"DELE " + remoteBaseName(normalizedPath)});
 }
 
 RemoteOperationResult CurlRemoteFileSystem::removeDirectory(const std::string &path)
@@ -811,9 +816,9 @@ RemoteOperationResult CurlRemoteFileSystem::removeDirectory(const std::string &p
     {
         return performQuoteAtUrlLocked(rootUrl(m_profile), {"rmdir " + sftpCommandPath(normalizedPath)});
     }
-    return performFtpCommandInDirectoryLocked(
+    return performFtpCommandsInDirectoryLocked(
         remoteParentPath(normalizedPath),
-        "RMD " + remoteBaseName(normalizedPath));
+        {"RMD " + remoteBaseName(normalizedPath)});
 }
 
 RemoteOperationResult CurlRemoteFileSystem::rename(const std::string &sourcePath, const std::string &targetPath)
@@ -831,6 +836,15 @@ RemoteOperationResult CurlRemoteFileSystem::rename(const std::string &sourcePath
         return performQuoteAtUrlLocked(
             rootUrl(m_profile),
             {"rename " + sftpCommandPath(normalizedSourcePath) + " " + sftpCommandPath(normalizedTargetPath)});
+    }
+
+    const std::string sourceParentPath = remoteParentPath(normalizedSourcePath);
+    const std::string targetParentPath = remoteParentPath(normalizedTargetPath);
+    if (sourceParentPath == targetParentPath)
+    {
+        return performFtpCommandsInDirectoryLocked(
+            sourceParentPath,
+            {"RNFR " + remoteBaseName(normalizedSourcePath), "RNTO " + remoteBaseName(normalizedTargetPath)});
     }
 
     return performQuoteAtUrlLocked(

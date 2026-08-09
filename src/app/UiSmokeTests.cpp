@@ -22,17 +22,22 @@
 #include <QMimeData>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QDropEvent>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFile>
+#include <QFileInfo>
 #include <QHeaderView>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeyEvent>
 #include <QProgressBar>
 #include <QPointer>
 #include <QPushButton>
 #include <QSaveFile>
+#include <QShortcut>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QToolButton>
@@ -55,6 +60,11 @@
 
 QAction *findActionByText(MainWindow &window, const QString &text);
 bool checkAboutDialog(MainWindow &window);
+
+namespace window_shared
+{
+QString userFacingRemoteError(const QString &detail);
+}
 
 /**
  * @brief 测量一次性展示大量远程文件时的 UI 主线程耗时。
@@ -85,6 +95,126 @@ qint64 measureLargeRemoteDirectoryPopulation()
     timer.start();
     panel.setRemoteItems("/performance", items, QString(), false);
     return timer.elapsed();
+}
+
+/**
+ * @brief 验证本地文件项目的内联重命名和常见远程错误提示分类。
+ * @return 工作流与提示分类均符合预期时返回 true。
+ */
+bool checkFileCreateRenameWorkflow()
+{
+    if (window_shared::userFacingRemoteError("target already exists") != "目标项目已存在，请使用其他名称。"
+        || window_shared::userFacingRemoteError("Permission denied") != "权限不足，请检查账号权限或目标目录权限。"
+        || window_shared::userFacingRemoteError("directory is not empty") != "目录非空，请先清理目录内容。"
+        || window_shared::userFacingRemoteError("invalid path") != "名称或路径无效，请检查输入内容。"
+        || window_shared::userFacingRemoteError("unknown command") != "服务器不支持此操作。"
+        || window_shared::userFacingRemoteError("Login denied") != "认证失败，请检查用户名、密码或认证配置。")
+    {
+        QTextStream(stderr) << "Remote operation error categories are incomplete" << Qt::endl;
+        return false;
+    }
+
+    QTemporaryDir temporaryDirectory;
+    if (!temporaryDirectory.isValid())
+    {
+        QTextStream(stderr) << "Unable to create temporary directory for file create/rename smoke test" << Qt::endl;
+        return false;
+    }
+
+    const QString originalPath = QDir(temporaryDirectory.path()).filePath("original.txt");
+    QFile originalFile(originalPath);
+    if (!originalFile.open(QIODevice::WriteOnly | QIODevice::NewOnly))
+    {
+        QTextStream(stderr) << "Unable to create file for inline rename smoke test" << Qt::endl;
+        return false;
+    }
+    originalFile.close();
+
+    FilePanel panel(FilePanel::Mode::Local);
+    panel.resize(900, 600);
+    panel.show();
+    panel.setLocalPathForTesting(temporaryDirectory.path());
+    QApplication::processEvents();
+
+    auto *table = panel.findChild<QTableWidget *>("localFileTable");
+    auto *shortcut = panel.findChild<QShortcut *>("localRenameShortcut");
+    if (table == nullptr || shortcut == nullptr)
+    {
+        QTextStream(stderr) << "Local file create/rename smoke UI objects are missing" << Qt::endl;
+        return false;
+    }
+
+    int originalRow = -1;
+    for (int row = 0; row < table->rowCount(); ++row)
+    {
+        QTableWidgetItem *nameItem = table->item(row, 0);
+        if (nameItem != nullptr && nameItem->data(Qt::UserRole).toString() == originalPath)
+        {
+            originalRow = row;
+            break;
+        }
+    }
+    if (originalRow < 0)
+    {
+        QTextStream(stderr) << "Inline rename smoke source row is missing" << Qt::endl;
+        return false;
+    }
+
+    table->selectRow(originalRow);
+    QMetaObject::invokeMethod(shortcut, "activated", Qt::DirectConnection);
+    QApplication::processEvents();
+    auto *editor = panel.findChild<QLineEdit *>("inlineRenameEditor");
+    if (editor == nullptr)
+    {
+        QTextStream(stderr) << "Inline rename editor was not created" << Qt::endl;
+        return false;
+    }
+    const QString renamedPath = QDir(temporaryDirectory.path()).filePath("renamed.txt");
+    editor->setText("renamed.txt");
+    QMetaObject::invokeMethod(editor, "editingFinished", Qt::DirectConnection);
+    QApplication::processEvents();
+    if (!QFileInfo::exists(renamedPath) || QFileInfo::exists(originalPath))
+    {
+        QTextStream(stderr) << "Inline rename did not update the local filesystem" << Qt::endl;
+        return false;
+    }
+
+    int renamedRow = -1;
+    for (int row = 0; row < table->rowCount(); ++row)
+    {
+        QTableWidgetItem *nameItem = table->item(row, 0);
+        if (nameItem != nullptr && nameItem->data(Qt::UserRole).toString() == renamedPath)
+        {
+            renamedRow = row;
+            break;
+        }
+    }
+    if (renamedRow < 0)
+    {
+        QTextStream(stderr) << "Renamed local row is missing after refresh" << Qt::endl;
+        return false;
+    }
+
+    table->selectRow(renamedRow);
+    QMetaObject::invokeMethod(shortcut, "activated", Qt::DirectConnection);
+    QApplication::processEvents();
+    editor = panel.findChild<QLineEdit *>("inlineRenameEditor");
+    if (editor == nullptr)
+    {
+        QTextStream(stderr) << "Inline rename editor was not recreated" << Qt::endl;
+        return false;
+    }
+    editor->setText("cancelled.txt");
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(editor, &escape);
+    QApplication::processEvents();
+    if (!QFileInfo::exists(renamedPath) || QFileInfo::exists(QDir(temporaryDirectory.path()).filePath("cancelled.txt")))
+    {
+        QTextStream(stderr) << "Esc did not cancel inline rename" << Qt::endl;
+        return false;
+    }
+
+    return true;
 }
 
 /**
@@ -2234,7 +2364,8 @@ bool checkRemoteUiWorkflow(MainWindow &window)
         "/home/testuser/remote_test",
         {"download", "upload", "edit", "readme.txt"},
         true);
-    return baseWorkflowOk
+    return checkFileCreateRenameWorkflow()
+        && baseWorkflowOk
         && checkQuickSaveCreatesSeparateSite(window)
         && checkRemoteConnectionControlWorkflow(window)
         && checkRemoteNavigationResponsiveness()
