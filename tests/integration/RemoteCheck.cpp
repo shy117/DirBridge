@@ -220,6 +220,8 @@ int main(int argc, char **argv)
             || envValue("DIRBRIDGE_TEST_CLEAN_ONLY", false) == "1";
         const bool fileOnly = hasArgument(argc, argv, "--file-only")
             || envValue("DIRBRIDGE_TEST_FILE_ONLY", false) == "1";
+        const bool unicodeName = hasArgument(argc, argv, "--unicode-name")
+            || envValue("DIRBRIDGE_TEST_UNICODE_NAME", false) == "1";
 
         step("connecting " + toString(profile.protocol) + "://" + profile.host + ':' + std::to_string(profile.port)
             + " path=" + profile.defaultRemotePath);
@@ -265,7 +267,7 @@ int main(int argc, char **argv)
             return 0;
         }
 
-        const std::string directoryName = uniqueName("dirbridge check ");
+        const std::string directoryName = uniqueName(unicodeName ? u8"dirbridge 删除验证 " : "dirbridge check ");
         const std::string directoryPath = joinRemotePath(profile.defaultRemotePath, directoryName);
         const std::string targetDirectoryPath = directoryPath + "_renamed";
         uploadFilePath = joinRemotePath(profile.defaultRemotePath, directoryName + ".txt");
@@ -275,7 +277,7 @@ int main(int argc, char **argv)
         {
             const std::filesystem::path tempRoot = std::filesystem::temp_directory_path() / "dirbridge-remote-check";
             std::filesystem::create_directories(tempRoot);
-            const std::filesystem::path uploadSource = tempRoot / (directoryName + ".txt");
+            const std::filesystem::path uploadSource = tempRoot / (uniqueName("dirbridge local ") + ".txt");
             {
                 std::ofstream output(uploadSource, std::ios::binary | std::ios::trunc);
                 output << "DirBridge remote file-only check\n";
@@ -288,7 +290,7 @@ int main(int argc, char **argv)
             items = remote.listDirectory(profile.defaultRemotePath);
             require(containsPath(items, uploadFilePath, FileItemType::File), "uploaded file is not listed");
 
-            const std::filesystem::path downloadTarget = tempRoot / (directoryName + ".download.txt");
+            const std::filesystem::path downloadTarget = tempRoot / (uniqueName("dirbridge download ") + ".txt");
             step("downloading file " + uploadFilePath);
             result = remote.downloadFile(uploadFilePath, downloadTarget.string());
             require(result.success, "download file failed: " + result.message);
@@ -297,6 +299,8 @@ int main(int argc, char **argv)
             step("removing file " + uploadFilePath);
             result = remote.removeFile(uploadFilePath);
             require(result.success, "remove uploaded file failed: " + result.message);
+            items = remote.listDirectory(profile.defaultRemotePath);
+            require(!containsPath(items, uploadFilePath, FileItemType::File), "removed file is still listed");
             uploadFilePath.clear();
 
             remote.disconnect();
@@ -350,7 +354,7 @@ int main(int argc, char **argv)
 
         const std::filesystem::path tempRoot = std::filesystem::temp_directory_path() / "dirbridge-remote-check";
         std::filesystem::create_directories(tempRoot);
-        const std::filesystem::path uploadSource = tempRoot / (directoryName + ".txt");
+        const std::filesystem::path uploadSource = tempRoot / (uniqueName("dirbridge local ") + ".txt");
         {
             std::ofstream output(uploadSource, std::ios::binary | std::ios::trunc);
             output << "DirBridge remote check\n";
@@ -369,7 +373,7 @@ int main(int argc, char **argv)
             return 0;
         }
 
-        const std::filesystem::path downloadTarget = tempRoot / (directoryName + ".download.txt");
+        const std::filesystem::path downloadTarget = tempRoot / (uniqueName("dirbridge download ") + ".txt");
         step("downloading file " + uploadFilePath);
         result = remote.downloadFile(uploadFilePath, downloadTarget.string());
         require(result.success, "download file failed: " + result.message);
@@ -385,21 +389,21 @@ int main(int argc, char **argv)
         result = remote.removeFile(uploadFilePath);
         require(result.success, "remove uploaded file failed: " + result.message);
 
-        uploadFilePath.clear();
-
         step("removing empty file " + createdFilePath);
         result = remote.removeFile(createdFilePath);
         require(result.success, "remove created empty file failed: " + result.message);
-        createdFilePath.clear();
 
         step("removing directory " + renamedDirectoryPath);
         result = remote.removeDirectory(renamedDirectoryPath);
         require(result.success, "remove renamed directory failed: " + result.message);
-        renamedDirectoryPath.clear();
 
         items = remote.listDirectory(profile.defaultRemotePath);
         require(!containsPath(items, uploadFilePath, FileItemType::File), "removed file is still listed");
+        require(!containsPath(items, createdFilePath, FileItemType::File), "removed empty file is still listed");
         require(!containsPath(items, renamedDirectoryPath, FileItemType::Directory), "removed directory is still listed");
+        uploadFilePath.clear();
+        createdFilePath.clear();
+        renamedDirectoryPath.clear();
 
         remote.disconnect();
         require(!remote.isConnected(), "remote did not report disconnected");
