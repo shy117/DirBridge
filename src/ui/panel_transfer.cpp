@@ -259,7 +259,8 @@ bool FilePanel::eventFilter(QObject *watched, QEvent *event)
         {
             return Qt::MoveAction;
         }
-        if (m_mode == Mode::Local && mimeData->hasUrls() && watched == m_localTree->viewport())
+        if (m_mode == Mode::Local && mimeData->hasUrls()
+            && (watched == m_localTree->viewport() || watched == m_table->viewport()))
         {
             for (const QUrl &url : mimeData->urls())
             {
@@ -272,12 +273,38 @@ bool FilePanel::eventFilter(QObject *watched, QEvent *event)
         return Qt::CopyAction;
     };
 
+    auto requiresTableDirectoryTarget = [this, watched](const QMimeData *mimeData) {
+        if (watched != m_table->viewport())
+        {
+            return false;
+        }
+        return (m_mode == Mode::Local && mimeData->hasUrls())
+            || (m_mode == Mode::RemotePlaceholder && mimeData->hasFormat(RemotePathMimeType));
+    };
+
+    auto isTableDirectoryTarget = [this, watched](const QPoint &position) {
+        if (watched != m_table->viewport())
+        {
+            return true;
+        }
+        QTableWidgetItem *item = m_table->itemAt(position);
+        QTableWidgetItem *nameItem = item == nullptr ? nullptr : m_table->item(item->row(), 0);
+        return nameItem != nullptr && nameItem->data(Qt::UserRole + 1).toBool();
+    };
+
     if (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove)
     {
         auto *dragEvent = static_cast<QDragMoveEvent *>(event);
         if (canAcceptTransferDrop(dragEvent->mimeData(), watched))
         {
-            const QString targetDirectory = dropTargetDirectory(watched, dropPosition());
+            const QPoint position = dropPosition();
+            const QString targetDirectory = dropTargetDirectory(watched, position);
+            if (requiresTableDirectoryTarget(dragEvent->mimeData()) && !isTableDirectoryTarget(position))
+            {
+                QToolTip::hideText();
+                dragEvent->ignore();
+                return true;
+            }
             dragEvent->setDropAction(dropAction(dragEvent->mimeData(), targetDirectory));
             dragEvent->accept();
             showTransferDropHint(watched, dragEvent->mimeData(), targetDirectory);
@@ -303,10 +330,17 @@ bool FilePanel::eventFilter(QObject *watched, QEvent *event)
 #else
             const QPoint dropPosition = dropEvent->pos();
 #endif
-            handleTransferDrop(dropEvent->mimeData(), dropPosition, watched);
             const QString targetDirectory = dropTargetDirectory(watched, dropPosition);
+            if (requiresTableDirectoryTarget(dropEvent->mimeData()) && !isTableDirectoryTarget(dropPosition))
+            {
+                QToolTip::hideText();
+                dropEvent->ignore();
+                return true;
+            }
+            handleTransferDrop(dropEvent->mimeData(), dropPosition, watched);
             if (dropEvent->mimeData()->hasFormat(RemotePathMimeType)
-                || (m_mode == Mode::Local && watched == m_localTree->viewport() && dropEvent->mimeData()->hasUrls()))
+                || (m_mode == Mode::Local && dropEvent->mimeData()->hasUrls()
+                    && (watched == m_localTree->viewport() || watched == m_table->viewport())))
             {
                 dropEvent->setDropAction(dropAction(dropEvent->mimeData(), targetDirectory));
             }
@@ -404,7 +438,8 @@ bool FilePanel::canAcceptTransferDrop(const QMimeData *mimeData, QObject *watche
         {
             return m_remoteFilesDroppedOnLocal != nullptr;
         }
-        return watched == m_localTree->viewport() && mimeData->hasUrls();
+        return mimeData->hasUrls()
+            && (watched == m_localTree->viewport() || watched == m_table->viewport());
     }
 
     return false;
@@ -458,7 +493,8 @@ void FilePanel::handleTransferDrop(const QMimeData *mimeData, const QPoint &posi
         return;
     }
 
-    if (mimeData->hasUrls() && watched == m_localTree->viewport())
+    if (mimeData->hasUrls()
+        && (watched == m_localTree->viewport() || watched == m_table->viewport()))
     {
         QStringList localPaths;
         for (const QUrl &url : mimeData->urls())
@@ -518,6 +554,22 @@ QString FilePanel::dropTargetDirectory(QObject *watched, const QPoint &position)
             }
         }
     }
+    if (m_table != nullptr && watched == m_table->viewport())
+    {
+        if (QTableWidgetItem *item = m_table->itemAt(position); item != nullptr)
+        {
+            QTableWidgetItem *nameItem = m_table->item(item->row(), 0);
+            if (nameItem != nullptr && nameItem->data(Qt::UserRole + 1).toBool())
+            {
+                const QString path = nameItem->data(Qt::UserRole).toString();
+                if (!path.isEmpty() && QFileInfo(path).isDir())
+                {
+                    return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+                }
+            }
+        }
+        return QDir::cleanPath(m_currentPath);
+    }
     return QDir::cleanPath(m_currentPath);
 }
 
@@ -537,7 +589,8 @@ void FilePanel::showTransferDropHint(QObject *watched, const QMimeData *mimeData
     }
 
     QString actionText;
-    if (m_mode == Mode::Local && mimeData->hasUrls() && watched == m_localTree->viewport())
+    if (m_mode == Mode::Local && mimeData->hasUrls()
+        && (watched == m_localTree->viewport() || watched == m_table->viewport()))
     {
         for (const QUrl &url : mimeData->urls())
         {
@@ -549,7 +602,7 @@ void FilePanel::showTransferDropHint(QObject *watched, const QMimeData *mimeData
         }
     }
     else if (m_mode == Mode::RemotePlaceholder && mimeData->hasFormat(RemotePathMimeType)
-        && watched == m_remoteTree->viewport())
+        && (watched == m_remoteTree->viewport() || watched == m_table->viewport()))
     {
         actionText = "移动到";
     }
