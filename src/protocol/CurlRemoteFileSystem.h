@@ -28,6 +28,9 @@ public:
 private:
     CURL *prepareHandleLocked(CURL *&handle);
     RemoteOperationResult performQuoteAtUrlLocked(const std::string &url, const std::vector<std::string> &commands);
+    RemoteOperationResult performFtpCommandsInDirectoryLocked(
+        const std::string &directoryPath,
+        const std::vector<std::string> &commands);
 
     SiteProfile m_profile;
     bool m_connected = false;

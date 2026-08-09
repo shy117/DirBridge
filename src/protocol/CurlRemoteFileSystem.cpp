@@ -623,6 +623,43 @@ RemoteOperationResult CurlRemoteFileSystem::performQuoteAtUrlLocked(
     return {true, "remote command succeeded"};
 }
 
+RemoteOperationResult CurlRemoteFileSystem::performFtpCommandsInDirectoryLocked(
+    const std::string &directoryPath,
+    const std::vector<std::string> &commands)
+{
+    char errorBuffer[CURL_ERROR_SIZE] = {};
+    try
+    {
+        CURL *handle = prepareHandleLocked(m_directoryHandle);
+        const std::string url = directoryUrl(handle, m_profile, directoryPath);
+        setCurlOption(handle, CURLOPT_URL, url.c_str());
+        applyProfileOptions(handle, m_profile);
+        setCurlLongOption(handle, CURLOPT_NOBODY, 1L);
+        curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, errorBuffer);
+
+        curl_slist *rawList = nullptr;
+        for (const std::string &command : commands)
+        {
+            rawList = curl_slist_append(rawList, command.c_str());
+        }
+        CurlSlist commandList(rawList);
+        curl_easy_setopt(handle, CURLOPT_PREQUOTE, commandList.get());
+
+        const CURLcode code = curl_easy_perform(handle);
+        if (code != CURLE_OK)
+        {
+            const std::string detail = errorBuffer[0] != '\0' ? errorBuffer : curl_easy_strerror(code);
+            return {false, detail};
+        }
+    }
+    catch (const std::exception &error)
+    {
+        return {false, error.what()};
+    }
+
+    return {true, "remote command succeeded"};
+}
+
 std::vector<FileItem> CurlRemoteFileSystem::listDirectory(const std::string &path)
 {
     std::lock_guard<std::mutex> lock(m_directoryHandleMutex);
@@ -794,6 +831,15 @@ RemoteOperationResult CurlRemoteFileSystem::rename(const std::string &sourcePath
         return performQuoteAtUrlLocked(
             rootUrl(m_profile),
             {"rename " + sftpCommandPath(normalizedSourcePath) + " " + sftpCommandPath(normalizedTargetPath)});
+    }
+
+    const std::string sourceParentPath = remoteParentPath(normalizedSourcePath);
+    const std::string targetParentPath = remoteParentPath(normalizedTargetPath);
+    if (sourceParentPath == targetParentPath)
+    {
+        return performFtpCommandsInDirectoryLocked(
+            sourceParentPath,
+            {"RNFR " + remoteBaseName(normalizedSourcePath), "RNTO " + remoteBaseName(normalizedTargetPath)});
     }
 
     return performQuoteAtUrlLocked(
