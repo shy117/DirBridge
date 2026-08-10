@@ -193,6 +193,121 @@ void cleanupPrefix(CurlRemoteFileSystem &remote, const std::string &basePath, co
         }
     }
 }
+
+void removeRemoteDirectoryTree(CurlRemoteFileSystem &remote, const std::string &directoryPath)
+{
+    const std::vector<FileItem> items = remote.listDirectory(directoryPath);
+    for (const FileItem &item : items)
+    {
+        if (item.type == FileItemType::Directory)
+        {
+            removeRemoteDirectoryTree(remote, item.path);
+            continue;
+        }
+
+        const RemoteOperationResult removeResult = remote.removeFile(item.path);
+        require(removeResult.success, "remove regression file failed: " + removeResult.message);
+    }
+
+    const RemoteOperationResult removeResult = remote.removeDirectory(directoryPath);
+    require(removeResult.success, "remove regression directory failed: " + removeResult.message);
+}
+
+void runFtpCommandRegression(
+    CurlRemoteFileSystem &remote,
+    const std::string &basePath,
+    bool checkPermissions)
+{
+    const std::string rootPath = joinRemotePath(basePath, uniqueName("dirbridge ftp regression "));
+    const std::string sourcePath = joinRemotePath(rootPath, "source");
+    const std::string targetPath = joinRemotePath(rootPath, "target");
+    bool rootCreated = false;
+
+    try
+    {
+        step("creating FTP regression root " + rootPath);
+        RemoteOperationResult result = remote.createDirectory(rootPath);
+        require(result.success, "create regression root failed: " + result.message);
+        rootCreated = true;
+
+        (void)remote.listDirectory(rootPath);
+        result = remote.createDirectory(sourcePath);
+        require(result.success, "create regression source failed: " + result.message);
+        (void)remote.listDirectory(basePath);
+        result = remote.createDirectory(targetPath);
+        require(result.success, "create regression target failed: " + result.message);
+
+        for (int index = 0; index < 4; ++index)
+        {
+            const std::string repeatedPath = joinRemotePath(rootPath, "repeat_" + std::to_string(index));
+            (void)remote.listDirectory(index % 2 == 0 ? sourcePath : targetPath);
+            result = remote.createDirectory(repeatedPath);
+            require(result.success, "repeated directory create failed: " + result.message);
+        }
+
+        const std::string sourceFolderPath = joinRemotePath(sourcePath, "uploaded folder");
+        const std::string targetFolderPath = joinRemotePath(targetPath, "uploaded folder");
+        const std::string nestedPath = joinRemotePath(sourceFolderPath, "nested");
+        const std::string nestedFilePath = joinRemotePath(nestedPath, "payload.txt");
+        result = remote.createDirectory(sourceFolderPath);
+        require(result.success, "create upload folder failed: " + result.message);
+        result = remote.createDirectory(nestedPath);
+        require(result.success, "create nested upload folder failed: " + result.message);
+        result = remote.createFile(nestedFilePath);
+        require(result.success, "create nested upload file failed: " + result.message);
+
+        for (int index = 0; index < 2; ++index)
+        {
+            (void)remote.listDirectory(index == 0 ? sourcePath : basePath);
+            result = remote.rename(sourceFolderPath, targetFolderPath);
+            require(result.success, "cross-directory folder move failed: " + result.message);
+            (void)remote.listDirectory(targetPath);
+            result = remote.rename(targetFolderPath, sourceFolderPath);
+            require(result.success, "cross-directory folder move-back failed: " + result.message);
+        }
+
+        const std::string sourceFilePath = joinRemotePath(sourcePath, "dragged file.txt");
+        const std::string targetFilePath = joinRemotePath(targetPath, "dragged file.txt");
+        result = remote.createFile(sourceFilePath);
+        require(result.success, "create drag regression file failed: " + result.message);
+        for (int index = 0; index < 2; ++index)
+        {
+            (void)remote.listDirectory(index == 0 ? targetPath : rootPath);
+            result = remote.rename(sourceFilePath, targetFilePath);
+            require(result.success, "cross-directory file move failed: " + result.message);
+            (void)remote.listDirectory(sourcePath);
+            result = remote.rename(targetFilePath, sourceFilePath);
+            require(result.success, "cross-directory file move-back failed: " + result.message);
+        }
+
+        if (checkPermissions)
+        {
+            (void)remote.listDirectory(targetPath);
+            result = remote.setPermissions(sourceFilePath, 0644);
+            require(result.success, "FTP permission change failed: " + result.message);
+        }
+
+        removeRemoteDirectoryTree(remote, rootPath);
+        rootCreated = false;
+        const std::vector<FileItem> baseItems = remote.listDirectory(basePath);
+        require(!containsPath(baseItems, rootPath, FileItemType::Directory), "FTP regression root was not removed");
+    }
+    catch (...)
+    {
+        if (rootCreated)
+        {
+            try
+            {
+                removeRemoteDirectoryTree(remote, rootPath);
+            }
+            catch (const std::exception &cleanupError)
+            {
+                std::cerr << "cleanup FTP regression root " << rootPath << ": " << cleanupError.what() << '\n';
+            }
+        }
+        throw;
+    }
+}
 }
 
 int main(int argc, char **argv)
@@ -222,6 +337,10 @@ int main(int argc, char **argv)
             || envValue("DIRBRIDGE_TEST_FILE_ONLY", false) == "1";
         const bool unicodeName = hasArgument(argc, argv, "--unicode-name")
             || envValue("DIRBRIDGE_TEST_UNICODE_NAME", false) == "1";
+        const bool ftpCommandRegression = hasArgument(argc, argv, "--ftp-command-regression")
+            || envValue("DIRBRIDGE_TEST_FTP_COMMAND_REGRESSION", false) == "1";
+        const bool checkFtpPermissions = hasArgument(argc, argv, "--check-ftp-permissions")
+            || envValue("DIRBRIDGE_TEST_CHECK_FTP_PERMISSIONS", false) == "1";
 
         step("connecting " + toString(profile.protocol) + "://" + profile.host + ':' + std::to_string(profile.port)
             + " path=" + profile.defaultRemotePath);
@@ -264,6 +383,18 @@ int main(int argc, char **argv)
             remote.disconnect();
             require(!remote.isConnected(), "remote did not report disconnected");
             step("DirBridgeRemoteCheck passed");
+            return 0;
+        }
+
+        if (ftpCommandRegression)
+        {
+            require(
+                profile.protocol == RemoteProtocol::Ftp || profile.protocol == RemoteProtocol::Ftps,
+                "--ftp-command-regression requires an FTP or FTPS site");
+            runFtpCommandRegression(remote, profile.defaultRemotePath, checkFtpPermissions);
+            remote.disconnect();
+            require(!remote.isConnected(), "remote did not report disconnected");
+            step("DirBridgeRemoteCheck FTP command regression passed");
             return 0;
         }
 

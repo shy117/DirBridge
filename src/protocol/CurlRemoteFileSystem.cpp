@@ -190,14 +190,85 @@ std::string normalizeRemotePath(std::string path)
     return path;
 }
 
-std::string ftpCommandPath(const std::string &path)
+std::vector<std::string> remotePathSegments(const std::string &path)
 {
-    std::string normalized = normalizeRemotePath(path);
-    while (!normalized.empty() && normalized.front() == '/')
+    const std::string normalized = normalizeRemotePath(path);
+    std::vector<std::string> segments;
+    std::string segment;
+    for (const char character : normalized)
     {
-        normalized.erase(normalized.begin());
+        if (character == '/')
+        {
+            if (!segment.empty())
+            {
+                segments.push_back(segment);
+                segment.clear();
+            }
+            continue;
+        }
+        segment.push_back(character);
     }
-    return normalized.empty() ? "." : normalized;
+    if (!segment.empty())
+    {
+        segments.push_back(segment);
+    }
+    return segments;
+}
+
+std::string commonRemoteDirectory(const std::string &leftPath, const std::string &rightPath)
+{
+    const std::vector<std::string> leftSegments = remotePathSegments(leftPath);
+    const std::vector<std::string> rightSegments = remotePathSegments(rightPath);
+    const std::size_t limit = std::min(leftSegments.size(), rightSegments.size());
+
+    std::ostringstream commonPath;
+    for (std::size_t index = 0; index < limit && leftSegments[index] == rightSegments[index]; ++index)
+    {
+        commonPath << '/' << leftSegments[index];
+    }
+    return commonPath.str().empty() ? "/" : commonPath.str();
+}
+
+std::string relativeRemotePath(const std::string &baseDirectory, const std::string &path)
+{
+    const std::vector<std::string> baseSegments = remotePathSegments(baseDirectory);
+    const std::vector<std::string> pathSegments = remotePathSegments(path);
+    if (baseSegments.size() > pathSegments.size()
+        || !std::equal(baseSegments.begin(), baseSegments.end(), pathSegments.begin()))
+    {
+        throw std::invalid_argument("remote path is outside the FTP command directory");
+    }
+
+    std::ostringstream relativePath;
+    for (std::size_t index = baseSegments.size(); index < pathSegments.size(); ++index)
+    {
+        if (index > baseSegments.size())
+        {
+            relativePath << '/';
+        }
+        relativePath << pathSegments[index];
+    }
+    return relativePath.str().empty() ? "." : relativePath.str();
+}
+
+std::string ftpCommandSummary(const std::vector<std::string> &commands)
+{
+    std::ostringstream summary;
+    for (const std::string &command : commands)
+    {
+        if (summary.tellp() > 0)
+        {
+            summary << '/';
+        }
+        if (command.compare(0, 10, "SITE CHMOD") == 0)
+        {
+            summary << "SITE CHMOD";
+            continue;
+        }
+        const std::size_t spaceIndex = command.find(' ');
+        summary << command.substr(0, spaceIndex);
+    }
+    return summary.str().empty() ? "command" : summary.str();
 }
 
 std::string sftpCommandPath(const std::string &path)
@@ -627,6 +698,8 @@ RemoteOperationResult CurlRemoteFileSystem::performFtpCommandsInDirectoryLocked(
     const std::string &directoryPath,
     const std::vector<std::string> &commands)
 {
+    // PREQUOTE runs after libcurl has changed into the URL directory. FTP mutations must not
+    // use QUOTE with relative paths because QUOTE runs before that directory change.
     char errorBuffer[CURL_ERROR_SIZE] = {};
     try
     {
@@ -649,7 +722,17 @@ RemoteOperationResult CurlRemoteFileSystem::performFtpCommandsInDirectoryLocked(
         if (code != CURLE_OK)
         {
             const std::string detail = errorBuffer[0] != '\0' ? errorBuffer : curl_easy_strerror(code);
-            return {false, detail};
+            long responseCode = 0;
+            curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &responseCode);
+
+            std::ostringstream message;
+            message << "FTP " << ftpCommandSummary(commands) << " failed";
+            if (responseCode > 0)
+            {
+                message << " (response " << responseCode << ')';
+            }
+            message << ": " << detail;
+            return {false, message.str()};
         }
     }
     catch (const std::exception &error)
@@ -711,7 +794,14 @@ RemoteOperationResult CurlRemoteFileSystem::createDirectory(const std::string &p
         return performQuoteAtUrlLocked(rootUrl(m_profile), {"mkdir " + sftpCommandPath(normalizedPath)});
     }
 
-    return performQuoteAtUrlLocked(rootUrl(m_profile), {"MKD " + ftpCommandPath(normalizedPath)});
+    const std::string directoryName = remoteBaseName(normalizedPath);
+    if (directoryName.empty())
+    {
+        return {false, "remote directory name is empty"};
+    }
+    return performFtpCommandsInDirectoryLocked(
+        remoteParentPath(normalizedPath),
+        {"MKD " + directoryName});
 }
 
 RemoteOperationResult CurlRemoteFileSystem::createFile(const std::string &path)
@@ -838,18 +928,13 @@ RemoteOperationResult CurlRemoteFileSystem::rename(const std::string &sourcePath
             {"rename " + sftpCommandPath(normalizedSourcePath) + " " + sftpCommandPath(normalizedTargetPath)});
     }
 
-    const std::string sourceParentPath = remoteParentPath(normalizedSourcePath);
-    const std::string targetParentPath = remoteParentPath(normalizedTargetPath);
-    if (sourceParentPath == targetParentPath)
-    {
-        return performFtpCommandsInDirectoryLocked(
-            sourceParentPath,
-            {"RNFR " + remoteBaseName(normalizedSourcePath), "RNTO " + remoteBaseName(normalizedTargetPath)});
-    }
-
-    return performQuoteAtUrlLocked(
-        rootUrl(m_profile),
-        {"RNFR " + ftpCommandPath(normalizedSourcePath), "RNTO " + ftpCommandPath(normalizedTargetPath)});
+    const std::string commandDirectory = commonRemoteDirectory(
+        remoteParentPath(normalizedSourcePath),
+        remoteParentPath(normalizedTargetPath));
+    return performFtpCommandsInDirectoryLocked(
+        commandDirectory,
+        {"RNFR " + relativeRemotePath(commandDirectory, normalizedSourcePath),
+         "RNTO " + relativeRemotePath(commandDirectory, normalizedTargetPath)});
 }
 
 RemoteOperationResult CurlRemoteFileSystem::setPermissions(const std::string &path, int mode)
@@ -872,9 +957,10 @@ RemoteOperationResult CurlRemoteFileSystem::setPermissions(const std::string &pa
         return performQuoteAtUrlLocked(rootUrl(m_profile), {"chmod " + modeText.str() + " " + sftpCommandPath(normalizedPath)});
     }
 
-    return performQuoteAtUrlLocked(
-        rootUrl(m_profile),
-        {"SITE CHMOD " + modeText.str() + " " + ftpCommandPath(normalizedPath)});
+    return performFtpCommandsInDirectoryLocked(
+        remoteParentPath(normalizedPath),
+        {"SITE CHMOD " + modeText.str() + " "
+         + relativeRemotePath(remoteParentPath(normalizedPath), normalizedPath)});
 }
 
 RemoteOperationResult CurlRemoteFileSystem::uploadFile(const std::string &localPath, const std::string &remotePath, TransferProgressCallback progress)
