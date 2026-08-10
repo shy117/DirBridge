@@ -390,7 +390,7 @@ void FilePanel::showRemoteProperties(const QString &path) const
         lines << QString("类型：%1").arg(m_table->item(row, 2) == nullptr ? QString() : m_table->item(row, 2)->text());
         lines << QString("修改时间：%1").arg(m_table->item(row, 3) == nullptr ? QString() : m_table->item(row, 3)->text());
         lines << QString("权限：%1").arg(m_table->item(row, 4) == nullptr ? QString() : m_table->item(row, 4)->text());
-        lines << QString("所有者：%1").arg(m_table->item(row, 5) == nullptr ? QString() : m_table->item(row, 5)->text());
+        lines << QString("所有者：%1").arg(nameItem->data(FileOwnerRole).toString());
         break;
     }
 

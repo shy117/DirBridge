@@ -809,7 +809,6 @@ void FilePanel::populateLocalDirectory(const QString &path)
         m_table->setItem(row, 2, createItem(entry.isDir() ? "文件夹" : entry.suffix().isEmpty() ? "文件" : entry.suffix()));
         m_table->setItem(row, 3, createItem(entry.lastModified().toString("yyyy/MM/dd HH:mm:ss")));
         m_table->setItem(row, 4, createItem(entry.permission(QFile::WriteUser) ? "可写" : "只读"));
-        m_table->setItem(row, 5, createItem(entry.owner()));
     }
 
     m_table->setSortingEnabled(true);
@@ -839,7 +838,6 @@ void FilePanel::populateRemotePlaceholder()
     m_table->setItem(row, 2, createItem("占位"));
     m_table->setItem(row, 3, createItem(""));
     m_table->setItem(row, 4, createItem(""));
-    m_table->setItem(row, 5, createItem(""));
     m_stateLabel->setText("远程面板占位，后续接入 FTP/SFTP 会话。");
     updateRemoteTree("/", {});
 }
@@ -875,7 +873,6 @@ void FilePanel::setRemoteConnecting(const QString &status)
     m_table->setItem(row, 2, createItem("连接中"));
     m_table->setItem(row, 3, createItem(""));
     m_table->setItem(row, 4, createItem(""));
-    m_table->setItem(row, 5, createItem(""));
     m_stateLabel->setText(status.isEmpty() ? "正在连接远程会话..." : status);
     updateRemoteTree("/", {});
 }
@@ -951,6 +948,7 @@ void FilePanel::populateRemoteItems(const QString &path, const std::vector<FileI
         QTableWidgetItem *nameItem = createItem(name, icon);
         nameItem->setData(Qt::UserRole, QString::fromStdString(entry.path));
         nameItem->setData(Qt::UserRole + 1, isDirectory);
+        nameItem->setData(FileOwnerRole, QString::fromStdString(entry.owner));
         nameItem->setToolTip(QString::fromStdString(entry.path));
 
         m_table->setItem(row, 0, nameItem);
@@ -958,7 +956,6 @@ void FilePanel::populateRemoteItems(const QString &path, const std::vector<FileI
         m_table->setItem(row, 2, createItem(fileItemTypeText(entry.type)));
         m_table->setItem(row, 3, createItem(formattedModifiedTime(QString::fromStdString(entry.modifiedTime))));
         m_table->setItem(row, 4, createItem(QString::fromStdString(entry.permissions)));
-        m_table->setItem(row, 5, createItem(QString::fromStdString(entry.owner)));
     }
 
     m_table->setUpdatesEnabled(tableUpdatesEnabled);

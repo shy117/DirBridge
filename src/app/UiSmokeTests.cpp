@@ -14,6 +14,7 @@
 #include <QAbstractItemDelegate>
 #include <QAbstractItemView>
 #include <QApplication>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDockWidget>
 #include <QLabel>
@@ -144,6 +145,21 @@ bool checkFileCreateRenameWorkflow()
     {
         QTextStream(stderr) << "Local file create/rename smoke UI objects are missing" << Qt::endl;
         return false;
+    }
+    const QStringList expectedFileHeaders{"名称", "大小", "类型", "修改时间", "权限"};
+    if (table->columnCount() != expectedFileHeaders.size())
+    {
+        QTextStream(stderr) << "Local file table should contain five columns" << Qt::endl;
+        return false;
+    }
+    for (int column = 0; column < expectedFileHeaders.size(); ++column)
+    {
+        if (table->horizontalHeaderItem(column) == nullptr
+            || table->horizontalHeaderItem(column)->text() != expectedFileHeaders.at(column))
+        {
+            QTextStream(stderr) << "Local file table headers are unexpected" << Qt::endl;
+            return false;
+        }
     }
 
     int originalRow = -1;
@@ -421,7 +437,59 @@ bool checkRemoteUiObjects(MainWindow &window)
         QTextStream(stderr) << "Missing UI object: transferTable" << Qt::endl;
         ok = false;
     }
-    ok = requireChild<QTreeWidget>(window, "logView") && ok;
+    QTreeWidget *logView = window.findChild<QTreeWidget *>("logView");
+    if (logView == nullptr || logView->topLevelItemCount() == 0)
+    {
+        QTextStream(stderr) << "Log view should contain startup entries" << Qt::endl;
+        ok = false;
+    }
+    else
+    {
+        const int previousBottomTab = bottomTabs == nullptr ? -1 : bottomTabs->currentIndex();
+        if (bottomTabs != nullptr)
+        {
+            bottomTabs->setCurrentWidget(logView);
+            QApplication::processEvents();
+        }
+
+        QTreeWidgetItem *logItem = logView->topLevelItem(0);
+        logView->setCurrentItem(logItem);
+        const QString expectedLogText = QString("%1\t%2\t%3")
+                                            .arg(logItem->text(0), logItem->text(1), logItem->text(2));
+        QApplication::clipboard()->clear();
+        bool copyActionFound = false;
+        QTimer::singleShot(0, logView, [&copyActionFound]() {
+            auto *contextMenu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+            if (contextMenu == nullptr)
+            {
+                return;
+            }
+            for (QAction *action : contextMenu->actions())
+            {
+                if (action != nullptr && action->text() == "复制")
+                {
+                    copyActionFound = true;
+                    action->trigger();
+                    break;
+                }
+            }
+            contextMenu->close();
+        });
+        QMetaObject::invokeMethod(
+            logView,
+            "customContextMenuRequested",
+            Qt::DirectConnection,
+            Q_ARG(QPoint, logView->visualItemRect(logItem).center()));
+        if (!copyActionFound || QApplication::clipboard()->text() != expectedLogText)
+        {
+            QTextStream(stderr) << "Log context menu did not copy the selected entry" << Qt::endl;
+            ok = false;
+        }
+        if (bottomTabs != nullptr && previousBottomTab >= 0)
+        {
+            bottomTabs->setCurrentIndex(previousBottomTab);
+        }
+    }
     ok = requireChild<QTreeWidget>(window, "sessionManagerTree") && ok;
 
     QTabWidget *remoteTabs = window.findChild<QTabWidget *>("remoteTabs");
@@ -1202,7 +1270,9 @@ bool checkExternalEditWorkflow(MainWindow &window,
     }
 
     const int readmeRow = findTableRowByName(remoteTable, "readme.txt");
-    if (remoteTable->columnCount() != 6 || readmeRow < 0 || remoteTable->item(readmeRow, 1) == nullptr)
+    if (remoteTable->columnCount() != 5 || readmeRow < 0 || remoteTable->item(readmeRow, 1) == nullptr
+        || remoteTable->horizontalHeaderItem(4) == nullptr
+        || remoteTable->horizontalHeaderItem(4)->text() != "权限")
     {
         QTextStream(stderr) << "External edit smoke source file or table layout is unexpected" << Qt::endl;
         return false;

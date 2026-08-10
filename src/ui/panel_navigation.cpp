@@ -423,8 +423,8 @@ void FilePanel::setupUi()
 
     m_table = new QTableWidget(m_contentSplitter);
     m_table->setObjectName(objectPrefix + "FileTable");
-    m_table->setColumnCount(6);
-    m_table->setHorizontalHeaderLabels({"名称", "大小", "类型", "修改时间", "权限", "所有者"});
+    m_table->setColumnCount(5);
+    m_table->setHorizontalHeaderLabels({"名称", "大小", "类型", "修改时间", "权限"});
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -440,7 +440,7 @@ void FilePanel::setupUi()
     m_table->setTextElideMode(Qt::ElideMiddle);
     m_table->horizontalHeader()->setSortIndicatorShown(m_mode == Mode::RemotePlaceholder);
     m_table->horizontalHeader()->setStretchLastSection(false);
-    const QList<int> fileColumnWidths{175, 75, 80, 150, 80, 80};
+    const QList<int> fileColumnWidths{175, 75, 80, 150, 80};
     for (int column = 0; column < fileColumnWidths.size(); ++column)
     {
         m_table->horizontalHeader()->setSectionResizeMode(column, QHeaderView::Interactive);

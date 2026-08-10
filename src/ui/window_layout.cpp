@@ -5,6 +5,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -363,6 +364,23 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
     m_logView->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     m_logView->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     m_logView->header()->setStretchLastSection(true);
+    m_logView->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_logView, &QTreeWidget::customContextMenuRequested, this, [this](const QPoint &position) {
+        QTreeWidgetItem *item = m_logView->itemAt(position);
+        if (item == nullptr)
+        {
+            return;
+        }
+
+        m_logView->setCurrentItem(item);
+        QMenu menu(m_logView);
+        QAction *copyAction = menu.addAction("复制");
+        connect(copyAction, &QAction::triggered, m_logView, [item]() {
+            QApplication::clipboard()->setText(
+                QString("%1\t%2\t%3").arg(item->text(0), item->text(1), item->text(2)));
+        });
+        menu.exec(m_logView->viewport()->mapToGlobal(position));
+    });
 
     m_terminalHost = new QWidget(m_bottomTabs);
     m_terminalHost->setObjectName("terminalHost");

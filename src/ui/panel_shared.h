@@ -14,6 +14,7 @@ class QWidget;
 namespace panel_shared
 {
 inline constexpr const char *RemotePathMimeType = "application/x-dirbridge-remote-paths";
+inline constexpr int FileOwnerRole = Qt::UserRole + 2;
 
 /**
  * @brief 从 Qt 资源中加载 Fluent UI SVG 图标。
