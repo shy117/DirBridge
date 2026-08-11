@@ -374,6 +374,7 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
 
         m_logView->setCurrentItem(item);
         QMenu menu(m_logView);
+        menu.setStyleSheet("QMenu::item { padding: 4px 24px; }");
         QAction *copyAction = menu.addAction("复制");
         connect(copyAction, &QAction::triggered, m_logView, [item]() {
             QApplication::clipboard()->setText(

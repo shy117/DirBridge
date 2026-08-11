@@ -5,7 +5,10 @@
 #include <QDir>
 #include <QFileIconProvider>
 #include <QFileInfo>
+#include <QFrame>
+#include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QStandardPaths>
@@ -55,6 +58,88 @@ void showInformationDialog(QWidget *parent, const QString &title, const QString 
     layout->addWidget(buttons);
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     dialog.exec();
+}
+
+QString promptConflictRename(
+    QWidget *parent,
+    const QString &title,
+    const QString &targetPath,
+    const QString &originalName,
+    bool isDirectory)
+{
+    QDialog dialog(parent);
+    dialog.setObjectName("conflictRenameDialog");
+    dialog.setWindowTitle(title);
+    dialog.setMinimumWidth(520);
+    dialog.resize(560, 260);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(24, 20, 24, 20);
+    layout->setSpacing(14);
+
+    auto *summaryLayout = new QHBoxLayout();
+    summaryLayout->setSpacing(12);
+    auto *iconLabel = new QLabel(&dialog);
+    iconLabel->setPixmap(dialog.style()->standardIcon(QStyle::SP_MessageBoxWarning).pixmap(32, 32));
+    iconLabel->setAlignment(Qt::AlignTop | Qt::AlignHCenter);
+    summaryLayout->addWidget(iconLabel, 0, Qt::AlignTop);
+
+    auto *summaryTextLayout = new QVBoxLayout();
+    summaryTextLayout->setSpacing(4);
+    auto *headingLabel = new QLabel(
+        QString("目标位置已存在同名%1").arg(isDirectory ? "文件夹" : "文件"),
+        &dialog);
+    QFont headingFont = headingLabel->font();
+    headingFont.setBold(true);
+    headingFont.setPointSizeF(headingFont.pointSizeF() + 1.5);
+    headingLabel->setFont(headingFont);
+    summaryTextLayout->addWidget(headingLabel);
+
+    auto *descriptionLabel = new QLabel("请输入新名称后继续，现有项目不会被覆盖或合并。", &dialog);
+    descriptionLabel->setWordWrap(true);
+    summaryTextLayout->addWidget(descriptionLabel);
+    summaryLayout->addLayout(summaryTextLayout, 1);
+    layout->addLayout(summaryLayout);
+
+    auto *pathLayout = new QVBoxLayout();
+    pathLayout->setSpacing(6);
+    auto *pathCaption = new QLabel("目标位置", &dialog);
+    pathLayout->addWidget(pathCaption);
+
+    auto *pathLabel = new QLabel(targetPath, &dialog);
+    pathLabel->setObjectName("conflictTargetPath");
+    pathLabel->setTextFormat(Qt::PlainText);
+    pathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    pathLabel->setWordWrap(true);
+    pathLabel->setFrameShape(QFrame::StyledPanel);
+    pathLabel->setMargin(9);
+    pathLayout->addWidget(pathLabel);
+    layout->addLayout(pathLayout);
+
+    auto *nameLayout = new QVBoxLayout();
+    nameLayout->setSpacing(6);
+    auto *nameCaption = new QLabel("新名称", &dialog);
+    nameLayout->addWidget(nameCaption);
+
+    auto *nameEdit = new QLineEdit(originalName, &dialog);
+    nameEdit->setObjectName("conflictRenameEdit");
+    nameEdit->setMinimumHeight(30);
+    nameEdit->selectAll();
+    nameLayout->addWidget(nameEdit);
+    layout->addLayout(nameLayout);
+
+    auto *buttons = new QDialogButtonBox(&dialog);
+    auto *confirmButton = buttons->addButton("重命名后继续", QDialogButtonBox::AcceptRole);
+    buttons->addButton("取消", QDialogButtonBox::RejectRole);
+    confirmButton->setMinimumWidth(128);
+    confirmButton->setDefault(true);
+    layout->addWidget(buttons);
+
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    nameEdit->setFocus();
+    return dialog.exec() == QDialog::Accepted ? nameEdit->text().trimmed() : QString();
 }
 
 QString formatFileSize(qint64 size)

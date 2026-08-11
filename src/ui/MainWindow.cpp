@@ -5,6 +5,7 @@
 #include "core/TransferManager.h"
 #include "ui/ExternalEditManager.h"
 #include "ui/FilePanel.h"
+#include "ui/panel_shared.h"
 #include "ui/window_shared.h"
 #include "terminal/SshTerminalManager.h"
 
@@ -35,7 +36,6 @@
 #include <QFrame>
 #include <QHeaderView>
 #include <QIcon>
-#include <QInputDialog>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
@@ -558,6 +558,26 @@ using namespace window_shared;
 
 namespace
 {
+QString conflictRenameCandidate(const QString &originalName, bool isDirectory, int index)
+{
+    const QFileInfo info(originalName);
+    const QString suffix = isDirectory ? QString() : info.completeSuffix();
+    QString baseName = isDirectory || suffix.isEmpty()
+        ? originalName
+        : originalName.left(originalName.size() - suffix.size() - 1);
+    if (baseName.isEmpty())
+    {
+        baseName = originalName;
+    }
+
+    const QString marker = index == 1
+        ? QString("-renamed")
+        : QString("-renamed-%1").arg(index);
+    return suffix.isEmpty()
+        ? baseName + marker
+        : baseName + marker + "." + suffix;
+}
+
 QString externalEditStateLabel(ExternalEditState state)
 {
     switch (state)
@@ -853,13 +873,71 @@ void MainWindow::moveRemotePathsForTesting(const QStringList &sourcePaths, const
     RemoteSession *session = currentRemoteSession();
     if (session != nullptr)
     {
-        moveRemotePaths(*session, sourcePaths, targetDirectory);
+        QList<RemoteTransferItem> sourceItems;
+        for (const QString &sourcePath : sourcePaths)
+        {
+            FileItem sourceItem;
+            if (remotePathExists(*session, sourcePath, &sourceItem))
+            {
+                sourceItems.append({sourcePath, sourceItem.type == FileItemType::Directory});
+            }
+        }
+        moveRemotePaths(*session, sourceItems, targetDirectory);
     }
 }
 
 void MainWindow::setDialogsSuppressedForTesting(bool suppressed)
 {
     m_dialogsSuppressedForTesting = suppressed;
+    if (m_localPanel != nullptr)
+    {
+        m_localPanel->setDialogsSuppressedForTesting(suppressed);
+    }
+}
+
+QString MainWindow::promptConflictRename(
+    const QString &title,
+    const QString &targetPath,
+    const QString &originalName,
+    bool isDirectory,
+    const std::function<bool(const QString &)> &targetNameExists) const
+{
+    if (m_dialogsSuppressedForTesting)
+    {
+        for (int index = 1; index < 10000; ++index)
+        {
+            const QString candidate = conflictRenameCandidate(originalName, isDirectory, index);
+            if (!targetNameExists(candidate))
+            {
+                return candidate;
+            }
+        }
+        return {};
+    }
+
+    while (true)
+    {
+        const QString newName = panel_shared::promptConflictRename(
+            const_cast<MainWindow *>(this), title, targetPath, originalName, isDirectory);
+        if (newName.isEmpty())
+        {
+            return {};
+        }
+        if (!panel_shared::isValidRemoteName(newName))
+        {
+            panel_shared::showInvalidRemoteNameWarning(const_cast<MainWindow *>(this));
+            continue;
+        }
+        if (targetNameExists(newName))
+        {
+            panel_shared::showFileOperationWarning(
+                const_cast<MainWindow *>(this),
+                title,
+                QString("目标项目仍然存在：%1").arg(newName));
+            continue;
+        }
+        return newName;
+    }
 }
 
 void MainWindow::setLocalPathForTesting(const QString &path)

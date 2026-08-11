@@ -510,8 +510,8 @@ MainWindow::RemoteSession *MainWindow::createRemoteSession(const SiteProfile &pr
             uploadLocalPath(*sessionPtr, localPath);
         }
     });
-    sessionPtr->panel->setRemoteFilesDroppedOnRemoteHandler([this, sessionPtr](const QStringList &remotePaths, const QString &targetDirectory) {
-        moveRemotePaths(*sessionPtr, remotePaths, targetDirectory);
+    sessionPtr->panel->setRemoteFilesDroppedOnRemoteHandler([this, sessionPtr](const QList<RemoteTransferItem> &remoteItems, const QString &targetDirectory) {
+        moveRemotePaths(*sessionPtr, remoteItems, targetDirectory);
     });
 
     const int tabIndex = m_remoteTabs->addTab(sessionPtr->panel, QString("远程：%1").arg(sessionPtr->displayName));

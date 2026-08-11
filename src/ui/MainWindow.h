@@ -38,6 +38,7 @@ class QTreeWidget;
 class QTreeWidgetItem;
 class ExternalEditManager;
 class FilePanel;
+struct RemoteTransferItem;
 class TerminalWidget;
 namespace dirbridge::terminal {
 class SshTerminalManager;
@@ -296,11 +297,13 @@ private:
     void finishRemoteRemove(const QString &sessionId, const QString &path, const QString &errorMessage);
     void renameRemotePath(RemoteSession &session, const QString &sourcePath, const QString &targetPath);
     void setRemotePermissions(RemoteSession &session, const QString &path, int mode, bool recursive);
-    bool removeRemotePathRecursive(RemoteSession &session,
-                                   const QString &path,
-                                   QString *errorMessage = nullptr,
-                                   std::optional<FileItemType> knownType = std::nullopt);
-    void moveRemotePaths(RemoteSession &session, const QStringList &sourcePaths, const QString &targetDirectory);
+    void moveRemotePaths(RemoteSession &session, const QList<RemoteTransferItem> &sourceItems, const QString &targetDirectory);
+    QString promptConflictRename(
+        const QString &title,
+        const QString &targetPath,
+        const QString &originalName,
+        bool isDirectory,
+        const std::function<bool(const QString &)> &targetNameExists) const;
     void setRemoteConnectionState(RemoteSession &session, bool connected, const QString &message);
     void updateFileSplitterLayout();
     void setAllFileTreesVisible(bool visible);
@@ -347,17 +350,7 @@ private:
     void finishSingleFileUploadPreparation(const QString &jobId, bool exists, const FileItem &existingItem, const QString &errorMessage);
     void uploadLocalPath(RemoteSession &session, const QString &localPath);
     void startLocalDirectoryUploadPreparation(RemoteSession &session, const QString &localDirectoryPath, const QString &remoteDirectoryPath, const QString &parentJobId);
-    enum class UploadConflictAction
-    {
-        Overwrite,
-        Skip,
-        ContinueUpload,
-        Rename,
-        Cancel
-    };
     bool remotePathExists(RemoteSession &session, const QString &remotePath, FileItem *item = nullptr);
-    UploadConflictAction chooseUploadConflictAction(const QFileInfo &localInfo, const QString &remotePath, const FileItem &remoteItem) const;
-    QString renamedRemotePathForUpload(const QString &remotePath, const QFileInfo &localInfo) const;
     void downloadRemoteFile(RemoteSession &session, const QString &remotePath);
     void downloadRemoteFile(const QString &remotePath);
     void downloadRemotePath(RemoteSession &session, const QString &remotePath);

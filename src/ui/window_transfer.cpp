@@ -11,12 +11,9 @@
 #include <optional>
 #include <stdexcept>
 
-#include <QAbstractButton>
 #include <QDir>
 #include <QDirIterator>
 #include <QFileInfo>
-#include <QInputDialog>
-#include <QMessageBox>
 #include <QMetaObject>
 #include <QPointer>
 #include <QProgressBar>
@@ -827,80 +824,6 @@ bool MainWindow::remotePathExists(RemoteSession &session, const QString &remoteP
 }
 
 /**
- * @brief 询问用户如何处理上传目标冲突。
- * @param localInfo 本地待上传项目。
- * @param remotePath 冲突的远程目标路径。
- * @param remoteItem 已存在的远程条目。
- * @return 用户选择的冲突处理动作。
- */
-MainWindow::UploadConflictAction MainWindow::chooseUploadConflictAction(const QFileInfo &localInfo, const QString &remotePath, const FileItem &remoteItem) const
-{
-    if (m_dialogsSuppressedForTesting)
-    {
-        return UploadConflictAction::ContinueUpload;
-    }
-
-    QMessageBox messageBox(const_cast<MainWindow *>(this));
-    messageBox.setWindowTitle("要上传的文件存在");
-    messageBox.setIcon(QMessageBox::Question);
-    messageBox.setText(QString("远程目标已包含同名%1。\n\n名称：%2\n目标：%3")
-        .arg(remoteItem.type == FileItemType::Directory ? "文件夹" : "文件",
-            localInfo.fileName(),
-            remotePath));
-    QPushButton *overwriteButton = messageBox.addButton("覆盖", QMessageBox::AcceptRole);
-    QPushButton *skipButton = messageBox.addButton("跳过", QMessageBox::RejectRole);
-    QPushButton *continueButton = messageBox.addButton("继续上传", QMessageBox::ActionRole);
-    QPushButton *renameButton = messageBox.addButton("重命名", QMessageBox::ActionRole);
-    QPushButton *cancelButton = messageBox.addButton("取消", QMessageBox::DestructiveRole);
-    messageBox.setDefaultButton(continueButton);
-    messageBox.exec();
-
-    QAbstractButton *clicked = messageBox.clickedButton();
-    if (clicked == overwriteButton)
-    {
-        return UploadConflictAction::Overwrite;
-    }
-    if (clicked == skipButton)
-    {
-        return UploadConflictAction::Skip;
-    }
-    if (clicked == renameButton)
-    {
-        return UploadConflictAction::Rename;
-    }
-    if (clicked == cancelButton)
-    {
-        return UploadConflictAction::Cancel;
-    }
-    return UploadConflictAction::ContinueUpload;
-}
-
-/**
- * @brief 为冲突上传生成用户指定的新远程路径。
- * @param remotePath 原远程目标路径。
- * @param localInfo 本地待上传项目。
- * @return 新远程路径；取消或非法输入时返回空字符串。
- */
-QString MainWindow::renamedRemotePathForUpload(const QString &remotePath, const QFileInfo &localInfo) const
-{
-    bool ok = false;
-    const QString newName = QInputDialog::getText(
-        const_cast<MainWindow *>(this),
-        "重命名上传项目",
-        "新名称：",
-        QLineEdit::Normal,
-        localInfo.fileName(),
-        &ok).trimmed();
-    if (!ok || newName.isEmpty() || newName.contains('/') || newName.contains('\\') || newName == "." || newName == "..")
-    {
-        return {};
-    }
-
-    const int slashIndex = remotePath.lastIndexOf('/');
-    return slashIndex <= 0 ? "/" + newName : remotePath.left(slashIndex + 1) + newName;
-}
-
-/**
  * @brief 创建单文件上传任务，并启动传输队列。
  * @param session 目标远程会话。
  * @param localPath 本地文件路径。
@@ -1020,7 +943,7 @@ void MainWindow::startSingleFileUploadPreparation(RemoteSession &session, const 
  * @param existingItem 已存在的远程条目。
  * @param errorMessage 预检查失败时的错误信息。
  */
-void MainWindow::finishSingleFileUploadPreparation(const QString &jobId, bool exists, const FileItem &existingItem, const QString &errorMessage)
+void MainWindow::finishSingleFileUploadPreparation(const QString &jobId, bool exists, const FileItem &, const QString &errorMessage)
 {
     TransferJob *job = m_transferQueue.find(jobId.toStdString());
     if (job == nullptr || job->status == TransferStatus::Canceled || job->status == TransferStatus::Canceling)
@@ -1057,29 +980,6 @@ void MainWindow::finishSingleFileUploadPreparation(const QString &jobId, bool ex
         return;
     }
 
-    const QFileInfo localInfo(QString::fromStdString(job->localPath));
-    const QString remotePath = QString::fromStdString(job->remotePath);
-    const UploadConflictAction action = chooseUploadConflictAction(localInfo, remotePath, existingItem);
-    if (action == UploadConflictAction::Cancel || action == UploadConflictAction::Skip || action == UploadConflictAction::ContinueUpload)
-    {
-        m_transferQueue.cancel(job->id, "用户取消上传");
-        refreshTransferTable();
-        return;
-    }
-    if (action == UploadConflictAction::Rename)
-    {
-        const QString renamedPath = renamedRemotePathForUpload(remotePath, localInfo);
-        if (renamedPath.isEmpty())
-        {
-            m_transferQueue.cancel(job->id, "用户取消上传");
-            refreshTransferTable();
-            return;
-        }
-        job->remotePath = renamedPath.toStdString();
-        queuePreparedJob();
-        return;
-    }
-
     RemoteSession *session = remoteSessionById(job->sessionId);
     if (session == nullptr || !session->connected || session->fileSystem == nullptr)
     {
@@ -1089,82 +989,27 @@ void MainWindow::finishSingleFileUploadPreparation(const QString &jobId, bool ex
         return;
     }
 
-    const std::shared_ptr<RemoteFileSystem> fileSystem = session->fileSystem;
-    const std::string jobIdString = job->id;
-    QPointer<MainWindow> window(this);
-    QThread *thread = QThread::create([window, fileSystem, jobIdString, remotePath, existingType = existingItem.type]() {
-        QString removeError;
-        std::function<bool(const QString &, std::optional<FileItemType>)> removeRecursive;
-        removeRecursive = [&](const QString &currentPath, std::optional<FileItemType> knownType) {
-            bool isDirectory = knownType == FileItemType::Directory;
-            if (!knownType.has_value() || isDirectory)
-            {
-                try
-                {
-                    const std::vector<FileItem> children = fileSystem->listDirectory(currentPath.toStdString());
-                    isDirectory = true;
-                    for (const FileItem &child : children)
-                    {
-                        if (!removeRecursive(QString::fromStdString(child.path), child.type))
-                        {
-                            return false;
-                        }
-                    }
-                }
-                catch (const std::exception &error)
-                {
-                    if (knownType == FileItemType::Directory)
-                    {
-                        removeError = QString("读取目录“%1”失败：%2").arg(currentPath, QString::fromUtf8(error.what()));
-                        return false;
-                    }
-                }
-            }
-            const RemoteOperationResult result = isDirectory
-                ? fileSystem->removeDirectory(currentPath.toStdString())
-                : fileSystem->removeFile(currentPath.toStdString());
-            if (!result.success)
-            {
-                removeError = QString::fromStdString(result.message);
-                return false;
-            }
-            return true;
-        };
-        removeRecursive(remotePath, existingType);
-        if (window != nullptr)
-        {
-            QMetaObject::invokeMethod(window.data(), [window, jobIdString, removeError]() {
-                if (window == nullptr)
-                {
-                    return;
-                }
-                TransferJob *preparedJob = window->m_transferQueue.find(jobIdString);
-                if (preparedJob == nullptr)
-                {
-                    return;
-                }
-                if (!removeError.trimmed().isEmpty())
-                {
-                    preparedJob->status = TransferStatus::Failed;
-                    preparedJob->errorMessage = removeError.toStdString();
-                    window->appendLog("ERROR", QString("覆盖远程项目失败：%1").arg(removeError));
-                    window->refreshTransferTable();
-                    window->showWarningMessage("上传失败", userFacingRemoteError(removeError));
-                    return;
-                }
-                preparedJob->status = TransferStatus::Pending;
-                preparedJob->errorMessage.clear();
-                window->refreshTransferTable();
-                window->processTransferQueue();
-            }, Qt::QueuedConnection);
-        }
-    });
-    beginBackgroundTask();
-    connect(thread, &QThread::finished, this, [this]() {
-        finishBackgroundTask();
-    });
-    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
-    thread->start();
+    const QFileInfo localInfo(QString::fromStdString(job->localPath));
+    const QString remotePath = QString::fromStdString(job->remotePath);
+    const int slashIndex = remotePath.lastIndexOf('/');
+    const QString remoteParent = slashIndex <= 0 ? QString("/") : remotePath.left(slashIndex);
+    const QString newName = promptConflictRename(
+        "上传目标重名",
+        remotePath,
+        localInfo.fileName(),
+        localInfo.isDir(),
+        [&](const QString &candidateName) {
+            return remotePathExists(*session, joinRemotePath(remoteParent, candidateName));
+        });
+    if (newName.isEmpty())
+    {
+        m_transferQueue.cancel(job->id, "用户取消上传");
+        refreshTransferTable();
+        return;
+    }
+
+    job->remotePath = joinRemotePath(remoteParent, newName).toStdString();
+    queuePreparedJob();
 }
 
 /**
@@ -1188,32 +1033,21 @@ void MainWindow::uploadLocalPath(RemoteSession &session, const QString &localPat
     }
 
     QString remoteDirectoryPath = joinRemotePath(session.currentPath, localInfo.fileName());
-    FileItem existingItem;
-    if (remotePathExists(session, remoteDirectoryPath, &existingItem))
+    if (remotePathExists(session, remoteDirectoryPath))
     {
-        const UploadConflictAction action = chooseUploadConflictAction(localInfo, remoteDirectoryPath, existingItem);
-        if (action == UploadConflictAction::Cancel || action == UploadConflictAction::Skip)
+        const QString newName = promptConflictRename(
+            "上传目标重名",
+            remoteDirectoryPath,
+            localInfo.fileName(),
+            true,
+            [&](const QString &candidateName) {
+                return remotePathExists(session, joinRemotePath(session.currentPath, candidateName));
+            });
+        if (newName.isEmpty())
         {
             return;
         }
-        if (action == UploadConflictAction::Rename)
-        {
-            remoteDirectoryPath = renamedRemotePathForUpload(remoteDirectoryPath, localInfo);
-            if (remoteDirectoryPath.isEmpty())
-            {
-                return;
-            }
-        }
-        else if (action == UploadConflictAction::Overwrite)
-        {
-            QString errorMessage;
-            if (!removeRemotePathRecursive(session, remoteDirectoryPath, &errorMessage, existingItem.type))
-            {
-                appendLog("ERROR", QString("覆盖远程项目失败：%1").arg(errorMessage));
-                showWarningMessage("上传文件夹失败", userFacingRemoteError(errorMessage));
-                return;
-            }
-        }
+        remoteDirectoryPath = joinRemotePath(session.currentPath, newName);
     }
     const QString parentJobId = enqueueDirectoryTransferParent(
         TransferDirection::Upload,
@@ -1379,7 +1213,23 @@ void MainWindow::downloadRemoteFile(RemoteSession &session, const QString &remot
     }
 
     const QFileInfo remoteInfo(remotePath);
-    const QString localPath = QDir(m_localPanel->currentPath()).filePath(remoteInfo.fileName());
+    QString localPath = QDir(m_localPanel->currentPath()).filePath(remoteInfo.fileName());
+    if (QFileInfo::exists(localPath))
+    {
+        const QString newName = promptConflictRename(
+            "下载目标重名",
+            localPath,
+            remoteInfo.fileName(),
+            false,
+            [&](const QString &candidateName) {
+                return QFileInfo::exists(QDir(m_localPanel->currentPath()).filePath(candidateName));
+            });
+        if (newName.isEmpty())
+        {
+            return;
+        }
+        localPath = QDir(m_localPanel->currentPath()).filePath(newName);
+    }
 
     TransferJob job;
     job.id = makeTransferJobId("download");
@@ -1424,7 +1274,23 @@ void MainWindow::downloadRemotePath(RemoteSession &session, const QString &remot
         return;
     }
 
-    const QString localPath = QDir(m_localPanel->currentPath()).filePath(remoteBaseName(remotePath));
+    QString localPath = QDir(m_localPanel->currentPath()).filePath(remoteBaseName(remotePath));
+    if (QFileInfo::exists(localPath))
+    {
+        const QString newName = promptConflictRename(
+            "下载目标重名",
+            localPath,
+            remoteBaseName(remotePath),
+            true,
+            [&](const QString &candidateName) {
+                return QFileInfo::exists(QDir(m_localPanel->currentPath()).filePath(candidateName));
+            });
+        if (newName.isEmpty())
+        {
+            return;
+        }
+        localPath = QDir(m_localPanel->currentPath()).filePath(newName);
+    }
     const QString parentJobId = enqueueDirectoryTransferParent(
         TransferDirection::Download,
         remoteBaseName(remotePath),

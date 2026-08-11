@@ -73,9 +73,9 @@ public:
     void setRemoteFilesDroppedOnLocalHandler(std::function<void(const QList<RemoteTransferItem> &)> handler);
     /**
      * @brief 设置远程项目拖放到远程目录时使用的回调。
-     * @param handler 接收远程源路径列表和目标远程目录的回调。
+     * @param handler 接收带文件类型的远程项目列表和目标远程目录的回调。
      */
-    void setRemoteFilesDroppedOnRemoteHandler(std::function<void(const QStringList &, const QString &)> handler);
+    void setRemoteFilesDroppedOnRemoteHandler(std::function<void(const QList<RemoteTransferItem> &, const QString &)> handler);
     /**
      * @brief 在远程目录刷新后选中新建项目并进入内联重命名。
      * @param path 新建项目的远程绝对路径。
@@ -103,6 +103,11 @@ public:
      * @param path 作为当前面板路径使用的本地目录路径。
      */
     void setLocalPathForTesting(const QString &path);
+    /**
+     * @brief 在自动化测试中抑制拖放冲突对话框，并使用确定性的新名称。
+     * @param suppressed 为 true 时不显示模态对话框。
+     */
+    void setDialogsSuppressedForTesting(bool suppressed);
 
 protected:
     /**
@@ -201,7 +206,7 @@ private:
     std::function<void(const QString &)> m_remoteEditCloseRequested;
     std::function<void(const QStringList &)> m_localFilesDroppedOnRemote;
     std::function<void(const QList<RemoteTransferItem> &)> m_remoteFilesDroppedOnLocal;
-    std::function<void(const QStringList &, const QString &)> m_remoteFilesDroppedOnRemote;
+    std::function<void(const QList<RemoteTransferItem> &, const QString &)> m_remoteFilesDroppedOnRemote;
 
     QPushButton *m_backButton = nullptr;
     QPushButton *m_forwardButton = nullptr;
@@ -214,6 +219,7 @@ private:
     QTreeWidget *m_remoteTree = nullptr;
     QTableWidget *m_table = nullptr;
     QPoint m_dragStartPosition;
+    bool m_dialogsSuppressedForTesting = false;
 };
 
 #endif // DIRBRIDGE_UI_FILEPANEL_H

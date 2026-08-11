@@ -39,6 +39,22 @@ QString fileItemTypeText(FileItemType type);
 void showInformationDialog(QWidget *parent, const QString &title, const QString &message);
 
 /**
+ * @brief 显示统一的重名处理对话框。
+ * @param parent 父窗口。
+ * @param title 对话框标题。
+ * @param targetPath 已存在同名项目的完整目标路径。
+ * @param originalName 原始名称。
+ * @param isDirectory 冲突项目是否为文件夹。
+ * @return 用户确认的新名称；取消时返回空字符串。
+ */
+QString promptConflictRename(
+    QWidget *parent,
+    const QString &title,
+    const QString &targetPath,
+    const QString &originalName,
+    bool isDirectory);
+
+/**
  * @brief 将字节数格式化为适合文件列表展示的大小文本。
  * @param size 字节数；负数表示未知大小。
  * @return 格式化后的大小文本。

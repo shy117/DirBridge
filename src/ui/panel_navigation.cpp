@@ -200,7 +200,8 @@ void FilePanel::setRemoteFilesDroppedOnLocalHandler(std::function<void(const QLi
  * @brief 设置远程文件拖放到远程目录时的移动/复制回调。
  * @param handler 接收远程源路径列表和目标目录的回调。
  */
-void FilePanel::setRemoteFilesDroppedOnRemoteHandler(std::function<void(const QStringList &, const QString &)> handler)
+void FilePanel::setRemoteFilesDroppedOnRemoteHandler(
+    std::function<void(const QList<RemoteTransferItem> &, const QString &)> handler)
 {
     m_remoteFilesDroppedOnRemote = std::move(handler);
 }
@@ -349,6 +350,11 @@ void FilePanel::setLocalPathForTesting(const QString &path)
     }
 
     navigateTo(path);
+}
+
+void FilePanel::setDialogsSuppressedForTesting(bool suppressed)
+{
+    m_dialogsSuppressedForTesting = suppressed;
 }
 
 /**

@@ -69,6 +69,43 @@ namespace window_shared
 QString userFacingRemoteError(const QString &detail);
 }
 
+bool containsRemotePath(const std::vector<FileItem> &items, const std::string &path, FileItemType type)
+{
+    for (const FileItem &item : items)
+    {
+        if (item.path == path && item.type == type)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool waitForRemotePath(
+    FakeRemoteFileSystem *fileSystem,
+    const QString &directory,
+    const QString &path,
+    FileItemType type)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    while (fileSystem != nullptr && std::chrono::steady_clock::now() < deadline)
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        try
+        {
+            if (containsRemotePath(fileSystem->listDirectory(directory.toStdString()), path.toStdString(), type))
+            {
+                return true;
+            }
+        }
+        catch (const std::exception &)
+        {
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return false;
+}
+
 /**
  * @brief 测量一次性展示大量远程文件时的 UI 主线程耗时。
  * @return 填充 2500 个远程文件所需的毫秒数。
@@ -1023,6 +1060,53 @@ bool checkFileTreeDropWorkflow()
         return false;
     }
 
+    localPanel.setDialogsSuppressedForTesting(true);
+    QFile conflictingSource(sourcePath);
+    if (!conflictingSource.open(QIODevice::WriteOnly | QIODevice::NewOnly))
+    {
+        return false;
+    }
+    conflictingSource.write("renamed tree drop");
+    conflictingSource.close();
+    QMimeData conflictingMimeData;
+    conflictingMimeData.setUrls({QUrl::fromLocalFile(sourcePath)});
+    QDragEnterEvent conflictingDragEnterEvent(targetPosition, Qt::CopyAction, &conflictingMimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(localTree->viewport(), &conflictingDragEnterEvent);
+    QDropEvent conflictingDropEvent(QPointF(targetPosition), Qt::CopyAction, &conflictingMimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(localTree->viewport(), &conflictingDropEvent);
+    QApplication::processEvents();
+    const QString renamedMovedPath = QDir(targetDirectory).filePath("move-source-renamed.txt");
+    if (!conflictingDragEnterEvent.isAccepted()
+        || !conflictingDropEvent.isAccepted()
+        || QFileInfo::exists(sourcePath)
+        || !QFileInfo::exists(movedPath)
+        || !QFileInfo::exists(renamedMovedPath))
+    {
+        QTextStream(stderr) << "Local tree conflict did not preserve the target and rename the moved file" << Qt::endl;
+        return false;
+    }
+
+    const QString multiSourceA = QDir(temporaryDirectory.path()).filePath("multi-a.txt");
+    const QString multiSourceB = QDir(temporaryDirectory.path()).filePath("multi-b.txt");
+    QFile multiFileA(multiSourceA);
+    QFile multiFileB(multiSourceB);
+    if (!multiFileA.open(QIODevice::WriteOnly | QIODevice::NewOnly)
+        || !multiFileB.open(QIODevice::WriteOnly | QIODevice::NewOnly))
+    {
+        return false;
+    }
+    multiFileA.close();
+    multiFileB.close();
+    QMimeData multiMimeData;
+    multiMimeData.setUrls({QUrl::fromLocalFile(multiSourceA), QUrl::fromLocalFile(multiSourceB)});
+    QDragEnterEvent multiDragEnterEvent(targetPosition, Qt::CopyAction, &multiMimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(localTree->viewport(), &multiDragEnterEvent);
+    if (multiDragEnterEvent.isAccepted())
+    {
+        QTextStream(stderr) << "Local tree accepted a prohibited multi-item drag" << Qt::endl;
+        return false;
+    }
+
     FilePanel remotePanel(FilePanel::Mode::RemotePlaceholder);
     auto *remoteTree = remotePanel.findChild<QTreeWidget *>("remoteFileTree");
     if (remoteTree == nullptr || remoteTree->dragEnabled() || remoteTree->dragDropMode() != QAbstractItemView::DropOnly)
@@ -1033,7 +1117,7 @@ bool checkFileTreeDropWorkflow()
     return true;
 }
 
-bool checkRemoteMixedDrop(MainWindow &window, const QString &remotePath)
+bool checkRemoteSingleItemDrops(MainWindow &window, const QString &remotePath)
 {
     QTableWidget *localTable = window.findChild<QTableWidget *>("localFileTable");
     QTreeWidget *transferTable = window.findChild<QTreeWidget *>("transferTable");
@@ -1044,30 +1128,30 @@ bool checkRemoteMixedDrop(MainWindow &window, const QString &remotePath)
     }
     window.setLocalPathForTesting(downloadDirectory.path());
 
-    QJsonArray items;
-    QJsonObject fileItem;
-    fileItem.insert("path", joinRemotePathForCheck(remotePath, "readme.txt"));
-    fileItem.insert("isDirectory", false);
-    items.append(fileItem);
-    QJsonObject directoryItem;
-    directoryItem.insert("path", joinRemotePathForCheck(remotePath, "download"));
-    directoryItem.insert("isDirectory", true);
-    items.append(directoryItem);
+    auto dropSingleRemoteItem = [localTable](const QString &path, bool isDirectory) {
+        QJsonObject item;
+        item.insert("path", path);
+        item.insert("isDirectory", isDirectory);
+        QJsonArray items;
+        items.append(item);
 
-    QMimeData mimeData;
-    mimeData.setData(panel_shared::RemotePathMimeType, QJsonDocument(items).toJson(QJsonDocument::Compact));
-    QDragEnterEvent dragEnterEvent(QPoint(8, 8), Qt::CopyAction, &mimeData, Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(localTable->viewport(), &dragEnterEvent);
-    if (!dragEnterEvent.isAccepted())
+        QMimeData mimeData;
+        mimeData.setData(panel_shared::RemotePathMimeType, QJsonDocument(items).toJson(QJsonDocument::Compact));
+        QDragEnterEvent dragEnterEvent(QPoint(8, 8), Qt::CopyAction, &mimeData, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(localTable->viewport(), &dragEnterEvent);
+        if (!dragEnterEvent.isAccepted())
+        {
+            return false;
+        }
+        QDropEvent dropEvent(QPointF(8, 8), Qt::CopyAction, &mimeData, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(localTable->viewport(), &dropEvent);
+        return dropEvent.isAccepted();
+    };
+
+    if (!dropSingleRemoteItem(joinRemotePathForCheck(remotePath, "readme.txt"), false)
+        || !dropSingleRemoteItem(joinRemotePathForCheck(remotePath, "download"), true))
     {
-        QTextStream(stderr) << "Mixed remote drag was not accepted by the local panel" << Qt::endl;
-        return false;
-    }
-    QDropEvent dropEvent(QPointF(8, 8), Qt::CopyAction, &mimeData, Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(localTable->viewport(), &dropEvent);
-    if (!dropEvent.isAccepted())
-    {
-        QTextStream(stderr) << "Mixed remote drop was not accepted by the local panel" << Qt::endl;
+        QTextStream(stderr) << "Single remote drag was not accepted by the local panel" << Qt::endl;
         return false;
     }
     if (!waitForTransferRow(transferTable, "readme.txt", "下载", "已完成"))
@@ -1545,7 +1629,7 @@ bool checkRemoteUiWorkflow(
     if (useFakeBackend)
     {
         ok = checkExternalEditWorkflow(window, remotePath, remoteTable) && ok;
-        ok = checkRemoteMixedDrop(window, remotePath) && ok;
+        ok = checkRemoteSingleItemDrops(window, remotePath) && ok;
     }
 
     const QString directoryName = expectedNames.isEmpty() ? QString() : expectedNames.first();
@@ -1609,9 +1693,14 @@ bool checkRemoteUiWorkflow(
  * @param remotePath 新会话初始要加载的路径。
  * @return 当前远程标签页到达目标路径时返回 true。
  */
-bool connectFakeRemoteSession(MainWindow &window, const QString &remotePath)
+bool connectFakeRemoteSession(
+    MainWindow &window,
+    const QString &remotePath,
+    FakeRemoteFileSystem **connectedFileSystem = nullptr)
 {
-    window.setRemoteFileSystemForTesting(std::make_unique<FakeRemoteFileSystem>());
+    auto fileSystem = std::make_unique<FakeRemoteFileSystem>();
+    FakeRemoteFileSystem *fileSystemPointer = fileSystem.get();
+    window.setRemoteFileSystemForTesting(std::move(fileSystem));
 
     QComboBox *protocolCombo = window.findChild<QComboBox *>("quickProtocolCombo");
     QLineEdit *hostEdit = window.findChild<QLineEdit *>("quickHostEdit");
@@ -1649,6 +1738,10 @@ bool connectFakeRemoteSession(MainWindow &window, const QString &remotePath)
     {
         QTextStream(stderr) << "New fake remote session did not connect to expected path" << Qt::endl;
         return false;
+    }
+    if (connectedFileSystem != nullptr)
+    {
+        *connectedFileSystem = fileSystemPointer;
     }
     return true;
 }
@@ -2399,14 +2492,84 @@ bool checkRemoteMultiSessionWorkflow(MainWindow &window)
 bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
 {
     const QString remotePath = "/home/testuser/remote_test";
-    if (!connectFakeRemoteSession(window, remotePath))
+    FakeRemoteFileSystem *fileSystem = nullptr;
+    if (!connectFakeRemoteSession(window, remotePath, &fileSystem) || fileSystem == nullptr)
     {
         return false;
     }
     QTreeWidget *transferTable = window.findChild<QTreeWidget *>("transferTable");
-    if (transferTable == nullptr)
+    QTabWidget *remoteTabs = window.findChild<QTabWidget *>("remoteTabs");
+    if (transferTable == nullptr || remoteTabs == nullptr || remoteTabs->currentWidget() == nullptr)
     {
-        QTextStream(stderr) << "Directory operation transfer table is missing" << Qt::endl;
+        QTextStream(stderr) << "Directory operation UI objects are missing" << Qt::endl;
+        return false;
+    }
+
+    const QString uploadDirectory = remotePath + "/upload";
+    const QString sourceFile = remotePath + "/readme.txt";
+    const QString conflictingFile = uploadDirectory + "/readme.txt";
+    RemoteOperationResult result = fileSystem->createFile(conflictingFile.toStdString());
+    if (!result.success)
+    {
+        QTextStream(stderr) << "Unable to prepare remote file conflict smoke test" << Qt::endl;
+        return false;
+    }
+    window.moveRemotePathsForTesting({sourceFile}, uploadDirectory);
+    const QString renamedFile = uploadDirectory + "/readme-renamed.txt";
+    const std::vector<FileItem> rootItemsAfterFileRename = fileSystem->listDirectory(remotePath.toStdString());
+    const std::vector<FileItem> uploadItemsAfterFileRename = fileSystem->listDirectory(uploadDirectory.toStdString());
+    if (containsRemotePath(rootItemsAfterFileRename, sourceFile.toStdString(), FileItemType::File)
+        || !containsRemotePath(uploadItemsAfterFileRename, conflictingFile.toStdString(), FileItemType::File)
+        || !containsRemotePath(uploadItemsAfterFileRename, renamedFile.toStdString(), FileItemType::File))
+    {
+        QTextStream(stderr) << "Remote file conflict did not preserve the target and rename the moved file" << Qt::endl;
+        return false;
+    }
+    result = fileSystem->removeFile(conflictingFile.toStdString());
+    result = result.success ? fileSystem->removeFile(renamedFile.toStdString()) : result;
+    if (!result.success)
+    {
+        QTextStream(stderr) << "Unable to clean remote file conflict smoke test" << Qt::endl;
+        return false;
+    }
+
+    const QString sourceConflictDirectory = remotePath + "/conflict-folder";
+    const QString targetConflictDirectory = uploadDirectory + "/conflict-folder";
+    const QString renamedConflictDirectory = uploadDirectory + "/conflict-folder-renamed";
+    const QString sourceConflictFile = sourceConflictDirectory + "/source-only.txt";
+    const QString targetConflictFile = targetConflictDirectory + "/target-only.txt";
+    result = fileSystem->createDirectory(sourceConflictDirectory.toStdString());
+    result = result.success ? fileSystem->createDirectory(targetConflictDirectory.toStdString()) : result;
+    result = result.success ? fileSystem->createFile(sourceConflictFile.toStdString()) : result;
+    result = result.success ? fileSystem->createFile(targetConflictFile.toStdString()) : result;
+    if (!result.success)
+    {
+        QTextStream(stderr) << "Unable to prepare remote directory conflict smoke test" << Qt::endl;
+        return false;
+    }
+    window.moveRemotePathsForTesting({sourceConflictDirectory}, uploadDirectory);
+    if (!waitForRemoteConnected(remoteTabs->currentWidget(), remotePath))
+    {
+        QTextStream(stderr) << "Remote directory conflict move did not finish refreshing the remote panel" << Qt::endl;
+        return false;
+    }
+    const std::vector<FileItem> originalTargetItems = fileSystem->listDirectory(targetConflictDirectory.toStdString());
+    const std::vector<FileItem> renamedTargetItems = fileSystem->listDirectory(renamedConflictDirectory.toStdString());
+    const std::vector<FileItem> rootItemsAfterRename = fileSystem->listDirectory(remotePath.toStdString());
+    if (!containsRemotePath(originalTargetItems, targetConflictFile.toStdString(), FileItemType::File)
+        || !containsRemotePath(renamedTargetItems, (renamedConflictDirectory + "/source-only.txt").toStdString(), FileItemType::File)
+        || containsRemotePath(rootItemsAfterRename, sourceConflictDirectory.toStdString(), FileItemType::Directory))
+    {
+        QTextStream(stderr) << "Remote directory conflict did not preserve the target and rename the moved directory" << Qt::endl;
+        return false;
+    }
+    result = fileSystem->removeFile(targetConflictFile.toStdString());
+    result = result.success ? fileSystem->removeDirectory(targetConflictDirectory.toStdString()) : result;
+    result = result.success ? fileSystem->removeFile((renamedConflictDirectory + "/source-only.txt").toStdString()) : result;
+    result = result.success ? fileSystem->removeDirectory(renamedConflictDirectory.toStdString()) : result;
+    if (!result.success)
+    {
+        QTextStream(stderr) << "Unable to clean remote directory conflict smoke test" << Qt::endl;
         return false;
     }
 
@@ -2431,11 +2594,64 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
     std::filesystem::create_directories(downloadRoot);
     window.setLocalPathForTesting(QString::fromStdString(downloadRoot.u8string()));
 
+    const std::filesystem::path localConflictUpload = uploadRoot / "file-conflict.txt";
+    {
+        std::ofstream output(localConflictUpload, std::ios::binary | std::ios::trunc);
+        output << "DirBridge file conflict upload\n";
+    }
+    const QString remoteConflictFile = remotePath + "/file-conflict.txt";
+    const QString renamedRemoteConflictFile = remotePath + "/file-conflict-renamed.txt";
+    result = fileSystem->createFile(remoteConflictFile.toStdString());
+    if (!result.success)
+    {
+        QTextStream(stderr) << "Unable to prepare file upload conflict test" << Qt::endl;
+        return false;
+    }
+    window.uploadLocalFileForTesting(QString::fromStdString(localConflictUpload.u8string()));
+    if (!waitForRemotePath(fileSystem, remotePath, renamedRemoteConflictFile, FileItemType::File))
+    {
+        QTextStream(stderr) << "File upload conflict did not use a renamed remote target" << Qt::endl;
+        return false;
+    }
+
+    const std::filesystem::path existingLocalDownload = downloadRoot / "file-conflict.txt";
+    {
+        std::ofstream output(existingLocalDownload, std::ios::binary | std::ios::trunc);
+        output << "preserve existing local file\n";
+    }
+    window.downloadRemoteFileForTesting(remoteConflictFile);
+    const std::filesystem::path renamedLocalDownload = downloadRoot / "file-conflict-renamed.txt";
+    const auto renamedFileDownloadDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    while (!std::filesystem::is_regular_file(renamedLocalDownload)
+        && std::chrono::steady_clock::now() < renamedFileDownloadDeadline)
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    if (!std::filesystem::is_regular_file(existingLocalDownload)
+        || !std::filesystem::is_regular_file(renamedLocalDownload))
+    {
+        QTextStream(stderr) << "File download conflict did not preserve the target and use a renamed local file" << Qt::endl;
+        return false;
+    }
+
     window.uploadLocalPathForTesting(QString::fromStdString(localDirectory.u8string()));
     if (!waitForTransferRow(transferTable, "dirbridge-folder", "上传", "已完成"))
     {
         QTextStream(stderr) << "Directory upload did not complete before conflict retry" << Qt::endl;
         dumpTransferRows(transferTable);
+        return false;
+    }
+    const QString renamedUploadedDirectory = remotePath + "/dirbridge-folder-renamed";
+    window.uploadLocalPathForTesting(QString::fromStdString(localDirectory.u8string()));
+    if (!waitForRemotePath(fileSystem, remotePath, renamedUploadedDirectory, FileItemType::Directory)
+        || !waitForRemotePath(
+            fileSystem,
+            renamedUploadedDirectory + "/nested",
+            renamedUploadedDirectory + "/nested/inside.txt",
+            FileItemType::File))
+    {
+        QTextStream(stderr) << "Directory upload conflict did not use a renamed remote root" << Qt::endl;
         return false;
     }
     QTreeWidgetItem *selectedUploadParent = findTopLevelTransferRow(transferTable, "dirbridge-folder", "上传", "已完成");
@@ -2477,6 +2693,20 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
     {
         QTextStream(stderr) << "Downloaded remote directory does not contain deep nested file" << Qt::endl;
         dumpTransferRows(transferTable);
+        return false;
+    }
+    window.downloadRemotePathForTesting(movedDirectory);
+    const std::filesystem::path renamedDownloadedFile = downloadRoot / "dirbridge-folder-renamed" / "nested" / "inside.txt";
+    const auto renamedDownloadDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    while (!std::filesystem::is_regular_file(renamedDownloadedFile)
+        && std::chrono::steady_clock::now() < renamedDownloadDeadline)
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    if (!std::filesystem::is_regular_file(renamedDownloadedFile))
+    {
+        QTextStream(stderr) << "Directory download conflict did not use a renamed local root" << Qt::endl;
         return false;
     }
     QTreeWidgetItem *uploadParent = findTopLevelTransferRow(transferTable, "dirbridge-folder", "上传", "已完成");
@@ -2542,7 +2772,7 @@ bool checkRemoteUiWorkflow(MainWindow &window)
         true);
     return checkFileCreateRenameWorkflow()
         && checkFileTreeDropWorkflow()
-        && baseWorkflowOk
+        && checkRemoteDirectoryOperationWorkflow(window)
         && checkQuickSaveCreatesSeparateSite(window)
         && checkRemoteConnectionControlWorkflow(window)
         && checkRemoteNavigationResponsiveness()
@@ -2550,7 +2780,7 @@ bool checkRemoteUiWorkflow(MainWindow &window)
         && checkLocalPanelStateWorkflow()
         && checkSessionManagerWorkflow(window)
         && checkRemoteMultiSessionWorkflow(window)
-        && checkRemoteDirectoryOperationWorkflow(window)
+        && baseWorkflowOk
         && checkWindowCloseDuringUploadPreparation();
 }
 

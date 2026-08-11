@@ -22,7 +22,6 @@
 #include <QStringList>
 #include <QThread>
 #include <QTabWidget>
-#include <QMessageBox>
 
 using namespace window_shared;
 
@@ -998,126 +997,130 @@ void MainWindow::setRemotePermissions(RemoteSession &session, const QString &pat
 }
 
 /**
- * @brief 递归删除远程路径，供覆盖上传等同步流程复用。
+ * @brief 将单个远程项目移动到目标远程目录，并在重名时要求改名。
  * @param session 目标远程会话。
- * @param path 要删除的远程路径。
- * @param errorMessage 可选错误输出。
- * @return 删除成功返回 true。
- */
-bool MainWindow::removeRemotePathRecursive(
-    RemoteSession &session,
-    const QString &path,
-    QString *errorMessage,
-    std::optional<FileItemType> knownType)
-{
-    if (path.trimmed().isEmpty() || path == "/")
-    {
-        if (errorMessage != nullptr)
-        {
-            *errorMessage = "不允许删除远程根目录。";
-        }
-        return false;
-    }
-
-    std::function<bool(const QString &, std::optional<FileItemType>)> removeRecursive;
-    removeRecursive = [&](const QString &currentPath, std::optional<FileItemType> knownType) {
-        bool isDirectory = knownType == FileItemType::Directory;
-        if (!knownType.has_value() || isDirectory)
-        {
-            try
-            {
-                const std::vector<FileItem> children = session.fileSystem->listDirectory(currentPath.toStdString());
-                isDirectory = true;
-                for (const FileItem &child : children)
-                {
-                    if (!removeRecursive(QString::fromStdString(child.path), child.type))
-                    {
-                        return false;
-                    }
-                }
-            }
-            catch (const std::exception &error)
-            {
-                if (knownType == FileItemType::Directory)
-                {
-                    if (errorMessage != nullptr)
-                    {
-                        *errorMessage = QString("读取目录“%1”失败：%2").arg(currentPath, QString::fromUtf8(error.what()));
-                    }
-                    return false;
-                }
-            }
-        }
-
-        const RemoteOperationResult result = isDirectory
-            ? session.fileSystem->removeDirectory(currentPath.toStdString())
-            : session.fileSystem->removeFile(currentPath.toStdString());
-        if (!result.success)
-        {
-            if (errorMessage != nullptr)
-            {
-                *errorMessage = QString::fromStdString(result.message);
-            }
-            return false;
-        }
-        return true;
-    };
-
-    return removeRecursive(path, knownType);
-}
-
-/**
- * @brief 将一组远程项目移动到目标远程目录。
- * @param session 目标远程会话。
- * @param sourcePaths 待移动的远程路径列表。
+ * @param sourceItems 带文件类型的待移动远程项目；仅接受一个项目。
  * @param targetDirectory 目标远程目录。
  */
-void MainWindow::moveRemotePaths(RemoteSession &session, const QStringList &sourcePaths, const QString &targetDirectory)
+void MainWindow::moveRemotePaths(
+    RemoteSession &session,
+    const QList<RemoteTransferItem> &sourceItems,
+    const QString &targetDirectory)
 {
-    if (!session.connected)
+    if (!session.connected || session.fileSystem == nullptr)
     {
         session.panel->setRemoteError("远程会话未连接，无法移动。");
         return;
     }
-
-    QStringList movedPaths;
-    for (const QString &sourcePath : sourcePaths)
+    if (sourceItems.size() != 1)
     {
-        if (sourcePath.isEmpty() || targetDirectory.isEmpty())
-        {
-            continue;
-        }
-
-        if (isSameOrDescendantRemotePath(sourcePath, targetDirectory))
-        {
-            const QString message = QString("不能把远程项目移动到自身或子目录：%1").arg(sourcePath);
-            appendLog("WARN", message);
-            showWarningMessage("远程移动失败", message);
-            continue;
-        }
-
-        const QString targetPath = joinRemotePath(targetDirectory, remoteBaseName(sourcePath));
-        if (sourcePath == targetPath)
-        {
-            continue;
-        }
-
-        const RemoteOperationResult result = session.fileSystem->rename(sourcePath.toStdString(), targetPath.toStdString());
-        if (!result.success)
-        {
-            const QString detail = QString::fromStdString(result.message);
-            appendLog("ERROR", QString("远程移动失败：%1").arg(detail));
-            showWarningMessage("远程移动失败", userFacingRemoteError(detail));
-            continue;
-        }
-        movedPaths.append(QString("%1 -> %2").arg(sourcePath, targetPath));
+        showWarningMessage("无法拖拽", "暂不支持批量拖拽，请仅选择一个项目。");
+        return;
     }
 
-    if (!movedPaths.isEmpty())
+    auto reportMoveError = [this](const QString &detail) {
+        appendLog("ERROR", QString("远程移动失败：%1").arg(detail));
+        showWarningMessage("远程移动失败", userFacingRemoteError(detail));
+    };
+
+    auto findTargetItem = [&session](
+                              const QString &directory,
+                              const QString &name,
+                              bool *exists,
+                              QString *errorMessage) {
+        *exists = false;
+        try
+        {
+            const std::vector<FileItem> siblings = session.fileSystem->listDirectory(directory.toStdString());
+            for (const FileItem &candidate : siblings)
+            {
+                if (QString::fromStdString(candidate.name) != name)
+                {
+                    continue;
+                }
+                *exists = true;
+                break;
+            }
+            return true;
+        }
+        catch (const std::exception &error)
+        {
+            if (errorMessage != nullptr)
+            {
+                *errorMessage = QString("检查目标目录“%1”失败：%2")
+                    .arg(directory, QString::fromUtf8(error.what()));
+            }
+            return false;
+        }
+    };
+
+    const RemoteTransferItem &sourceItem = sourceItems.constFirst();
+    const QString sourcePath = sourceItem.path;
+    if (sourcePath.isEmpty() || targetDirectory.isEmpty())
     {
-        appendLog("INFO", QString("远程项目已移动：%1").arg(movedPaths.join("; ")));
-        loadRemotePath(session, session.currentPath, false);
+        return;
     }
+    if (isSameOrDescendantRemotePath(sourcePath, targetDirectory))
+    {
+        const QString message = QString("不能把远程项目移动到自身或子目录：%1").arg(sourcePath);
+        appendLog("WARN", message);
+        showWarningMessage("远程移动失败", message);
+        return;
+    }
+
+    QString targetPath = joinRemotePath(targetDirectory, remoteBaseName(sourcePath));
+    if (sourcePath == targetPath)
+    {
+        return;
+    }
+
+    bool targetExists = false;
+    QString lookupError;
+    if (!findTargetItem(targetDirectory, remoteBaseName(targetPath), &targetExists, &lookupError))
+    {
+        reportMoveError(lookupError);
+        return;
+    }
+    if (targetExists)
+    {
+        lookupError.clear();
+        const QString newName = promptConflictRename(
+            "远程移动重名",
+            targetPath,
+            remoteBaseName(sourcePath),
+            sourceItem.isDirectory,
+            [&](const QString &candidateName) {
+                bool exists = false;
+                if (!findTargetItem(targetDirectory, candidateName, &exists, &lookupError))
+                {
+                    return false;
+                }
+                return exists;
+            });
+        if (!lookupError.isEmpty())
+        {
+            reportMoveError(lookupError);
+            return;
+        }
+        if (newName.isEmpty())
+        {
+            appendLog("INFO", QString("远程移动已取消：%1").arg(sourcePath));
+            return;
+        }
+        targetPath = joinRemotePath(targetDirectory, newName);
+    }
+
+    const RemoteOperationResult result = session.fileSystem->rename(
+        sourcePath.toStdString(),
+        targetPath.toStdString());
+    if (!result.success)
+    {
+        reportMoveError(QString::fromStdString(result.message));
+        return;
+    }
+
+    appendLog("INFO", QString("远程项目已移动：%1 -> %2").arg(sourcePath, targetPath));
+    loadRemotePath(session, session.currentPath, false);
 }
 
 /**

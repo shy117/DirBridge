@@ -205,6 +205,24 @@ QString dropTargetDisplayName(const QString &path)
     const QString name = QFileInfo(normalized).fileName();
     return name.isEmpty() ? QDir::toNativeSeparators(normalized) : name;
 }
+
+QString localConflictRenameCandidate(const QFileInfo &sourceInfo, int index)
+{
+    const QString suffix = sourceInfo.isDir() ? QString() : sourceInfo.completeSuffix();
+    QString baseName = sourceInfo.isDir() || suffix.isEmpty()
+        ? sourceInfo.fileName()
+        : sourceInfo.fileName().left(sourceInfo.fileName().size() - suffix.size() - 1);
+    if (baseName.isEmpty())
+    {
+        baseName = sourceInfo.fileName();
+    }
+    const QString marker = index == 1
+        ? QString("-renamed")
+        : QString("-renamed-%1").arg(index);
+    return suffix.isEmpty()
+        ? baseName + marker
+        : baseName + marker + "." + suffix;
+}
 } // namespace
 
 /**
@@ -408,6 +426,11 @@ void FilePanel::startDragFromSelection()
     {
         return;
     }
+    if (items.size() != 1)
+    {
+        showFileOperationWarning(this, "无法拖拽", "暂不支持批量拖拽，请仅选择一个项目。");
+        return;
+    }
 
     auto *mimeData = new QMimeData();
     if (m_mode == Mode::Local)
@@ -443,17 +466,25 @@ bool FilePanel::canAcceptTransferDrop(const QMimeData *mimeData, QObject *watche
 
     if (m_mode == Mode::RemotePlaceholder)
     {
-        return (m_localFilesDroppedOnRemote != nullptr && mimeData->hasUrls())
-            || (m_remoteFilesDroppedOnRemote != nullptr && mimeData->hasFormat(RemotePathMimeType));
+        return (m_localFilesDroppedOnRemote != nullptr
+                && mimeData->hasUrls()
+                && mimeData->urls().size() == 1
+                && mimeData->urls().constFirst().isLocalFile())
+            || (m_remoteFilesDroppedOnRemote != nullptr
+                && mimeData->hasFormat(RemotePathMimeType)
+                && decodeRemoteTransferItems(mimeData->data(RemotePathMimeType)).size() == 1);
     }
 
     if (m_mode == Mode::Local)
     {
         if (mimeData->hasFormat(RemotePathMimeType))
         {
-            return m_remoteFilesDroppedOnLocal != nullptr;
+            return m_remoteFilesDroppedOnLocal != nullptr
+                && decodeRemoteTransferItems(mimeData->data(RemotePathMimeType)).size() == 1;
         }
         return mimeData->hasUrls()
+            && mimeData->urls().size() == 1
+            && mimeData->urls().constFirst().isLocalFile()
             && (watched == m_localTree->viewport() || watched == m_table->viewport());
     }
 
@@ -476,14 +507,10 @@ void FilePanel::handleTransferDrop(const QMimeData *mimeData, const QPoint &posi
     {
         if (mimeData->hasFormat(RemotePathMimeType) && m_remoteFilesDroppedOnRemote)
         {
-            QStringList remotePaths;
-            for (const RemoteTransferItem &item : decodeRemoteTransferItems(mimeData->data(RemotePathMimeType)))
+            const QList<RemoteTransferItem> remoteItems = decodeRemoteTransferItems(mimeData->data(RemotePathMimeType));
+            if (!remoteItems.isEmpty())
             {
-                remotePaths.append(item.path);
-            }
-            if (!remotePaths.isEmpty())
-            {
-                m_remoteFilesDroppedOnRemote(remotePaths, dropTargetDirectory(watched, position));
+                m_remoteFilesDroppedOnRemote(remoteItems, dropTargetDirectory(watched, position));
             }
             return;
         }
@@ -646,7 +673,7 @@ void FilePanel::showTransferDropHint(QObject *watched, const QMimeData *mimeData
  */
 void FilePanel::handleLocalPathDrop(const QStringList &sourcePaths, const QString &targetDirectory)
 {
-    if (sourcePaths.isEmpty() || targetDirectory.isEmpty() || !QFileInfo(targetDirectory).isDir())
+    if (sourcePaths.size() != 1 || targetDirectory.isEmpty() || !QFileInfo(targetDirectory).isDir())
     {
         return;
     }
@@ -658,7 +685,6 @@ void FilePanel::handleLocalPathDrop(const QStringList &sourcePaths, const QStrin
         bool move = false;
     };
     QList<LocalDropItem> items;
-    QSet<QString> targets;
     for (const QString &sourcePath : sourcePaths)
     {
         const QFileInfo sourceInfo(sourcePath);
@@ -675,14 +701,55 @@ void FilePanel::handleLocalPathDrop(const QStringList &sourcePaths, const QStrin
             return;
         }
 
-        const QString target = QDir(targetDirectory).filePath(sourceInfo.fileName());
-        const QString normalizedTarget = normalizedLocalPath(target).toCaseFolded();
-        if (QFileInfo::exists(target) || targets.contains(normalizedTarget))
+        QString target = QDir(targetDirectory).filePath(sourceInfo.fileName());
+        if (QFileInfo::exists(target))
         {
-            showFileOperationWarning(this, "本地拖放失败", QString("目标项目已存在：%1").arg(target));
-            return;
+            QString newName;
+            if (m_dialogsSuppressedForTesting)
+            {
+                for (int index = 1; index < 10000; ++index)
+                {
+                    const QString candidate = localConflictRenameCandidate(sourceInfo, index);
+                    if (!QFileInfo::exists(QDir(targetDirectory).filePath(candidate)))
+                    {
+                        newName = candidate;
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                while (true)
+                {
+                    newName = promptConflictRename(
+                        this,
+                        "本地拖拽重名",
+                        target,
+                        sourceInfo.fileName(),
+                        sourceInfo.isDir());
+                    if (newName.isEmpty())
+                    {
+                        return;
+                    }
+                    if (!isValidRemoteName(newName))
+                    {
+                        showInvalidRemoteNameWarning(this);
+                        continue;
+                    }
+                    if (QFileInfo::exists(QDir(targetDirectory).filePath(newName)))
+                    {
+                        showFileOperationWarning(this, "本地拖拽重名", QString("目标项目仍然存在：%1").arg(newName));
+                        continue;
+                    }
+                    break;
+                }
+            }
+            if (newName.isEmpty())
+            {
+                return;
+            }
+            target = QDir(targetDirectory).filePath(newName);
         }
-        targets.insert(normalizedTarget);
         items.append({source, target, isSameLocalVolume(source, targetDirectory)});
     }
 
