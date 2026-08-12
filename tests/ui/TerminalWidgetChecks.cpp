@@ -10,6 +10,7 @@
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QScrollBar>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -46,12 +47,16 @@ int main(int argc, char **argv)
     mutableSnapshot->rows[1][1].background = {255, 0, 0, true};
     mutableSnapshot->cursor.visible = true;
     mutableSnapshot->cursor.column = 2;
+    mutableSnapshot->scrollTotal = 100;
+    mutableSnapshot->scrollLength = 4;
+    mutableSnapshot->scrollOffset = 96;
     widget.setSnapshot(mutableSnapshot);
 
     QByteArray textBytes;
     TerminalKeyEvent key;
     bool sawKey = false;
     bool sawResize = false;
+    int requestedScrollLines = 0;
     QObject::connect(&widget, &TerminalWidget::textInput,
         [&](const QByteArray &bytes) { textBytes += bytes; });
     QObject::connect(&widget, &TerminalWidget::keyInput,
@@ -65,10 +70,27 @@ int main(int argc, char **argv)
                 && geometry.cellWidthPixels > 0
                 && geometry.cellHeightPixels > 0;
         });
+    QObject::connect(&widget, &TerminalWidget::scrollRequested,
+        [&](int lines) { requestedScrollLines += lines; });
 
     host.show();
     widget.setFocus(Qt::OtherFocusReason);
     application.processEvents();
+    QScrollBar *scrollBar = widget.findChild<QScrollBar *>("terminalScrollBar");
+    if (scrollBar == nullptr || !scrollBar->isVisible()
+        || scrollBar->maximum() != 96 || scrollBar->value() != 96)
+    {
+        return 8;
+    }
+    scrollBar->setValue(80);
+    scrollBar->setValue(72);
+    if (requestedScrollLines != -24)
+    {
+        return 9;
+    }
+    mutableSnapshot->scrollOffset = 72;
+    widget.setSnapshot(mutableSnapshot);
+    requestedScrollLines = 0;
     QKeyEvent tabEvent(QEvent::KeyPress, Qt::Key_Tab,
         Qt::NoModifier, QStringLiteral("\t"));
     QApplication::sendEvent(&widget, &tabEvent);
@@ -76,6 +98,10 @@ int main(int argc, char **argv)
         || QApplication::focusWidget() != &widget)
     {
         return 5;
+    }
+    if (requestedScrollLines != 24)
+    {
+        return 10;
     }
 
     QKeyEvent textEvent(QEvent::KeyPress, Qt::Key_A,
@@ -155,7 +181,12 @@ int main(int argc, char **argv)
         [&](const TerminalMouseEvent &) { ++mouseInputCount; });
     QApplication::clipboard()->setText(QStringLiteral("right-click-paste"));
     mutableSnapshot->mouseTracking = true;
+    mutableSnapshot->alternateScreen = true;
     widget.setSnapshot(mutableSnapshot);
+    if (scrollBar->isVisible())
+    {
+        return 11;
+    }
     QMouseEvent rightPress(QEvent::MouseButtonPress,
         QPointF(10, 10), QPointF(10, 10),
         Qt::RightButton, Qt::RightButton, Qt::NoModifier);

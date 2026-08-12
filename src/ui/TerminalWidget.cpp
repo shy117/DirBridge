@@ -10,11 +10,14 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
+#include <QScrollBar>
+#include <QSignalBlocker>
 #include <QStringList>
 #include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 using dirbridge::terminal::TerminalColor;
 using dirbridge::terminal::TerminalCellWidth;
@@ -92,6 +95,22 @@ TerminalWidget::TerminalWidget(QWidget *parent)
     setMouseTracking(true);
     setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     setAutoFillBackground(false);
+    m_scrollBar = new QScrollBar(Qt::Vertical, this);
+    m_scrollBar->setObjectName("terminalScrollBar");
+    m_scrollBar->setVisible(false);
+    connect(m_scrollBar, &QScrollBar::valueChanged, this, [this](int value) {
+        if (!m_snapshot || m_scrollBar->signalsBlocked())
+        {
+            return;
+        }
+        const qint64 delta = static_cast<qint64>(value)
+            - m_requestedScrollOffset;
+        m_requestedScrollOffset = value;
+        if (delta != 0)
+        {
+            Q_EMIT scrollRequested(static_cast<int>(delta));
+        }
+    });
     updateMetrics();
     m_resizeTimer.setSingleShot(true);
     m_resizeTimer.setInterval(50);
@@ -107,6 +126,7 @@ void TerminalWidget::setSnapshot(
     {
         m_status.clear();
     }
+    updateScrollBar();
     update();
 }
 
@@ -350,6 +370,7 @@ void TerminalWidget::paintEvent(QPaintEvent *)
 void TerminalWidget::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
+    layoutScrollBar();
     m_resizeTimer.start();
 }
 
@@ -387,6 +408,7 @@ void TerminalWidget::keyPressEvent(QKeyEvent *event)
             || event->key() == Qt::Key_Enter
             || event->key() == Qt::Key_Escape))
     {
+        scrollToBottom();
         TerminalKeyEvent terminalEvent;
         terminalEvent.key = key;
         terminalEvent.text = event->text().toUtf8().toStdString();
@@ -400,6 +422,7 @@ void TerminalWidget::keyPressEvent(QKeyEvent *event)
     }
     if (!event->text().isEmpty() && !control && !alt)
     {
+        scrollToBottom();
         Q_EMIT textInput(event->text().toUtf8());
         event->accept();
         return;
@@ -412,6 +435,7 @@ void TerminalWidget::inputMethodEvent(QInputMethodEvent *event)
     m_preedit = event->preeditString();
     if (!event->commitString().isEmpty())
     {
+        scrollToBottom();
         Q_EMIT textInput(event->commitString().toUtf8());
     }
     update();
@@ -549,10 +573,89 @@ void TerminalWidget::updateMetrics()
     m_ascent = metrics.ascent();
 }
 
+void TerminalWidget::layoutScrollBar()
+{
+    if (m_scrollBar == nullptr)
+    {
+        return;
+    }
+    const int scrollBarWidth = m_scrollBar->sizeHint().width();
+    m_scrollBar->setGeometry(
+        std::max(0, width() - scrollBarWidth),
+        0,
+        scrollBarWidth,
+        height());
+}
+
+void TerminalWidget::updateScrollBar()
+{
+    if (m_scrollBar == nullptr)
+    {
+        return;
+    }
+    const bool shouldShow = m_snapshot
+        && !m_snapshot->alternateScreen
+        && m_snapshot->scrollTotal > m_snapshot->scrollLength;
+    const bool visibilityChanged = !m_scrollBar->isHidden() != shouldShow;
+    if (shouldShow)
+    {
+        const std::uint64_t maximum = m_snapshot->scrollTotal - m_snapshot->scrollLength;
+        const QSignalBlocker blocker(m_scrollBar);
+        m_scrollBar->setRange(0, static_cast<int>(std::min<std::uint64_t>(
+            maximum, static_cast<std::uint64_t>(std::numeric_limits<int>::max()))));
+        m_scrollBar->setPageStep(static_cast<int>(std::min<std::uint64_t>(
+            m_snapshot->scrollLength,
+            static_cast<std::uint64_t>(std::numeric_limits<int>::max()))));
+        m_scrollBar->setSingleStep(1);
+        const int offset = static_cast<int>(std::min<std::uint64_t>(
+            m_snapshot->scrollOffset,
+            static_cast<std::uint64_t>(m_scrollBar->maximum())));
+        m_scrollBar->setValue(offset);
+        m_requestedScrollOffset = offset;
+    }
+    else
+    {
+        m_requestedScrollOffset = 0;
+    }
+    m_scrollBar->setVisible(shouldShow);
+    layoutScrollBar();
+    if (visibilityChanged)
+    {
+        m_resizeTimer.start();
+    }
+}
+
+void TerminalWidget::scrollToBottom()
+{
+    if (!m_snapshot || m_snapshot->alternateScreen
+        || m_snapshot->scrollTotal <= m_snapshot->scrollLength)
+    {
+        return;
+    }
+    const std::uint64_t bottom = m_snapshot->scrollTotal - m_snapshot->scrollLength;
+    const qint64 delta = static_cast<qint64>(bottom)
+        - static_cast<qint64>(m_snapshot->scrollOffset);
+    if (delta != 0)
+    {
+        Q_EMIT scrollRequested(static_cast<int>(std::clamp<qint64>(
+            delta,
+            std::numeric_limits<int>::min(),
+            std::numeric_limits<int>::max())));
+    }
+}
+
+int TerminalWidget::terminalContentWidth() const
+{
+    const int scrollBarWidth = m_scrollBar != nullptr && m_scrollBar->isVisible()
+        ? m_scrollBar->width()
+        : 0;
+    return std::max(1, width() - scrollBarWidth);
+}
+
 void TerminalWidget::emitCurrentGeometry()
 {
     updateMetrics();
-    const int availableWidth = std::max(1, width() - 2 * m_margin);
+    const int availableWidth = std::max(1, terminalContentWidth() - 2 * m_margin);
     const int availableHeight = std::max(1, height() - 2 * m_margin);
     TerminalGeometry geometry;
     geometry.columns = static_cast<std::uint16_t>(
@@ -587,6 +690,7 @@ void TerminalWidget::pasteClipboard()
             return;
         }
     }
+    scrollToBottom();
     Q_EMIT pasteInput(utf8);
 }
 

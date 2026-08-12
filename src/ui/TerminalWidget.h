@@ -17,6 +17,7 @@ class QKeyEvent;
 class QMouseEvent;
 class QPaintEvent;
 class QResizeEvent;
+class QScrollBar;
 class QWheelEvent;
 
 class TerminalWidget final : public QWidget
@@ -59,6 +60,10 @@ private:
     };
 
     void updateMetrics();
+    void layoutScrollBar();
+    void updateScrollBar();
+    void scrollToBottom();
+    int terminalContentWidth() const;
     void emitCurrentGeometry();
     void pasteClipboard();
     void copySelection();
@@ -69,6 +74,7 @@ private:
         dirbridge::terminal::TerminalMouseAction action) const;
 
     dirbridge::terminal::TerminalSnapshotPtr m_snapshot;
+    QScrollBar *m_scrollBar = nullptr;
     QTimer m_resizeTimer;
     QString m_status;
     QString m_preedit;
@@ -81,6 +87,7 @@ private:
     int m_cellHeight = 16;
     int m_ascent = 12;
     int m_margin = 6;
+    qint64 m_requestedScrollOffset = 0;
 };
 
 #endif // DIRBRIDGE_UI_TERMINALWIDGET_H
