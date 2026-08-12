@@ -474,6 +474,12 @@ void checkTransferQueueAndManager()
     directoryParent.status = TransferStatus::Running;
     aggregateQueue.update(directoryParent);
     require(aggregateQueue.runningCount() == 0, "directory parent should not consume transfer concurrency");
+    require(aggregateQueue.cancel(directoryParent.id, "cancel directory transfer"), "running directory parent should be cancelable");
+    require(aggregateQueue.find(directoryParent.id)->status == TransferStatus::Canceled,
+            "directory parent should become canceled immediately because it has no transfer worker");
+    require(aggregateQueue.clearFinished() == 1, "canceled directory parent should be clearable");
+    require(aggregateQueue.find(directoryParent.id) == nullptr, "clearFinished should remove canceled directory parent");
+    require(aggregateQueue.find(directoryChild.id) != nullptr, "clearing directory parent should not implicitly remove unfinished children");
 
     const std::size_t removed = queue.clearFinished();
     require(removed >= 3, "clearFinished should remove completed, failed, and canceled jobs");

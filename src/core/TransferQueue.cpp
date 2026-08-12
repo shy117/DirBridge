@@ -33,7 +33,9 @@ bool TransferQueue::cancel(const std::string &id, const std::string &message)
         return false;
     }
 
-    job->status = job->status == TransferStatus::Running ? TransferStatus::Canceling : TransferStatus::Canceled;
+    job->status = job->kind == TransferJobKind::File && job->status == TransferStatus::Running
+        ? TransferStatus::Canceling
+        : TransferStatus::Canceled;
     job->errorMessage = message;
     return true;
 }
