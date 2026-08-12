@@ -10,6 +10,7 @@
 #include <QByteArray>
 #include <QMetaObject>
 #include <QPointer>
+#include <QRegularExpression>
 #include <QTimer>
 #include <QUuid>
 
@@ -79,6 +80,8 @@ struct SshTerminalManager::Session
     std::atomic<bool> closeRequested{false};
     std::atomic<bool> snapshotQueued{false};
     std::atomic<std::uint64_t> screenRevision{0};
+    QByteArray outputTail;
+    std::atomic<bool> hostKeyConflictReported{false};
 };
 
 struct SshTerminalManager::Impl
@@ -170,6 +173,7 @@ QString SshTerminalManager::openSession(const SiteProfile &profile)
     request.ssh.authentication = profile.password.empty()
         ? SshAuthenticationMode::SystemDefault
         : SshAuthenticationMode::StoredPassword;
+    request.ssh.allowLegacySshRsaHostKey = profile.sshRsaHostKeyCompatibility;
     request.sshExecutable = impl_->paths.sshExecutable;
     request.workingDirectory = impl_->paths.workingDirectory;
     request.askPassHelper = impl_->paths.askPassHelper;
@@ -466,6 +470,37 @@ void SshTerminalManager::runReader(Session *session)
         }
         else if (frame.type == FrameType::Output)
         {
+            const QByteArray outputChunk(
+                reinterpret_cast<const char *>(frame.payload.data()),
+                static_cast<qsizetype>(frame.payload.size()));
+            session->outputTail.append(outputChunk);
+            constexpr qsizetype maximumDiagnosticBytes = 64 * 1024;
+            if (session->outputTail.size() > maximumDiagnosticBytes)
+            {
+                session->outputTail.remove(
+                    0, session->outputTail.size() - maximumDiagnosticBytes);
+            }
+            const QString diagnosticText = QString::fromUtf8(session->outputTail);
+            if (!session->hostKeyConflictReported
+                && diagnosticText.contains("REMOTE HOST IDENTIFICATION HAS CHANGED")
+                && diagnosticText.contains("Host key verification failed"))
+            {
+                session->hostKeyConflictReported = true;
+                const QRegularExpression fingerprintPattern(
+                    QStringLiteral("SHA256:[A-Za-z0-9+/=]+"));
+                const QString fingerprint = fingerprintPattern
+                    .match(diagnosticText)
+                    .captured(0);
+                QMetaObject::invokeMethod(this,
+                    [manager, terminalId, fingerprint]() {
+                        if (manager)
+                        {
+                            Q_EMIT manager->hostKeyConflictDetected(
+                                terminalId, fingerprint);
+                        }
+                    },
+                    Qt::QueuedConnection);
+            }
             bool parsed = false;
             QString parseError;
             {

@@ -21,6 +21,7 @@ struct SshLaunchRequest
     std::optional<std::string> username;
     SshAuthenticationMode authentication =
         SshAuthenticationMode::SystemDefault;
+    bool allowLegacySshRsaHostKey = false;
 };
 
 } // namespace dirbridge::terminal

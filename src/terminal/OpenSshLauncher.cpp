@@ -176,6 +176,11 @@ OpenSshLaunchResult OpenSshLauncher::build(
     appendOption(spec.arguments, L"AddKeysToAgent", L"no");
     appendOption(spec.arguments, L"StrictHostKeyChecking", L"accept-new");
 
+    if (request.allowLegacySshRsaHostKey)
+    {
+        appendOption(spec.arguments, L"HostKeyAlgorithms", L"+ssh-rsa");
+    }
+
     if (request.authentication == SshAuthenticationMode::StoredPassword)
     {
         appendOption(spec.arguments, L"PreferredAuthentications", L"password");

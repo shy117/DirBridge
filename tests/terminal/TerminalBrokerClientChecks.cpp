@@ -166,6 +166,10 @@ int runFakeBroker(HANDLE command, HANDLE event)
     {
         return 10;
     }
+    if (!request.ssh.allowLegacySshRsaHostKey)
+    {
+        return 10;
+    }
     std::uint32_t nextCommandSequence = 2;
     if (request.ssh.authentication
         == dirbridge::terminal::SshAuthenticationMode::StoredPassword)
@@ -178,6 +182,21 @@ int runFakeBroker(HANDLE command, HANDLE event)
             return 10;
         }
         ++nextCommandSequence;
+    }
+    if (request.ssh.host == "host-key-conflict.invalid")
+    {
+        const std::string message =
+            "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\r\n"
+            "The fingerprint for the ED25519 key sent by the remote host is\r\n"
+            "SHA256:DirBridgeHostKeyConflictTest=\r\n"
+            "Host key verification failed.\r\n";
+        return writeFrame(event, {FrameType::Ready, start.generation, 1, {}})
+                && writeFrame(event, {FrameType::Output, start.generation, 2,
+                    std::vector<std::uint8_t>(message.begin(), message.end())})
+                && writeFrame(event, {FrameType::Exit, start.generation, 3, {255, 0, 0, 0}})
+                && writeFrame(event, {FrameType::Stopped, start.generation, 4, {}})
+            ? 0
+            : 11;
     }
     if (!writeFrame(event, {FrameType::Ready, start.generation, 1, {}})
         || !readFrame(command, resize)
@@ -216,6 +235,7 @@ int runParent(const std::filesystem::path &self)
     request.ssh.displayName = "fake";
     request.ssh.host = "example.invalid";
     request.ssh.authentication = dirbridge::terminal::SshAuthenticationMode::SystemDefault;
+    request.ssh.allowLegacySshRsaHostKey = true;
 
     TerminalBrokerClient invalidClient;
     StartRequest passwordRequest = request;

@@ -140,7 +140,8 @@ std::vector<std::uint8_t> encodeStartRequest(const StartRequest &request)
             == SshAuthenticationMode::StoredPassword
         ? 1U : 0U);
     bytes.push_back(request.ssh.username ? 1U : 0U);
-    put16(bytes, 0);
+    bytes.push_back(request.ssh.allowLegacySshRsaHostKey ? 1U : 0U);
+    bytes.push_back(0);
     if (!appendString(bytes, request.ssh.host)
         || !appendString(bytes, request.ssh.username.value_or(""))
         || !appendString(bytes, *executable)
@@ -165,7 +166,9 @@ bool decodeStartRequest(
     request.ssh.port = get16(payload.data() + 2);
     const std::uint8_t authentication = payload[4];
     const std::uint8_t hasUsername = payload[5];
-    if (authentication > 1 || hasUsername > 1)
+    const std::uint8_t allowLegacySshRsaHostKey = payload[6];
+    if (authentication > 1 || hasUsername > 1
+        || allowLegacySshRsaHostKey > 1 || payload[7] != 0)
     {
         error = "broker start flags are invalid";
         return false;
@@ -173,6 +176,7 @@ bool decodeStartRequest(
     request.ssh.authentication = authentication == 1
         ? SshAuthenticationMode::StoredPassword
         : SshAuthenticationMode::SystemDefault;
+    request.ssh.allowLegacySshRsaHostKey = allowLegacySshRsaHostKey == 1;
     std::size_t offset = 8;
     std::string username;
     std::string executable;

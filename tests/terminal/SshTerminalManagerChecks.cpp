@@ -45,6 +45,7 @@ int main(int argc, char **argv)
     site.port = 22;
     site.username = "tester";
     site.password = "saved-test-secret";
+    site.sshRsaHostKeyCompatibility = true;
 
     SshTerminalRuntimePaths missingPaths;
     missingPaths.brokerExecutable = fakeBroker.parent_path()
@@ -162,6 +163,59 @@ int main(int argc, char **argv)
         cancellationStarted = !cancellationManager.openSession(site).isEmpty();
     }
 
+    bool hostKeyConflictPassed = false;
+    {
+        SshTerminalRuntimePaths conflictPaths;
+        conflictPaths.brokerExecutable = fakeBroker;
+        conflictPaths.askPassHelper = fakeBroker;
+        conflictPaths.sshExecutable = fakeBroker;
+        conflictPaths.terminalEngineLibrary = terminalEngine;
+        conflictPaths.workingDirectory = std::filesystem::current_path();
+        SshTerminalManager conflictManager(std::move(conflictPaths));
+        QEventLoop conflictLoop;
+        bool conflictDetected = false;
+        bool conflictStopped = false;
+        bool conflictError = false;
+        QString conflictId;
+        SiteProfile conflictSite = site;
+        conflictSite.host = "host-key-conflict.invalid";
+        conflictSite.password.clear();
+
+        QObject::connect(&conflictManager,
+            &SshTerminalManager::hostKeyConflictDetected,
+            &conflictLoop,
+            [&](const QString &id, const QString &fingerprint) {
+                conflictDetected = id == conflictId
+                    && fingerprint == "SHA256:DirBridgeHostKeyConflictTest=";
+            });
+        QObject::connect(&conflictManager,
+            &SshTerminalManager::sessionStopped,
+            &conflictLoop,
+            [&](const QString &id) {
+                conflictStopped = id == conflictId;
+                QTimer::singleShot(20, &conflictLoop, &QEventLoop::quit);
+            });
+        QObject::connect(&conflictManager,
+            &SshTerminalManager::sessionError,
+            &conflictLoop,
+            [&](const QString &, const QString &) {
+                conflictError = true;
+                conflictLoop.quit();
+            });
+        conflictId = conflictManager.openSession(conflictSite);
+        QTimer::singleShot(5000, &conflictLoop, [&]() {
+            conflictError = true;
+            conflictLoop.quit();
+        });
+        if (!conflictId.isEmpty())
+        {
+            conflictLoop.exec();
+        }
+        hostKeyConflictPassed = !conflictError
+            && conflictDetected && conflictStopped
+            && conflictManager.sessionCount() == 0;
+    }
+
     bool stressPassed = false;
     {
         SshTerminalRuntimePaths stressPaths;
@@ -267,7 +321,7 @@ int main(int argc, char **argv)
 
     const bool passed = ready && output && exited && closeWasRequested
         && stopped && allStopped && cancellationStarted && stressPassed && !error
-        && manager.sessionCount() == 0;
+        && hostKeyConflictPassed && manager.sessionCount() == 0;
     std::cout << (passed ? "[PASS] " : "[FAIL] ")
               << "Qt SSH terminal manager lifecycle\n";
     return passed ? 0 : 3;

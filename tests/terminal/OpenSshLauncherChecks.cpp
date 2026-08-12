@@ -129,6 +129,15 @@ int main()
                 L"StrictHostKeyChecking=accept-new"),
         "fixed safety options are present");
 
+    request.allowLegacySshRsaHostKey = true;
+    const auto legacyHostKeyResult = OpenSshLauncher::build(request, config);
+    reporter.check(
+        legacyHostKeyResult.spec
+            && hasOption(*legacyHostKeyResult.spec, L"HostKeyAlgorithms=+ssh-rsa")
+            && !hasOption(*legacyHostKeyResult.spec, L"PubkeyAcceptedAlgorithms=+ssh-rsa")
+            && !hasOption(*legacyHostKeyResult.spec, L"HostKeyAlgorithms=+ssh-dss"),
+        "legacy host-key compatibility enables only ssh-rsa for one request");
+
     request.authentication = SshAuthenticationMode::StoredPassword;
     const auto passwordResult = OpenSshLauncher::build(request, config);
     reporter.check(
@@ -154,7 +163,11 @@ int main()
                 L"KbdInteractiveAuthentication=no")
             && hasOption(
                 *passwordResult.spec,
-                L"NumberOfPasswordPrompts=1"),
+                L"NumberOfPasswordPrompts=1")
+            && hasOption(
+                *passwordResult.spec,
+                L"HostKeyAlgorithms=+ssh-rsa")
+            && !hasOption(*passwordResult.spec, L"PubkeyAcceptedAlgorithms=+ssh-rsa"),
         "stored-password authentication is deterministic");
 
     const std::wstring commandLine =

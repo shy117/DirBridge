@@ -24,6 +24,7 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QComboBox>
+#include <QCheckBox>
 #include <QCloseEvent>
 #include <QDateTime>
 #include <QDialog>
@@ -489,6 +490,10 @@ bool editSiteProfileDialog(QWidget *parent, SiteProfile &profile)
     remotePathEdit->setObjectName("siteRemotePathEdit");
     auto *encodingEdit = new QLineEdit(QString::fromStdString(profile.encoding.empty() ? "UTF-8" : profile.encoding), &dialog);
     encodingEdit->setObjectName("siteEncodingEdit");
+    auto *sshRsaCompatibilityCheck = new QCheckBox("允许旧版 ssh-rsa 主机密钥", &dialog);
+    sshRsaCompatibilityCheck->setObjectName("siteSshRsaCompatibilityCheck");
+    sshRsaCompatibilityCheck->setChecked(profile.sshRsaHostKeyCompatibility);
+    sshRsaCompatibilityCheck->setToolTip("仅用于 SSH 终端连接旧设备；默认关闭，不启用 ssh-dss。");
 
     form->addRow("名称", nameEdit);
     form->addRow("分组", groupEdit);
@@ -499,6 +504,7 @@ bool editSiteProfileDialog(QWidget *parent, SiteProfile &profile)
     form->addRow("密码", passwordEdit);
     form->addRow("默认路径", remotePathEdit);
     form->addRow("编码", encodingEdit);
+    form->addRow("SSH 兼容", sshRsaCompatibilityCheck);
     layout->addLayout(form);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
@@ -514,6 +520,14 @@ bool editSiteProfileDialog(QWidget *parent, SiteProfile &profile)
             portEdit->setText(QString::number(defaultPortForProtocol(remoteProtocolFromString(text.toStdString()))));
         }
     });
+    const auto updateSshCompatibilityAvailability = [protocolCombo, sshRsaCompatibilityCheck]() {
+        sshRsaCompatibilityCheck->setEnabled(protocolCombo->currentText() == "SFTP");
+    };
+    QObject::connect(protocolCombo, &QComboBox::currentTextChanged, &dialog,
+        [updateSshCompatibilityAvailability](const QString &) {
+            updateSshCompatibilityAvailability();
+        });
+    updateSshCompatibilityAvailability();
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&]() {
         if (hostEdit->text().trimmed().isEmpty())
@@ -542,6 +556,8 @@ bool editSiteProfileDialog(QWidget *parent, SiteProfile &profile)
     profile.password = passwordEdit->text().toStdString();
     profile.defaultRemotePath = normalizedRemotePath(remotePathEdit->text()).toStdString();
     profile.encoding = encodingEdit->text().trimmed().isEmpty() ? "UTF-8" : encodingEdit->text().trimmed().toStdString();
+    profile.sshRsaHostKeyCompatibility = profile.protocol == RemoteProtocol::Sftp
+        && sshRsaCompatibilityCheck->isChecked();
     if (profile.name.empty())
     {
         profile.name = protocolText(profile.protocol).toStdString() + " " + profile.host;

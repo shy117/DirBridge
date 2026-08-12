@@ -89,7 +89,8 @@ void to_json(nlohmann::json &json, const SiteProfile &profile)
         {"passwordProtected", protectPassword(profile.password)},
         {"defaultRemotePath", profile.defaultRemotePath},
         {"encoding", profile.encoding},
-        {"fileTreeVisible", profile.fileTreeVisible}
+        {"fileTreeVisible", profile.fileTreeVisible},
+        {"sshRsaHostKeyCompatibility", profile.sshRsaHostKeyCompatibility}
     };
 }
 
@@ -113,4 +114,5 @@ void from_json(const nlohmann::json &json, SiteProfile &profile)
     profile.defaultRemotePath = json.value("defaultRemotePath", "/");
     profile.encoding = json.value("encoding", "UTF-8");
     profile.fileTreeVisible = json.value("fileTreeVisible", true);
+    profile.sshRsaHostKeyCompatibility = json.value("sshRsaHostKeyCompatibility", false);
 }

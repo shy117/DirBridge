@@ -197,8 +197,11 @@ private:
     {
         QWidget *page = nullptr;
         TerminalWidget *terminal = nullptr;
+        SiteProfile profile;
         bool active = true;
         bool closeRequested = false;
+        bool hostKeyConflictDetected = false;
+        QString hostKeyFingerprint;
     };
 
     void loadSites();
@@ -222,6 +225,7 @@ private:
     void showRemoteTabContextMenu(const QPoint &position);
     void setupSshTerminalManager();
     void openSshTerminal(const SiteProfile &profile);
+    void handleSshHostKeyConflict(const QString &terminalId);
     void closeTerminalTab(int index);
     void removeTerminalTab(const QString &terminalId);
     void setTerminalWorkspaceMaximized(bool maximized);

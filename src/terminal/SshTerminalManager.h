@@ -72,6 +72,9 @@ Q_SIGNALS:
         const QString &terminalId,
         quint32 sshExitCode,
         bool closeRequested);
+    void hostKeyConflictDetected(
+        const QString &terminalId,
+        const QString &fingerprint);
     void sessionError(const QString &terminalId, const QString &message);
     void sessionStopped(const QString &terminalId);
     void allSessionsStopped();

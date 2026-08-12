@@ -547,12 +547,14 @@ void checkSiteProfileAndSettingsStore()
     require(legacySite.group.empty(), "legacy site without group should load with empty group");
     require(legacySite.password == "legacy-secret", "legacy plain-text site password should load");
     require(legacySite.fileTreeVisible, "legacy site should default to a visible file tree");
+    require(!legacySite.sshRsaHostKeyCompatibility, "legacy site should disable ssh-rsa compatibility by default");
 
     SiteProfile groupedSite = legacySite;
     groupedSite.id = "grouped-site";
     groupedSite.group = "生产";
     groupedSite.password = "stored-secret";
     groupedSite.fileTreeVisible = false;
+    groupedSite.sshRsaHostKeyCompatibility = true;
     nlohmann::json groupedJson = groupedSite;
     require(groupedJson.value("group", "") == "生产", "site group should serialize");
     require(!groupedJson.contains("password"), "site profile should not serialize plain password");
@@ -563,6 +565,7 @@ void checkSiteProfileAndSettingsStore()
     require(roundTripSite.group == "生产", "site group should round trip");
     require(roundTripSite.password == groupedSite.password, "protected password should round trip");
     require(!roundTripSite.fileTreeVisible, "site file-tree visibility should round trip");
+    require(roundTripSite.sshRsaHostKeyCompatibility, "site ssh-rsa compatibility should round trip");
 
     const std::filesystem::path tempRoot = std::filesystem::temp_directory_path() / "dirbridge-settings-checks";
     std::filesystem::remove_all(tempRoot);
