@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(DirBridge
-    VERSION 0.7.3
+    VERSION 0.7.4
     LANGUAGES CXX
 )
 
