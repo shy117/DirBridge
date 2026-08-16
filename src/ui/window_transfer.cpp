@@ -375,6 +375,33 @@ void MainWindow::processTransferQueue()
             }
             return !cancelFlag->load();
         };
+        auto entryProgress = [window, parentJobId = QString::fromStdString(jobSnapshot.id)](
+                                 const std::string &relativePath,
+                                 std::int64_t transferredBytes,
+                                 std::int64_t totalBytes,
+                                 file_replacement::DirectoryEntryTransferState state) {
+            if (window == nullptr)
+            {
+                return;
+            }
+            QMetaObject::invokeMethod(window.data(), [
+                window,
+                parentJobId,
+                relativePath = QString::fromStdString(relativePath),
+                transferredBytes,
+                totalBytes,
+                state]() {
+                if (window != nullptr)
+                {
+                    window->handleDirectoryReplacementEntryProgress(
+                        parentJobId,
+                        relativePath,
+                        transferredBytes,
+                        totalBytes,
+                        static_cast<int>(state));
+                }
+            }, Qt::QueuedConnection);
+        };
 
         RemoteOperationResult result;
         if (fileSystem == nullptr)
@@ -390,7 +417,8 @@ void MainWindow::processTransferQueue()
                           *fileSystem,
                           jobSnapshot.localPath,
                           jobSnapshot.remotePath,
-                          progress)
+                          progress,
+                          entryProgress)
                     : RemoteOperationResult{false, "directory replacement job is missing the replacement flag"};
             }
             else
@@ -409,7 +437,8 @@ void MainWindow::processTransferQueue()
                           *fileSystem,
                           jobSnapshot.remotePath,
                           jobSnapshot.localPath,
-                          progress)
+                          progress,
+                          entryProgress)
                     : RemoteOperationResult{false, "directory replacement job is missing the replacement flag"};
             }
             else
@@ -475,7 +504,122 @@ void MainWindow::handleTransferProgress(const QString &jobId, std::int64_t trans
     }
     job->lastProgressAtMs = now;
     job->lastProgressBytes = job->transferredBytes;
-    refreshTransferTable();
+    scheduleTransferTableRefresh();
+}
+
+void MainWindow::handleDirectoryReplacementEntryProgress(
+    const QString &parentJobId,
+    const QString &relativePath,
+    std::int64_t transferredBytes,
+    std::int64_t totalBytes,
+    int state)
+{
+    TransferJob *parent = m_transferQueue.find(parentJobId.toStdString());
+    if (parent == nullptr || parent->kind != TransferJobKind::DirectoryReplacement)
+    {
+        return;
+    }
+
+    const QString normalizedRelativePath = QDir::fromNativeSeparators(relativePath);
+    const QString localPath = QDir(QString::fromStdString(parent->localPath)).filePath(normalizedRelativePath);
+    const QString remotePath = joinRemotePath(QString::fromStdString(parent->remotePath), normalizedRelativePath);
+    TransferJob *entryJob = nullptr;
+    for (const TransferJob &snapshot : m_transferQueue.jobs())
+    {
+        if (snapshot.parentId == parent->id
+            && snapshot.localPath == localPath.toStdString()
+            && snapshot.remotePath == remotePath.toStdString())
+        {
+            entryJob = m_transferQueue.find(snapshot.id);
+            break;
+        }
+    }
+
+    if (entryJob == nullptr)
+    {
+        TransferJob entry;
+        entry.id = makeTransferJobId(parent->direction == TransferDirection::Upload
+            ? "upload-replacement-entry"
+            : "download-replacement-entry");
+        entry.name = QFileInfo(normalizedRelativePath).fileName().toStdString();
+        entry.kind = TransferJobKind::DirectoryEntry;
+        entry.parentId = parent->id;
+        entry.direction = parent->direction;
+        entry.status = TransferStatus::Pending;
+        entry.localPath = localPath.toStdString();
+        entry.remotePath = remotePath.toStdString();
+        entry.sessionId = parent->sessionId;
+        entry.sessionName = parent->sessionName;
+        entry.totalBytes = totalBytes;
+        entry.transferredBytes = 0;
+        const TransferJob &queuedEntry = m_transferQueue.enqueue(std::move(entry));
+        entryJob = m_transferQueue.find(queuedEntry.id);
+    }
+    if (entryJob == nullptr)
+    {
+        return;
+    }
+
+    const auto entryState = static_cast<file_replacement::DirectoryEntryTransferState>(state);
+    const std::int64_t now = currentEpochMillis();
+    const std::int64_t previousAt = entryJob->lastProgressAtMs;
+    const std::int64_t previousBytes = entryJob->lastProgressBytes;
+    entryJob->transferredBytes = std::max<std::int64_t>(0, transferredBytes);
+    if (totalBytes >= 0)
+    {
+        entryJob->totalBytes = totalBytes;
+    }
+
+    switch (entryState)
+    {
+    case file_replacement::DirectoryEntryTransferState::Pending:
+        entryJob->status = TransferStatus::Pending;
+        break;
+    case file_replacement::DirectoryEntryTransferState::Running:
+        entryJob->status = TransferStatus::Running;
+        entryJob->startedAtMs = entryJob->startedAtMs > 0 ? entryJob->startedAtMs : now;
+        break;
+    case file_replacement::DirectoryEntryTransferState::Completed:
+        entryJob->status = TransferStatus::Completed;
+        entryJob->startedAtMs = entryJob->startedAtMs > 0 ? entryJob->startedAtMs : now;
+        entryJob->finishedAtMs = now;
+        if (entryJob->totalBytes < 0)
+        {
+            entryJob->totalBytes = entryJob->transferredBytes;
+        }
+        entryJob->currentBytesPerSecond = 0.0;
+        break;
+    case file_replacement::DirectoryEntryTransferState::Failed:
+        entryJob->status = TransferStatus::Failed;
+        entryJob->finishedAtMs = now;
+        entryJob->currentBytesPerSecond = 0.0;
+        break;
+    }
+
+    if (entryJob->status == TransferStatus::Running
+        && previousAt > 0 && now > previousAt && entryJob->transferredBytes >= previousBytes)
+    {
+        const double seconds = static_cast<double>(now - previousAt) / 1000.0;
+        entryJob->currentBytesPerSecond = seconds > 0.0
+            ? static_cast<double>(entryJob->transferredBytes - previousBytes) / seconds
+            : 0.0;
+    }
+    entryJob->lastProgressAtMs = now;
+    entryJob->lastProgressBytes = entryJob->transferredBytes;
+    scheduleTransferTableRefresh();
+}
+
+void MainWindow::scheduleTransferTableRefresh()
+{
+    if (m_transferTableRefreshScheduled)
+    {
+        return;
+    }
+    m_transferTableRefreshScheduled = true;
+    QTimer::singleShot(100, this, [this]() {
+        m_transferTableRefreshScheduled = false;
+        refreshTransferTable();
+    });
 }
 
 /**
@@ -487,6 +631,7 @@ void MainWindow::handleTransferProgress(const QString &jobId, std::int64_t trans
 void MainWindow::handleTransferFinished(const QString &jobId, const RemoteOperationResult &result, bool canceled)
 {
     TransferJob *job = m_transferQueue.find(jobId.toStdString());
+    bool refreshRemoteDirectory = false;
     if (job != nullptr)
     {
         const bool wasCanceling = job->status == TransferStatus::Canceling;
@@ -512,9 +657,49 @@ void MainWindow::handleTransferFinished(const QString &jobId, const RemoteOperat
         job->finishedAtMs = currentEpochMillis();
         job->currentBytesPerSecond = 0.0;
 
-        if (job->status == TransferStatus::Completed)
+        if (job->kind == TransferJobKind::DirectoryReplacement)
         {
-            if (job->direction == TransferDirection::Upload)
+            for (const TransferJob &snapshot : m_transferQueue.jobs())
+            {
+                if (snapshot.parentId != job->id
+                    || snapshot.status == TransferStatus::Completed
+                    || snapshot.status == TransferStatus::Failed
+                    || snapshot.status == TransferStatus::Canceled)
+                {
+                    continue;
+                }
+                TransferJob *entry = m_transferQueue.find(snapshot.id);
+                if (entry != nullptr)
+                {
+                    entry->status = job->status == TransferStatus::Canceled
+                        ? TransferStatus::Canceled
+                        : TransferStatus::Failed;
+                    entry->finishedAtMs = job->finishedAtMs;
+                    entry->currentBytesPerSecond = 0.0;
+                }
+            }
+        }
+
+        if (job->direction == TransferDirection::Upload)
+        {
+            if (job->parentId.empty())
+            {
+                refreshRemoteDirectory = job->status == TransferStatus::Completed;
+            }
+            else
+            {
+                const TransferJob *parent = m_transferQueue.find(job->parentId);
+                const bool allChildrenFinished = parent != nullptr
+                    && parent->preparationFinished
+                    && std::all_of(m_transferQueue.jobs().begin(), m_transferQueue.jobs().end(), [parent](const TransferJob &candidate) {
+                        return candidate.parentId != parent->id
+                            || candidate.status == TransferStatus::Completed
+                            || candidate.status == TransferStatus::Failed
+                            || candidate.status == TransferStatus::Canceled;
+                    });
+                refreshRemoteDirectory = allChildrenFinished;
+            }
+            if (refreshRemoteDirectory)
             {
                 RemoteSession *session = remoteSessionById(job->sessionId);
                 if (session != nullptr && session->connected)
@@ -522,7 +707,24 @@ void MainWindow::handleTransferFinished(const QString &jobId, const RemoteOperat
                     loadRemotePath(*session, session->currentPath, false);
                 }
             }
-            else if (m_localPanel != nullptr)
+        }
+        else if (m_localPanel != nullptr)
+        {
+            bool refreshLocalDirectory = job->parentId.empty()
+                && job->status == TransferStatus::Completed;
+            if (!job->parentId.empty())
+            {
+                const TransferJob *parent = m_transferQueue.find(job->parentId);
+                refreshLocalDirectory = parent != nullptr
+                    && parent->preparationFinished
+                    && std::all_of(m_transferQueue.jobs().begin(), m_transferQueue.jobs().end(), [parent](const TransferJob &candidate) {
+                        return candidate.parentId != parent->id
+                            || candidate.status == TransferStatus::Completed
+                            || candidate.status == TransferStatus::Failed
+                            || candidate.status == TransferStatus::Canceled;
+                    });
+            }
+            if (refreshLocalDirectory)
             {
                 m_localPanel->refresh();
             }
@@ -639,7 +841,8 @@ void MainWindow::refreshTransferTable()
         m_transferTable->addTopLevelItem(item);
         allItems[job.id] = item;
         installProgressBar(item, job);
-        if (job.kind == TransferJobKind::Directory)
+        if (job.kind == TransferJobKind::Directory
+            || job.kind == TransferJobKind::DirectoryReplacement)
         {
             parentItems[job.id] = item;
             const auto expanded = expandedStates.find(job.id);
@@ -703,10 +906,12 @@ void MainWindow::updateTransferActionButtons()
     const TransferJob *selectedJob = selectedId.isEmpty() ? nullptr : m_transferQueue.find(selectedId.toStdString());
 
     const bool canCancel = selectedJob != nullptr
+        && selectedJob->kind != TransferJobKind::DirectoryEntry
         && (selectedJob->status == TransferStatus::Preparing
             || selectedJob->status == TransferStatus::Pending
             || selectedJob->status == TransferStatus::Running);
     const bool canRetry = selectedJob != nullptr
+        && selectedJob->kind != TransferJobKind::DirectoryEntry
         && (selectedJob->status == TransferStatus::Failed || selectedJob->status == TransferStatus::Canceled);
     const bool hasFinishedJobs = std::any_of(m_transferQueue.jobs().begin(), m_transferQueue.jobs().end(), [](const TransferJob &job) {
         return job.status == TransferStatus::Completed
@@ -1770,7 +1975,7 @@ void MainWindow::appendPreparedDirectoryTransferJobs(const QString &parentJobId,
     {
         m_transferQueue.enqueue(job);
     }
-    refreshTransferTable();
+    scheduleTransferTableRefresh();
     processTransferQueue();
 }
 
@@ -1825,6 +2030,18 @@ void MainWindow::finishPreparedDirectoryTransfer(const QString &parentJobId, con
         parent->status = TransferStatus::Completed;
         parent->finishedAtMs = currentEpochMillis();
         parent->errorMessage = "0 / 0 个文件";
+        if (parent->direction == TransferDirection::Upload)
+        {
+            RemoteSession *session = remoteSessionById(parent->sessionId);
+            if (session != nullptr && session->connected)
+            {
+                loadRemotePath(*session, session->currentPath, false);
+            }
+        }
+        else if (m_localPanel != nullptr)
+        {
+            m_localPanel->refresh();
+        }
     }
     refreshTransferTable();
     processTransferQueue();

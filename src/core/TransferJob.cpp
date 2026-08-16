@@ -12,6 +12,8 @@ std::string toString(TransferJobKind kind)
         return "directory";
     case TransferJobKind::DirectoryReplacement:
         return "directory-replacement";
+    case TransferJobKind::DirectoryEntry:
+        return "directory-entry";
     }
 
     return "file";

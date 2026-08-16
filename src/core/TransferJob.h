@@ -25,7 +25,8 @@ enum class TransferJobKind
 {
     File,
     Directory,
-    DirectoryReplacement
+    DirectoryReplacement,
+    DirectoryEntry
 };
 
 struct TransferJob

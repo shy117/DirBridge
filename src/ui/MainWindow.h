@@ -339,6 +339,13 @@ private:
      */
     void processTransferQueue();
     void handleTransferProgress(const QString &jobId, std::int64_t transferredBytes, std::int64_t totalBytes);
+    void handleDirectoryReplacementEntryProgress(
+        const QString &parentJobId,
+        const QString &relativePath,
+        std::int64_t transferredBytes,
+        std::int64_t totalBytes,
+        int state);
+    void scheduleTransferTableRefresh();
     void handleTransferFinished(const QString &jobId, const RemoteOperationResult &result, bool canceled);
     bool hasRunningTransferForSession(const QString &sessionId) const;
     void refreshTransferTable();
@@ -395,6 +402,7 @@ private:
     bool m_closePending = false;
     bool m_closeReady = false;
     bool m_transferWorkerRunning = false;
+    bool m_transferTableRefreshScheduled = false;
     QString m_runningTransferJobId;
     QThread *m_transferThread = nullptr;
     std::map<std::string, std::shared_ptr<std::atomic_bool>> m_transferCancelFlags;

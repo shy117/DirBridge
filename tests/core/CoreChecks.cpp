@@ -680,10 +680,21 @@ void checkDirectoryReplacement()
 
     ReplacementFaultRemoteFileSystem successfulRemote;
     seedTarget(successfulRemote);
+    int pendingEntryEvents = 0;
+    int runningEntryEvents = 0;
+    int completedEntryEvents = 0;
+    int failedEntryEvents = 0;
     RemoteOperationResult result = file_replacement::uploadDirectoryReplacing(
         successfulRemote,
         sourceRoot.string(),
-        remoteTarget);
+        remoteTarget,
+        {},
+        [&](const std::string &, std::int64_t, std::int64_t, file_replacement::DirectoryEntryTransferState state) {
+            pendingEntryEvents += state == file_replacement::DirectoryEntryTransferState::Pending ? 1 : 0;
+            runningEntryEvents += state == file_replacement::DirectoryEntryTransferState::Running ? 1 : 0;
+            completedEntryEvents += state == file_replacement::DirectoryEntryTransferState::Completed ? 1 : 0;
+            failedEntryEvents += state == file_replacement::DirectoryEntryTransferState::Failed ? 1 : 0;
+        });
     require(result.success, "remote directory safe replacement should succeed: " + result.message);
     std::vector<FileItem> items = successfulRemote.listDirectory(profile.defaultRemotePath);
     require(!hasReplacementArtifact(items), "successful directory replacement should clean all artifacts");
@@ -699,6 +710,9 @@ void checkDirectoryReplacement()
         "directory replacement should preserve nested files and empty directories");
     require(successfulRemote.uploadCalls == 2 && successfulRemote.renameCalls == 2,
         "directory replacement should upload every file then perform two renames");
+    require(pendingEntryEvents == 2 && runningEntryEvents >= 2
+            && completedEntryEvents == 2 && failedEntryEvents == 0,
+        "directory replacement should report each file as pending, running, and completed");
 
     ReplacementFaultRemoteFileSystem canceledRemote;
     seedTarget(canceledRemote);
@@ -1037,6 +1051,8 @@ void checkTransferJob()
     require(toString(download.kind) == "directory", "directory job kind text mismatch");
     download.kind = TransferJobKind::DirectoryReplacement;
     require(toString(download.kind) == "directory-replacement", "directory replacement job kind text mismatch");
+    download.kind = TransferJobKind::DirectoryEntry;
+    require(toString(download.kind) == "directory-entry", "directory entry job kind text mismatch");
     download.kind = TransferJobKind::File;
     require(toString(download.kind) == "file", "file job kind text mismatch");
 
@@ -1143,6 +1159,11 @@ void checkTransferQueueAndManager()
     directoryChild.parentId = directoryParent.id;
     directoryChild.status = TransferStatus::Pending;
     aggregateQueue.enqueue(directoryChild);
+    TransferJob directoryEntry = directoryChild;
+    directoryEntry.id = "directory-entry";
+    directoryEntry.kind = TransferJobKind::DirectoryEntry;
+    directoryEntry.parentId = directoryParent.id;
+    aggregateQueue.enqueue(directoryEntry);
     TransferJob *nextAggregateJob = aggregateQueue.nextPending();
     require(nextAggregateJob != nullptr && nextAggregateJob->id == directoryChild.id, "directory parent should not be picked as executable transfer");
     directoryParent.status = TransferStatus::Failed;
@@ -1150,7 +1171,11 @@ void checkTransferQueueAndManager()
     require(aggregateQueue.retry(directoryParent.id, "retry-directory-parent") == nullptr, "directory parent should not be retried directly");
     directoryParent.status = TransferStatus::Running;
     aggregateQueue.update(directoryParent);
-    require(aggregateQueue.runningCount() == 0, "directory parent should not consume transfer concurrency");
+    directoryEntry.status = TransferStatus::Running;
+    aggregateQueue.update(directoryEntry);
+    require(aggregateQueue.runningCount() == 0, "directory parent and display-only entries should not consume transfer concurrency");
+    require(aggregateQueue.retry(directoryEntry.id, "retry-directory-entry") == nullptr,
+        "display-only directory entries should not be retried independently");
     require(aggregateQueue.cancel(directoryParent.id, "cancel directory transfer"), "running directory parent should be cancelable");
     require(aggregateQueue.find(directoryParent.id)->status == TransferStatus::Canceled,
             "directory parent should become canceled immediately because it has no transfer worker");

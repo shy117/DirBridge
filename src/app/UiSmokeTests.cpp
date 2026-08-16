@@ -1362,6 +1362,34 @@ QTreeWidgetItem *findTopLevelTransferRow(QTreeWidget *table, const QString &name
     return nullptr;
 }
 
+QTreeWidgetItem *findLatestTopLevelTransferRowWithChildren(
+    QTreeWidget *table,
+    const QString &name,
+    const QString &direction,
+    const QString &status,
+    int minimumChildCount)
+{
+    if (table == nullptr)
+    {
+        return nullptr;
+    }
+
+    const QString arrow = direction == "上传" ? "->" : "<-";
+    for (int index = table->topLevelItemCount() - 1; index >= 0; --index)
+    {
+        QTreeWidgetItem *item = table->topLevelItem(index);
+        if (item != nullptr
+            && item->text(0) == name
+            && item->text(1) == status
+            && item->text(5) == arrow
+            && item->childCount() >= minimumChildCount)
+        {
+            return item;
+        }
+    }
+    return nullptr;
+}
+
 bool hasProgressBar(QTreeWidget *table, QTreeWidgetItem *item)
 {
     return table != nullptr
@@ -2814,6 +2842,27 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
     }
 
     const QString uploadedDirectory = remotePath + "/dirbridge-folder";
+    int directoryUploadLoadingCount = 0;
+    QLabel *remoteStateLabel = remoteTabs->currentWidget() == nullptr
+        ? nullptr
+        : remoteTabs->currentWidget()->findChild<QLabel *>("remoteStateLabel");
+    bool directoryUploadWasLoading = false;
+    QTimer directoryUploadLoadingMonitor;
+    if (remoteStateLabel != nullptr)
+    {
+        QObject::connect(&directoryUploadLoadingMonitor, &QTimer::timeout, &directoryUploadLoadingMonitor, [
+            remoteStateLabel,
+            &directoryUploadLoadingCount,
+            &directoryUploadWasLoading]() {
+            const bool loading = remoteStateLabel->text().contains("正在加载");
+            if (loading && !directoryUploadWasLoading)
+            {
+                ++directoryUploadLoadingCount;
+            }
+            directoryUploadWasLoading = loading;
+        });
+        directoryUploadLoadingMonitor.start(5);
+    }
     window.uploadLocalPathForTesting(QString::fromStdString(localDirectory.u8string()));
     if (!waitForTransferRow(transferTable, "dirbridge-folder", "上传", "已完成"))
     {
@@ -2821,6 +2870,14 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
         dumpTransferRows(transferTable);
         return false;
     }
+    if (!waitForRemoteConnected(remoteTabs->currentWidget(), remotePath)
+        || directoryUploadLoadingCount > 1)
+    {
+        directoryUploadLoadingMonitor.stop();
+        QTextStream(stderr) << "Directory upload should refresh the remote panel only once after all files finish" << Qt::endl;
+        return false;
+    }
+    directoryUploadLoadingMonitor.stop();
 
     const QString directoryTargetOnlyFile = uploadedDirectory + "/target-only-before-replacement.txt";
     result = fileSystem->createFile(directoryTargetOnlyFile.toStdString());
@@ -2845,6 +2902,20 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
     if (!directoryConflictDialogObserved || !directoryOverwriteCompleted)
     {
         QTextStream(stderr) << "Directory upload conflict did not show overwrite or safely replace the remote directory" << Qt::endl;
+        return false;
+    }
+    QTreeWidgetItem *replacementUploadRow = findLatestTopLevelTransferRowWithChildren(
+        transferTable,
+        "dirbridge-folder",
+        "上传",
+        "已完成",
+        2);
+    if (replacementUploadRow == nullptr
+        || replacementUploadRow->child(0)->text(1) != "已完成"
+        || replacementUploadRow->child(1)->text(1) != "已完成")
+    {
+        QTextStream(stderr) << "Directory replacement upload should expose completed per-file child rows" << Qt::endl;
+        dumpTransferRows(transferTable);
         return false;
     }
 

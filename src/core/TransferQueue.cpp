@@ -33,7 +33,9 @@ bool TransferQueue::cancel(const std::string &id, const std::string &message)
         return false;
     }
 
-    job->status = job->kind != TransferJobKind::Directory && job->status == TransferStatus::Running
+    job->status = job->kind != TransferJobKind::Directory
+            && job->kind != TransferJobKind::DirectoryEntry
+            && job->status == TransferStatus::Running
         ? TransferStatus::Canceling
         : TransferStatus::Canceled;
     job->errorMessage = message;
@@ -45,6 +47,7 @@ const TransferJob *TransferQueue::retry(const std::string &id, const std::string
     const TransferJob *job = find(id);
     if (job == nullptr
         || job->kind == TransferJobKind::Directory
+        || job->kind == TransferJobKind::DirectoryEntry
         || (job->status != TransferStatus::Failed && job->status != TransferStatus::Canceled))
     {
         return nullptr;
@@ -94,7 +97,9 @@ const TransferJob *TransferQueue::find(const std::string &id) const
 TransferJob *TransferQueue::nextPending()
 {
     const auto job = std::find_if(m_jobs.begin(), m_jobs.end(), [](const TransferJob &current) {
-        return current.kind != TransferJobKind::Directory && current.status == TransferStatus::Pending;
+        return current.kind != TransferJobKind::Directory
+            && current.kind != TransferJobKind::DirectoryEntry
+            && current.status == TransferStatus::Pending;
     });
     return job == m_jobs.end() ? nullptr : &(*job);
 }
@@ -102,7 +107,9 @@ TransferJob *TransferQueue::nextPending()
 std::size_t TransferQueue::runningCount() const
 {
     return static_cast<std::size_t>(std::count_if(m_jobs.begin(), m_jobs.end(), [](const TransferJob &job) {
-        return job.kind != TransferJobKind::Directory && job.status == TransferStatus::Running;
+        return job.kind != TransferJobKind::Directory
+            && job.kind != TransferJobKind::DirectoryEntry
+            && job.status == TransferStatus::Running;
     }));
 }
 

@@ -316,7 +316,8 @@ RemoteOperationResult uploadDirectoryReplacing(
     RemoteFileSystem &remoteFileSystem,
     const std::string &localDirectoryPath,
     const std::string &remoteDirectoryPath,
-    TransferProgressCallback progress)
+    TransferProgressCallback progress,
+    DirectoryEntryProgressCallback entryProgress)
 {
     const std::filesystem::path sourcePath = std::filesystem::u8path(localDirectoryPath);
     std::error_code localError;
@@ -440,6 +441,21 @@ RemoteOperationResult uploadDirectoryReplacing(
                     + temporaryPath + ": " + cleanupResult.message};
     };
 
+    if (entryProgress)
+    {
+        for (const LocalEntry &entry : localEntries)
+        {
+            if (!entry.directory)
+            {
+                entryProgress(
+                    entry.relativePath,
+                    0,
+                    entry.size,
+                    DirectoryEntryTransferState::Pending);
+            }
+        }
+    }
+
     std::int64_t completedBytes = 0;
     const auto notifyProgress = [&](std::int64_t transferredBytes) {
         return progress ? progress(transferredBytes, totalBytes) : true;
@@ -467,16 +483,49 @@ RemoteOperationResult uploadDirectoryReplacing(
             continue;
         }
 
+        if (entryProgress)
+        {
+            entryProgress(entry.relativePath, 0, entry.size, DirectoryEntryTransferState::Running);
+        }
+        auto lastEntryProgressAt = std::chrono::steady_clock::now() - std::chrono::milliseconds(100);
+        std::int64_t lastEntryBytes = 0;
+
         const RemoteOperationResult uploadResult = remoteFileSystem.uploadFile(
             localPathText(entry.path),
             remoteEntryPath,
             [&](std::int64_t fileBytes, std::int64_t) {
-                return notifyProgress(completedBytes + std::max<std::int64_t>(0, fileBytes));
+                const std::int64_t normalizedFileBytes = std::max<std::int64_t>(0, fileBytes);
+                const auto now = std::chrono::steady_clock::now();
+                if (entryProgress
+                    && (normalizedFileBytes >= entry.size
+                        || std::chrono::duration_cast<std::chrono::milliseconds>(now - lastEntryProgressAt).count() >= 100))
+                {
+                    entryProgress(
+                        entry.relativePath,
+                        normalizedFileBytes,
+                        entry.size,
+                        DirectoryEntryTransferState::Running);
+                    lastEntryProgressAt = now;
+                    lastEntryBytes = normalizedFileBytes;
+                }
+                return notifyProgress(completedBytes + normalizedFileBytes);
             });
         if (!uploadResult.success)
         {
+            if (entryProgress)
+            {
+                entryProgress(
+                    entry.relativePath,
+                    lastEntryBytes,
+                    entry.size,
+                    DirectoryEntryTransferState::Failed);
+            }
             return failAndCleanTemporary(
                 "failed to upload temporary remote directory file at " + remoteEntryPath + ": " + uploadResult.message);
+        }
+        if (entryProgress)
+        {
+            entryProgress(entry.relativePath, entry.size, entry.size, DirectoryEntryTransferState::Completed);
         }
         completedBytes += entry.size;
     }
@@ -522,7 +571,8 @@ RemoteOperationResult downloadDirectoryReplacing(
     RemoteFileSystem &remoteFileSystem,
     const std::string &remoteDirectoryPath,
     const std::string &localDirectoryPath,
-    TransferProgressCallback progress)
+    TransferProgressCallback progress,
+    DirectoryEntryProgressCallback entryProgress)
 {
     const std::filesystem::path targetPath = std::filesystem::u8path(localDirectoryPath);
     std::error_code localError;
@@ -672,6 +722,21 @@ RemoteOperationResult downloadDirectoryReplacing(
                     + localPathText(temporaryPath) + ": " + cleanupResult.message};
     };
 
+    if (entryProgress)
+    {
+        for (const RemoteEntry &entry : remoteEntries)
+        {
+            if (!entry.directory)
+            {
+                entryProgress(
+                    entry.relativePath.generic_u8string(),
+                    0,
+                    entry.size,
+                    DirectoryEntryTransferState::Pending);
+            }
+        }
+    }
+
     std::int64_t completedBytes = 0;
     const auto notifyProgress = [&](std::int64_t transferredBytes) {
         return progress ? progress(transferredBytes, reportedTotalBytes) : true;
@@ -700,17 +765,51 @@ RemoteOperationResult downloadDirectoryReplacing(
         }
 
         std::int64_t downloadedFileBytes = 0;
+        const std::string relativePath = entry.relativePath.generic_u8string();
+        if (entryProgress)
+        {
+            entryProgress(relativePath, 0, entry.size, DirectoryEntryTransferState::Running);
+        }
+        auto lastEntryProgressAt = std::chrono::steady_clock::now() - std::chrono::milliseconds(100);
         const RemoteOperationResult downloadResult = remoteFileSystem.downloadFile(
             entry.remotePath,
             localPathText(localEntryPath),
             [&](std::int64_t fileBytes, std::int64_t) {
                 downloadedFileBytes = std::max(downloadedFileBytes, std::max<std::int64_t>(0, fileBytes));
+                const auto now = std::chrono::steady_clock::now();
+                if (entryProgress
+                    && ((entry.size >= 0 && downloadedFileBytes >= entry.size)
+                        || std::chrono::duration_cast<std::chrono::milliseconds>(now - lastEntryProgressAt).count() >= 100))
+                {
+                    entryProgress(
+                        relativePath,
+                        downloadedFileBytes,
+                        entry.size,
+                        DirectoryEntryTransferState::Running);
+                    lastEntryProgressAt = now;
+                }
                 return notifyProgress(completedBytes + downloadedFileBytes);
             });
         if (!downloadResult.success)
         {
+            if (entryProgress)
+            {
+                entryProgress(
+                    relativePath,
+                    downloadedFileBytes,
+                    entry.size,
+                    DirectoryEntryTransferState::Failed);
+            }
             return failAndCleanTemporary("failed to download temporary local directory file at "
                 + localPathText(localEntryPath) + ": " + downloadResult.message);
+        }
+        if (entryProgress)
+        {
+            entryProgress(
+                relativePath,
+                entry.size >= 0 ? entry.size : downloadedFileBytes,
+                entry.size,
+                DirectoryEntryTransferState::Completed);
         }
         completedBytes += entry.size >= 0 ? entry.size : downloadedFileBytes;
     }

@@ -3,10 +3,26 @@
 
 #include "core/RemoteFileSystem.h"
 
+#include <cstdint>
+#include <functional>
 #include <string>
 
 namespace file_replacement
 {
+enum class DirectoryEntryTransferState
+{
+    Pending,
+    Running,
+    Completed,
+    Failed
+};
+
+using DirectoryEntryProgressCallback = std::function<void(
+    const std::string &relativePath,
+    std::int64_t transferredBytes,
+    std::int64_t totalBytes,
+    DirectoryEntryTransferState state)>;
+
 /**
  * @brief 将本地文件上传到远程临时文件，并在成功后安全替换已有远程文件。
  * @param remoteFileSystem 已连接的远程文件系统。
@@ -33,7 +49,8 @@ RemoteOperationResult uploadDirectoryReplacing(
     RemoteFileSystem &remoteFileSystem,
     const std::string &localDirectoryPath,
     const std::string &remoteDirectoryPath,
-    TransferProgressCallback progress = {});
+    TransferProgressCallback progress = {},
+    DirectoryEntryProgressCallback entryProgress = {});
 
 /**
  * @brief 将远程目录完整下载到本地同级临时目录，成功后整体替换既有本地目录。
@@ -47,7 +64,8 @@ RemoteOperationResult downloadDirectoryReplacing(
     RemoteFileSystem &remoteFileSystem,
     const std::string &remoteDirectoryPath,
     const std::string &localDirectoryPath,
-    TransferProgressCallback progress = {});
+    TransferProgressCallback progress = {},
+    DirectoryEntryProgressCallback entryProgress = {});
 
 /**
  * @brief 将远程文件下载到本地临时文件，并在成功后安全替换已有本地文件。
