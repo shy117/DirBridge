@@ -9,6 +9,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLocale>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QStandardPaths>
@@ -164,6 +165,41 @@ QString formatFileSize(qint64 size)
     }
 
     return QString("%1 %2").arg(value, 0, 'f', 1).arg(units.at(unitIndex));
+}
+
+QDateTime parseRemoteModifiedTime(const QString &value)
+{
+    const QString normalized = value.simplified();
+    if (normalized.isEmpty())
+    {
+        return {};
+    }
+
+    QDateTime parsed = QDateTime::fromString(normalized, "yyyy-MM-dd HH:mm:ss");
+    if (!parsed.isValid())
+    {
+        parsed = QDateTime::fromString(normalized, Qt::ISODate);
+    }
+    if (!parsed.isValid())
+    {
+        const QStringList parts = normalized.split(' ');
+        if (parts.size() == 3 && parts.at(2).contains(':'))
+        {
+            const QDateTime now = QDateTime::currentDateTime();
+            parsed = QLocale::c().toDateTime(
+                QString("%1 %2 %3 %4").arg(parts.at(0), parts.at(1), QString::number(now.date().year()), parts.at(2)),
+                "MMM d yyyy HH:mm");
+            if (parsed.isValid() && parsed > now.addDays(1))
+            {
+                parsed = parsed.addYears(-1);
+            }
+        }
+        else if (parts.size() == 3)
+        {
+            parsed = QLocale::c().toDateTime(normalized, "MMM d yyyy");
+        }
+    }
+    return parsed;
 }
 
 QString desktopPath()

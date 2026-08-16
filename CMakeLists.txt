@@ -86,6 +86,8 @@ add_library(DirBridgeCore STATIC
     src/core/FileCache.h
     src/core/FileItem.cpp
     src/core/FileItem.h
+    src/core/FileReplacement.cpp
+    src/core/FileReplacement.h
     src/core/RemoteFileSystem.h
     src/core/TransferJob.cpp
     src/core/TransferJob.h
@@ -239,6 +241,8 @@ add_executable(DirBridge
     src/ui/FileChangeMonitor.h
     src/ui/ExternalEditManager.cpp
     src/ui/ExternalEditManager.h
+    src/ui/TransferConflictDialog.cpp
+    src/ui/TransferConflictDialog.h
     src/ui/window_layout.cpp
     src/ui/window_remote.cpp
     src/ui/window_session.cpp
@@ -290,6 +294,39 @@ target_include_directories(DirBridge
 add_executable(DirBridgeCoreChecks
     tests/core/CoreChecks.cpp
 )
+
+if(BUILD_TESTING)
+    add_executable(DirBridgeTransferConflictDialogPreview
+        src/app/TransferConflictDialogPreview.cpp
+        src/ui/TransferConflictDialog.cpp
+        src/ui/TransferConflictDialog.h
+        src/ui/panel_shared.cpp
+        src/ui/panel_shared.h
+        ${DIRBRIDGE_RESOURCE_FILES}
+    )
+
+    target_link_libraries(DirBridgeTransferConflictDialogPreview
+        PRIVATE
+            Qt${QT_VERSION_MAJOR}::Widgets
+            Qt${QT_VERSION_MAJOR}::Svg
+            DirBridgeCore
+    )
+
+    target_compile_definitions(DirBridgeTransferConflictDialogPreview
+        PRIVATE
+            QT_NO_KEYWORDS
+    )
+
+    target_include_directories(DirBridgeTransferConflictDialogPreview
+        PRIVATE
+            src
+    )
+
+    add_test(
+        NAME DirBridgeTransferConflictDialogCheck
+        COMMAND DirBridgeTransferConflictDialogPreview --check
+    )
+endif()
 
 target_link_libraries(DirBridgeCoreChecks
     PRIVATE

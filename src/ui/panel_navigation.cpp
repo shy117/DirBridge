@@ -21,6 +21,7 @@
 #include <QKeySequence>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <utility>
 
 using namespace panel_shared;
@@ -299,6 +300,22 @@ void FilePanel::setRemoteItems(const QString &path, const std::vector<FileItem> 
     }
 
     updateRemoteNavigationButtons();
+}
+
+bool FilePanel::remoteItem(const QString &path, FileItem *item) const
+{
+    const auto found = std::find_if(m_remoteItems.begin(), m_remoteItems.end(), [&path](const FileItem &candidate) {
+        return QString::fromStdString(candidate.path) == path;
+    });
+    if (found == m_remoteItems.end())
+    {
+        return false;
+    }
+    if (item != nullptr)
+    {
+        *item = *found;
+    }
+    return true;
 }
 
 /**

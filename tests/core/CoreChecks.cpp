@@ -6,16 +6,19 @@
 #include "core/ExternalEditDocument.h"
 #include "core/FakeRemoteFileSystem.h"
 #include "core/FileCache.h"
+#include "core/FileReplacement.h"
 #include "core/TransferJob.h"
 #include "core/TransferManager.h"
 #include "core/TransferQueue.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -68,6 +71,146 @@ void requireThrows(Callable callable, const std::string &message)
 
     throw std::runtime_error(message);
 }
+
+bool isReplacementArtifactPath(const std::string &path)
+{
+    const std::size_t slashIndex = path.find_last_of('/');
+    const std::string name = slashIndex == std::string::npos ? path : path.substr(slashIndex + 1);
+    return name.rfind(".dirbridge-", 0) == 0;
+}
+
+bool hasReplacementArtifact(const std::vector<FileItem> &items)
+{
+    return std::any_of(items.begin(), items.end(), [](const FileItem &item) {
+        return isReplacementArtifactPath(item.path);
+    });
+}
+
+std::string replacementArtifactPath(const std::vector<FileItem> &items, const std::string &role)
+{
+    const std::string prefix = ".dirbridge-" + role + '-';
+    for (const FileItem &item : items)
+    {
+        if (item.name.rfind(prefix, 0) == 0)
+        {
+            return item.path;
+        }
+    }
+    return {};
+}
+
+std::int64_t fileSizeForPath(const std::vector<FileItem> &items, const std::string &path)
+{
+    for (const FileItem &item : items)
+    {
+        if (item.path == path && item.type == FileItemType::File)
+        {
+            return item.size;
+        }
+    }
+    return -1;
+}
+
+bool hasLocalReplacementArtifact(const std::filesystem::path &directory)
+{
+    for (const auto &entry : std::filesystem::directory_iterator(directory))
+    {
+        if (entry.path().filename().string().rfind(".dirbridge-", 0) == 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string readFileText(const std::filesystem::path &path)
+{
+    std::ifstream input(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+}
+
+class ReplacementFaultRemoteFileSystem : public FakeRemoteFileSystem
+{
+public:
+    bool failTemporaryUpload = false;
+    bool failTemporaryDownload = false;
+    bool failBackupRename = false;
+    bool failReplaceRename = false;
+    bool failRestoreRename = false;
+    bool failCleanup = false;
+    int uploadCalls = 0;
+    int downloadCalls = 0;
+    int renameCalls = 0;
+    std::string lastUploadPath;
+    std::string lastDownloadPath;
+
+    RemoteOperationResult uploadFile(
+        const std::string &localPath,
+        const std::string &remotePath,
+        TransferProgressCallback progress = {}) override
+    {
+        ++uploadCalls;
+        lastUploadPath = remotePath;
+        if (failTemporaryUpload && remotePath.find("/.dirbridge-upload-") != std::string::npos)
+        {
+            const RemoteOperationResult uploadResult = FakeRemoteFileSystem::uploadFile(
+                localPath,
+                remotePath,
+                std::move(progress));
+            return uploadResult.success
+                ? RemoteOperationResult{false, "injected temporary upload failure after write"}
+                : uploadResult;
+        }
+        return FakeRemoteFileSystem::uploadFile(localPath, remotePath, std::move(progress));
+    }
+
+    RemoteOperationResult downloadFile(
+        const std::string &remotePath,
+        const std::string &localPath,
+        TransferProgressCallback progress = {}) override
+    {
+        ++downloadCalls;
+        lastDownloadPath = localPath;
+        const RemoteOperationResult downloadResult = FakeRemoteFileSystem::downloadFile(
+            remotePath,
+            localPath,
+            std::move(progress));
+        if (failTemporaryDownload
+            && localPath.find(".dirbridge-download-directory-") != std::string::npos
+            && downloadResult.success)
+        {
+            return {false, "injected temporary directory download failure after write"};
+        }
+        return downloadResult;
+    }
+
+    RemoteOperationResult rename(const std::string &sourcePath, const std::string &targetPath) override
+    {
+        ++renameCalls;
+        if (failBackupRename && targetPath.find("/.dirbridge-backup-") != std::string::npos)
+        {
+            return {false, "injected backup rename failure"};
+        }
+        if (failReplaceRename && sourcePath.find("/.dirbridge-upload-") != std::string::npos)
+        {
+            return {false, "injected replacement rename failure"};
+        }
+        if (failRestoreRename && sourcePath.find("/.dirbridge-backup-") != std::string::npos)
+        {
+            return {false, "injected restore rename failure"};
+        }
+        return FakeRemoteFileSystem::rename(sourcePath, targetPath);
+    }
+
+    RemoteOperationResult remove(const std::string &path) override
+    {
+        if (failCleanup && isReplacementArtifactPath(path))
+        {
+            return {false, "injected artifact cleanup failure"};
+        }
+        return FakeRemoteFileSystem::remove(path);
+    }
+};
 
 void checkFakeRemoteFileSystem()
 {
@@ -207,6 +350,538 @@ void checkFakeRemoteFileSystem()
     require(!result.success, "upload after disconnect should fail");
     result = remote.downloadFile("/home/testuser/remote_test/upload.txt", (tempRoot / "after-disconnect.txt").string());
     require(!result.success, "download after disconnect should fail");
+}
+
+void checkFileReplacement()
+{
+    SiteProfile profile;
+    profile.name = "replacement-fake";
+    profile.protocol = RemoteProtocol::Sftp;
+    profile.host = "fake-host";
+    profile.port = 22;
+    profile.username = "testuser";
+    profile.defaultRemotePath = "/home/testuser/remote_test";
+
+    const std::filesystem::path tempRoot = std::filesystem::temp_directory_path() / "dirbridge-file-replacement-checks";
+    std::filesystem::remove_all(tempRoot);
+    std::filesystem::create_directories(tempRoot);
+    const std::filesystem::path originalSource = tempRoot / "original.txt";
+    const std::filesystem::path replacementSource = tempRoot / "replacement.txt";
+    {
+        std::ofstream output(originalSource, std::ios::binary | std::ios::trunc);
+        output << "old";
+    }
+    {
+        std::ofstream output(replacementSource, std::ios::binary | std::ios::trunc);
+        output << "new replacement content";
+    }
+    const auto originalSize = static_cast<std::int64_t>(std::filesystem::file_size(originalSource));
+    const auto replacementSize = static_cast<std::int64_t>(std::filesystem::file_size(replacementSource));
+    const std::string remoteTarget = "/home/testuser/remote_test/replaced.txt";
+
+    const auto seedTarget = [&](ReplacementFaultRemoteFileSystem &remote) {
+        RemoteOperationResult result = remote.connect(profile);
+        require(result.success, "replacement fake remote should connect");
+        result = remote.uploadFile(originalSource.string(), remoteTarget);
+        require(result.success, "replacement target seed upload should succeed");
+        remote.uploadCalls = 0;
+        remote.renameCalls = 0;
+        remote.lastUploadPath.clear();
+    };
+
+    ReplacementFaultRemoteFileSystem successfulRemote;
+    seedTarget(successfulRemote);
+    RemoteOperationResult result = file_replacement::uploadFileReplacing(
+        successfulRemote,
+        replacementSource.string(),
+        remoteTarget);
+    require(result.success, "remote safe replacement should succeed: " + result.message);
+    std::vector<FileItem> items = successfulRemote.listDirectory(profile.defaultRemotePath);
+    require(fileSizeForPath(items, remoteTarget) == replacementSize, "remote safe replacement should install new file");
+    require(!hasReplacementArtifact(items), "successful remote replacement should clean all artifacts");
+    require(successfulRemote.uploadCalls == 1
+            && successfulRemote.lastUploadPath.find("/.dirbridge-upload-") != std::string::npos,
+        "remote replacement should upload exactly one temporary file");
+    require(successfulRemote.renameCalls == 2, "remote replacement should back up and then install the target");
+
+    result = successfulRemote.uploadFile(originalSource.string(), remoteTarget);
+    require(result.success, "reset replacement target should succeed");
+    result = file_replacement::uploadFileReplacing(
+        successfulRemote,
+        replacementSource.string(),
+        remoteTarget,
+        [](std::int64_t, std::int64_t) { return false; });
+    require(!result.success, "canceled remote replacement should fail");
+    items = successfulRemote.listDirectory(profile.defaultRemotePath);
+    require(fileSizeForPath(items, remoteTarget) == originalSize, "canceled remote replacement should preserve original target");
+    require(!hasReplacementArtifact(items), "canceled remote replacement should clean temporary artifacts");
+
+    ReplacementFaultRemoteFileSystem temporaryUploadFailure;
+    seedTarget(temporaryUploadFailure);
+    temporaryUploadFailure.failTemporaryUpload = true;
+    result = file_replacement::uploadFileReplacing(temporaryUploadFailure, replacementSource.string(), remoteTarget);
+    require(!result.success, "injected temporary upload failure should fail replacement");
+    items = temporaryUploadFailure.listDirectory(profile.defaultRemotePath);
+    require(fileSizeForPath(items, remoteTarget) == originalSize, "temporary upload failure should preserve original target");
+    require(!hasReplacementArtifact(items), "temporary upload failure should clean the partially written artifact");
+
+    ReplacementFaultRemoteFileSystem temporaryCleanupFailure;
+    seedTarget(temporaryCleanupFailure);
+    temporaryCleanupFailure.failTemporaryUpload = true;
+    temporaryCleanupFailure.failCleanup = true;
+    result = file_replacement::uploadFileReplacing(temporaryCleanupFailure, replacementSource.string(), remoteTarget);
+    require(!result.success, "temporary artifact cleanup failure should be reported");
+    items = temporaryCleanupFailure.listDirectory(profile.defaultRemotePath);
+    const std::string retainedTemporary = replacementArtifactPath(items, "upload");
+    require(fileSizeForPath(items, remoteTarget) == originalSize,
+        "temporary cleanup failure should preserve original target");
+    require(!retainedTemporary.empty() && result.message.find(retainedTemporary) != std::string::npos,
+        "temporary cleanup failure should report the retained temporary path");
+
+    ReplacementFaultRemoteFileSystem backupFailure;
+    seedTarget(backupFailure);
+    backupFailure.failBackupRename = true;
+    result = file_replacement::uploadFileReplacing(backupFailure, replacementSource.string(), remoteTarget);
+    require(!result.success, "injected backup failure should fail replacement");
+    items = backupFailure.listDirectory(profile.defaultRemotePath);
+    require(fileSizeForPath(items, remoteTarget) == originalSize, "backup failure should preserve original target");
+    require(!hasReplacementArtifact(items), "backup failure should clean temporary upload");
+
+    ReplacementFaultRemoteFileSystem replaceFailure;
+    seedTarget(replaceFailure);
+    replaceFailure.failReplaceRename = true;
+    result = file_replacement::uploadFileReplacing(replaceFailure, replacementSource.string(), remoteTarget);
+    require(!result.success && result.message.find("was restored") != std::string::npos,
+        "replacement failure should report successful rollback");
+    items = replaceFailure.listDirectory(profile.defaultRemotePath);
+    require(fileSizeForPath(items, remoteTarget) == originalSize, "replacement failure should restore original target");
+    require(!hasReplacementArtifact(items), "successful rollback should clean replacement artifacts");
+
+    ReplacementFaultRemoteFileSystem restoreFailure;
+    seedTarget(restoreFailure);
+    restoreFailure.failReplaceRename = true;
+    restoreFailure.failRestoreRename = true;
+    result = file_replacement::uploadFileReplacing(restoreFailure, replacementSource.string(), remoteTarget);
+    require(!result.success, "injected rollback failure should fail replacement");
+    items = restoreFailure.listDirectory(profile.defaultRemotePath);
+    const std::string retainedBackup = replacementArtifactPath(items, "backup");
+    require(!retainedBackup.empty(), "rollback failure should retain the original backup");
+    require(result.message.find(retainedBackup) != std::string::npos,
+        "rollback failure should report the retained backup path");
+
+    ReplacementFaultRemoteFileSystem cleanupFailure;
+    seedTarget(cleanupFailure);
+    cleanupFailure.failCleanup = true;
+    result = file_replacement::uploadFileReplacing(cleanupFailure, replacementSource.string(), remoteTarget);
+    require(!result.success, "backup cleanup failure should be reported");
+    items = cleanupFailure.listDirectory(profile.defaultRemotePath);
+    const std::string retainedCleanupBackup = replacementArtifactPath(items, "backup");
+    require(fileSizeForPath(items, remoteTarget) == replacementSize,
+        "cleanup failure should not undo the installed replacement");
+    require(!retainedCleanupBackup.empty() && result.message.find(retainedCleanupBackup) != std::string::npos,
+        "cleanup failure should report the retained backup path");
+
+    ReplacementFaultRemoteFileSystem invalidTargetRemote;
+    seedTarget(invalidTargetRemote);
+    result = invalidTargetRemote.createDirectory("/home/testuser/remote_test/replacement-directory");
+    require(result.success, "replacement directory fixture should be created");
+    result = file_replacement::uploadFileReplacing(
+        invalidTargetRemote,
+        replacementSource.string(),
+        "/home/testuser/remote_test/replacement-directory");
+    require(!result.success, "remote replacement should reject a directory target");
+    result = file_replacement::uploadFileReplacing(
+        invalidTargetRemote,
+        replacementSource.string(),
+        "/home/testuser/remote_test/missing-replacement.txt");
+    require(!result.success, "remote replacement should reject a missing target");
+    items = invalidTargetRemote.listDirectory(profile.defaultRemotePath);
+    require(containsPath(items, "/home/testuser/remote_test/replacement-directory", FileItemType::Directory),
+        "rejected directory replacement should preserve the directory");
+    require(!hasReplacementArtifact(items), "rejected remote replacement targets should not create artifacts");
+
+    ReplacementFaultRemoteFileSystem ordinaryTransferRemote;
+    seedTarget(ordinaryTransferRemote);
+    TransferQueue ordinaryQueue;
+    TransferJob ordinaryUpload;
+    ordinaryUpload.id = "ordinary-upload";
+    ordinaryUpload.name = "ordinary.txt";
+    ordinaryUpload.direction = TransferDirection::Upload;
+    ordinaryUpload.localPath = replacementSource.string();
+    ordinaryUpload.remotePath = "/home/testuser/remote_test/ordinary.txt";
+    ordinaryQueue.enqueue(ordinaryUpload);
+    TransferManager ordinaryManager(ordinaryTransferRemote, ordinaryQueue);
+    ordinaryManager.processPending();
+    require(ordinaryQueue.find(ordinaryUpload.id)->status == TransferStatus::Completed,
+        "ordinary upload should complete");
+    require(ordinaryTransferRemote.lastUploadPath == ordinaryUpload.remotePath
+            && ordinaryTransferRemote.renameCalls == 0,
+        "ordinary upload should write directly without replacement artifacts");
+
+    result = ordinaryTransferRemote.uploadFile(originalSource.string(), remoteTarget);
+    require(result.success, "reset manager replacement target should succeed");
+    ordinaryTransferRemote.uploadCalls = 0;
+    ordinaryTransferRemote.renameCalls = 0;
+    ordinaryTransferRemote.lastUploadPath.clear();
+    TransferQueue replacementQueue;
+    TransferJob replacementUpload = ordinaryUpload;
+    replacementUpload.id = "replacement-upload";
+    replacementUpload.remotePath = remoteTarget;
+    replacementUpload.replaceExisting = true;
+    replacementQueue.enqueue(replacementUpload);
+    TransferManager replacementManager(ordinaryTransferRemote, replacementQueue);
+    replacementManager.processPending();
+    require(replacementQueue.find(replacementUpload.id)->status == TransferStatus::Completed,
+        "replacement upload task should complete");
+    require(ordinaryTransferRemote.lastUploadPath.find("/.dirbridge-upload-") != std::string::npos
+            && ordinaryTransferRemote.renameCalls == 2,
+        "replacement upload task should use the safe replacement path");
+
+    FakeRemoteFileSystem downloadRemote;
+    result = downloadRemote.connect(profile);
+    require(result.success, "download replacement fake remote should connect");
+    const std::filesystem::path localTarget = tempRoot / "download-target.txt";
+    {
+        std::ofstream output(localTarget, std::ios::binary | std::ios::trunc);
+        output << "preserve local original";
+    }
+    result = file_replacement::downloadFileReplacing(
+        downloadRemote,
+        "/home/testuser/remote_test/readme.txt",
+        localTarget.string());
+    require(result.success, "local download replacement should succeed: " + result.message);
+    require(readFileText(localTarget).find("fake remote file:") == 0,
+        "local download replacement should install downloaded content");
+    require(!hasLocalReplacementArtifact(tempRoot), "successful local replacement should clean all artifacts");
+
+    {
+        std::ofstream output(localTarget, std::ios::binary | std::ios::trunc);
+        output << "preserve canceled local original";
+    }
+    result = file_replacement::downloadFileReplacing(
+        downloadRemote,
+        "/home/testuser/remote_test/readme.txt",
+        localTarget.string(),
+        [](std::int64_t, std::int64_t) { return false; });
+    require(!result.success, "canceled local replacement should fail");
+    require(readFileText(localTarget) == "preserve canceled local original",
+        "canceled local replacement should preserve original content");
+    require(!hasLocalReplacementArtifact(tempRoot), "canceled local replacement should clean temporary file");
+
+    const std::filesystem::path missingLocalTarget = tempRoot / "missing-target.txt";
+    result = file_replacement::downloadFileReplacing(
+        downloadRemote,
+        "/home/testuser/remote_test/readme.txt",
+        missingLocalTarget.string());
+    require(!result.success && !std::filesystem::exists(missingLocalTarget),
+        "local replacement should reject a missing target");
+
+    const std::filesystem::path directoryTarget = tempRoot / "directory-target";
+    std::filesystem::create_directories(directoryTarget);
+    result = file_replacement::downloadFileReplacing(
+        downloadRemote,
+        "/home/testuser/remote_test/readme.txt",
+        directoryTarget.string());
+    require(!result.success && std::filesystem::is_directory(directoryTarget),
+        "local replacement should reject a directory target");
+
+    ReplacementFaultRemoteFileSystem managerDownloadRemote;
+    result = managerDownloadRemote.connect(profile);
+    require(result.success, "manager download fake remote should connect");
+    const std::filesystem::path ordinaryDownloadTarget = tempRoot / "ordinary-download.txt";
+    TransferQueue ordinaryDownloadQueue;
+    TransferJob ordinaryDownload;
+    ordinaryDownload.id = "ordinary-download";
+    ordinaryDownload.name = "ordinary-download.txt";
+    ordinaryDownload.direction = TransferDirection::Download;
+    ordinaryDownload.remotePath = "/home/testuser/remote_test/readme.txt";
+    ordinaryDownload.localPath = ordinaryDownloadTarget.string();
+    ordinaryDownloadQueue.enqueue(ordinaryDownload);
+    TransferManager ordinaryDownloadManager(managerDownloadRemote, ordinaryDownloadQueue);
+    ordinaryDownloadManager.processPending();
+    require(ordinaryDownloadQueue.find(ordinaryDownload.id)->status == TransferStatus::Completed,
+        "ordinary download should complete");
+    require(managerDownloadRemote.downloadCalls == 1
+            && managerDownloadRemote.lastDownloadPath == ordinaryDownload.localPath,
+        "ordinary download should write directly to its target");
+
+    const std::filesystem::path replacementDownloadTarget = tempRoot / "replacement-download.txt";
+    {
+        std::ofstream output(replacementDownloadTarget, std::ios::binary | std::ios::trunc);
+        output << "replace this local file";
+    }
+    managerDownloadRemote.downloadCalls = 0;
+    managerDownloadRemote.lastDownloadPath.clear();
+    TransferQueue replacementDownloadQueue;
+    TransferJob replacementDownload = ordinaryDownload;
+    replacementDownload.id = "replacement-download";
+    replacementDownload.localPath = replacementDownloadTarget.string();
+    replacementDownload.replaceExisting = true;
+    replacementDownloadQueue.enqueue(replacementDownload);
+    TransferManager replacementDownloadManager(managerDownloadRemote, replacementDownloadQueue);
+    replacementDownloadManager.processPending();
+    require(replacementDownloadQueue.find(replacementDownload.id)->status == TransferStatus::Completed,
+        "replacement download task should complete");
+    require(managerDownloadRemote.downloadCalls == 1
+            && managerDownloadRemote.lastDownloadPath.find(".dirbridge-download-") != std::string::npos
+            && managerDownloadRemote.lastDownloadPath != replacementDownload.localPath,
+        "replacement download task should use a temporary local path");
+    require(readFileText(replacementDownloadTarget).find("fake remote file:") == 0,
+        "replacement download task should install downloaded content");
+    require(!hasLocalReplacementArtifact(tempRoot),
+        "manager download checks should leave no local replacement artifacts");
+}
+
+void checkDirectoryReplacement()
+{
+    SiteProfile profile;
+    profile.name = "directory-replacement-fake";
+    profile.protocol = RemoteProtocol::Sftp;
+    profile.host = "fake-host";
+    profile.port = 22;
+    profile.username = "testuser";
+    profile.defaultRemotePath = "/home/testuser/remote_test";
+
+    const std::filesystem::path tempRoot = std::filesystem::temp_directory_path()
+        / "dirbridge-directory-replacement-checks";
+    std::filesystem::remove_all(tempRoot);
+    const std::filesystem::path sourceRoot = tempRoot / "replacement-folder";
+    const std::filesystem::path nestedRoot = sourceRoot / "nested";
+    std::filesystem::create_directories(nestedRoot / "empty-child");
+    {
+        std::ofstream output(sourceRoot / "new-root.txt", std::ios::binary | std::ios::trunc);
+        output << "new root content";
+    }
+    {
+        std::ofstream output(nestedRoot / "new-nested.txt", std::ios::binary | std::ios::trunc);
+        output << "new nested content";
+    }
+
+    const std::string remoteTarget = "/home/testuser/remote_test/replacement-folder";
+    const std::string oldOnlyPath = remoteTarget + "/old-only.txt";
+    const std::string newRootPath = remoteTarget + "/new-root.txt";
+    const std::string newNestedDirectory = remoteTarget + "/nested";
+    const std::string newNestedPath = newNestedDirectory + "/new-nested.txt";
+    const std::string emptyDirectoryPath = newNestedDirectory + "/empty-child";
+
+    const auto seedTarget = [&](ReplacementFaultRemoteFileSystem &remote) {
+        RemoteOperationResult result = remote.connect(profile);
+        require(result.success, "directory replacement fake remote should connect");
+        result = remote.createDirectory(remoteTarget);
+        require(result.success, "directory replacement target should be created");
+        result = remote.createFile(oldOnlyPath);
+        require(result.success, "directory replacement old-only file should be created");
+        remote.uploadCalls = 0;
+        remote.downloadCalls = 0;
+        remote.renameCalls = 0;
+        remote.lastUploadPath.clear();
+        remote.lastDownloadPath.clear();
+    };
+
+    ReplacementFaultRemoteFileSystem successfulRemote;
+    seedTarget(successfulRemote);
+    RemoteOperationResult result = file_replacement::uploadDirectoryReplacing(
+        successfulRemote,
+        sourceRoot.string(),
+        remoteTarget);
+    require(result.success, "remote directory safe replacement should succeed: " + result.message);
+    std::vector<FileItem> items = successfulRemote.listDirectory(profile.defaultRemotePath);
+    require(!hasReplacementArtifact(items), "successful directory replacement should clean all artifacts");
+    items = successfulRemote.listDirectory(remoteTarget);
+    require(!containsPath(items, oldOnlyPath, FileItemType::File),
+        "directory replacement should remove target-only content");
+    require(containsPath(items, newRootPath, FileItemType::File)
+            && containsPath(items, newNestedDirectory, FileItemType::Directory),
+        "directory replacement should install root files and nested directories");
+    items = successfulRemote.listDirectory(newNestedDirectory);
+    require(containsPath(items, newNestedPath, FileItemType::File)
+            && containsPath(items, emptyDirectoryPath, FileItemType::Directory),
+        "directory replacement should preserve nested files and empty directories");
+    require(successfulRemote.uploadCalls == 2 && successfulRemote.renameCalls == 2,
+        "directory replacement should upload every file then perform two renames");
+
+    ReplacementFaultRemoteFileSystem canceledRemote;
+    seedTarget(canceledRemote);
+    result = file_replacement::uploadDirectoryReplacing(
+        canceledRemote,
+        sourceRoot.string(),
+        remoteTarget,
+        [](std::int64_t, std::int64_t) { return false; });
+    require(!result.success, "canceled directory replacement should fail");
+    items = canceledRemote.listDirectory(remoteTarget);
+    require(containsPath(items, oldOnlyPath, FileItemType::File),
+        "canceled directory replacement should preserve the original directory");
+    require(!hasReplacementArtifact(canceledRemote.listDirectory(profile.defaultRemotePath)),
+        "canceled directory replacement should clean the temporary directory");
+
+    ReplacementFaultRemoteFileSystem uploadFailure;
+    seedTarget(uploadFailure);
+    uploadFailure.failTemporaryUpload = true;
+    result = file_replacement::uploadDirectoryReplacing(uploadFailure, sourceRoot.string(), remoteTarget);
+    require(!result.success, "directory temporary upload failure should fail replacement");
+    items = uploadFailure.listDirectory(remoteTarget);
+    require(containsPath(items, oldOnlyPath, FileItemType::File),
+        "directory upload failure should preserve the original directory");
+    require(!hasReplacementArtifact(uploadFailure.listDirectory(profile.defaultRemotePath)),
+        "directory upload failure should recursively clean the temporary directory");
+
+    ReplacementFaultRemoteFileSystem backupFailure;
+    seedTarget(backupFailure);
+    backupFailure.failBackupRename = true;
+    result = file_replacement::uploadDirectoryReplacing(backupFailure, sourceRoot.string(), remoteTarget);
+    require(!result.success, "directory backup rename failure should fail replacement");
+    require(containsPath(backupFailure.listDirectory(remoteTarget), oldOnlyPath, FileItemType::File),
+        "directory backup failure should preserve the original directory");
+    require(!hasReplacementArtifact(backupFailure.listDirectory(profile.defaultRemotePath)),
+        "directory backup failure should clean the uploaded temporary directory");
+
+    ReplacementFaultRemoteFileSystem replaceFailure;
+    seedTarget(replaceFailure);
+    replaceFailure.failReplaceRename = true;
+    result = file_replacement::uploadDirectoryReplacing(replaceFailure, sourceRoot.string(), remoteTarget);
+    require(!result.success && result.message.find("was restored") != std::string::npos,
+        "directory replacement failure should report a successful rollback");
+    require(containsPath(replaceFailure.listDirectory(remoteTarget), oldOnlyPath, FileItemType::File),
+        "directory replacement failure should restore original contents");
+    require(!hasReplacementArtifact(replaceFailure.listDirectory(profile.defaultRemotePath)),
+        "successful directory rollback should clean all artifacts");
+
+    ReplacementFaultRemoteFileSystem restoreFailure;
+    seedTarget(restoreFailure);
+    restoreFailure.failReplaceRename = true;
+    restoreFailure.failRestoreRename = true;
+    result = file_replacement::uploadDirectoryReplacing(restoreFailure, sourceRoot.string(), remoteTarget);
+    require(!result.success, "directory rollback failure should fail replacement");
+    items = restoreFailure.listDirectory(profile.defaultRemotePath);
+    const std::string retainedBackup = replacementArtifactPath(items, "backup-directory");
+    require(!retainedBackup.empty() && result.message.find(retainedBackup) != std::string::npos,
+        "directory rollback failure should retain and report the original backup directory");
+    require(containsPath(restoreFailure.listDirectory(retainedBackup), retainedBackup + "/old-only.txt", FileItemType::File),
+        "retained directory backup should still contain original data");
+
+    ReplacementFaultRemoteFileSystem cleanupFailure;
+    seedTarget(cleanupFailure);
+    cleanupFailure.failCleanup = true;
+    result = file_replacement::uploadDirectoryReplacing(cleanupFailure, sourceRoot.string(), remoteTarget);
+    require(!result.success, "directory backup cleanup failure should be reported");
+    items = cleanupFailure.listDirectory(profile.defaultRemotePath);
+    const std::string retainedCleanupBackup = replacementArtifactPath(items, "backup-directory");
+    require(!retainedCleanupBackup.empty() && result.message.find(retainedCleanupBackup) != std::string::npos,
+        "directory cleanup failure should report the retained backup directory path");
+    require(containsPath(cleanupFailure.listDirectory(remoteTarget), newRootPath, FileItemType::File),
+        "directory cleanup failure should not undo the installed replacement");
+
+    ReplacementFaultRemoteFileSystem managerRemote;
+    seedTarget(managerRemote);
+    TransferQueue replacementQueue;
+    TransferJob replacementJob;
+    replacementJob.id = "directory-replacement";
+    replacementJob.name = "replacement-folder";
+    replacementJob.kind = TransferJobKind::DirectoryReplacement;
+    replacementJob.direction = TransferDirection::Upload;
+    replacementJob.localPath = sourceRoot.string();
+    replacementJob.remotePath = remoteTarget;
+    replacementJob.replaceExisting = true;
+    replacementQueue.enqueue(replacementJob);
+    TransferManager replacementManager(managerRemote, replacementQueue);
+    replacementManager.processPending();
+    require(replacementQueue.find(replacementJob.id)->status == TransferStatus::Completed,
+        "directory replacement task should be runnable through TransferManager");
+    require(containsPath(managerRemote.listDirectory(remoteTarget), newRootPath, FileItemType::File),
+        "directory replacement task should install the new directory contents");
+
+    const auto seedDownloadSource = [&](ReplacementFaultRemoteFileSystem &remote) {
+        seedTarget(remote);
+        const RemoteOperationResult uploadResult = file_replacement::uploadDirectoryReplacing(
+            remote,
+            sourceRoot.string(),
+            remoteTarget);
+        require(uploadResult.success, "directory replacement download source should be prepared");
+        remote.uploadCalls = 0;
+        remote.downloadCalls = 0;
+        remote.renameCalls = 0;
+        remote.lastUploadPath.clear();
+        remote.lastDownloadPath.clear();
+    };
+    const auto seedLocalDownloadTarget = [&](const std::filesystem::path &target) {
+        std::filesystem::remove_all(target);
+        std::filesystem::create_directories(target);
+        std::ofstream output(target / "old-only.txt", std::ios::binary | std::ios::trunc);
+        output << "preserve old local directory";
+    };
+
+    const std::filesystem::path localDownloadTarget = tempRoot / "download-target";
+    ReplacementFaultRemoteFileSystem successfulDownloadRemote;
+    seedDownloadSource(successfulDownloadRemote);
+    seedLocalDownloadTarget(localDownloadTarget);
+    result = file_replacement::downloadDirectoryReplacing(
+        successfulDownloadRemote,
+        remoteTarget,
+        localDownloadTarget.string());
+    require(result.success, "local directory safe replacement should succeed: " + result.message);
+    require(!std::filesystem::exists(localDownloadTarget / "old-only.txt"),
+        "local directory replacement should remove target-only content");
+    require(std::filesystem::is_regular_file(localDownloadTarget / "new-root.txt")
+            && std::filesystem::is_regular_file(localDownloadTarget / "nested" / "new-nested.txt")
+            && std::filesystem::is_directory(localDownloadTarget / "nested" / "empty-child"),
+        "local directory replacement should install files, nested directories, and empty directories");
+    require(successfulDownloadRemote.downloadCalls == 2,
+        "local directory replacement should download every remote file");
+    require(!hasLocalReplacementArtifact(tempRoot),
+        "successful local directory replacement should clean all artifacts");
+
+    ReplacementFaultRemoteFileSystem canceledDownloadRemote;
+    seedDownloadSource(canceledDownloadRemote);
+    seedLocalDownloadTarget(localDownloadTarget);
+    result = file_replacement::downloadDirectoryReplacing(
+        canceledDownloadRemote,
+        remoteTarget,
+        localDownloadTarget.string(),
+        [](std::int64_t, std::int64_t) { return false; });
+    require(!result.success, "canceled local directory replacement should fail");
+    require(std::filesystem::is_regular_file(localDownloadTarget / "old-only.txt"),
+        "canceled local directory replacement should preserve the original directory");
+    require(!hasLocalReplacementArtifact(tempRoot),
+        "canceled local directory replacement should clean the temporary directory");
+
+    ReplacementFaultRemoteFileSystem failedDownloadRemote;
+    seedDownloadSource(failedDownloadRemote);
+    seedLocalDownloadTarget(localDownloadTarget);
+    failedDownloadRemote.failTemporaryDownload = true;
+    result = file_replacement::downloadDirectoryReplacing(
+        failedDownloadRemote,
+        remoteTarget,
+        localDownloadTarget.string());
+    require(!result.success, "temporary directory download failure should fail replacement");
+    require(std::filesystem::is_regular_file(localDownloadTarget / "old-only.txt"),
+        "directory download failure should preserve the original local directory");
+    require(!hasLocalReplacementArtifact(tempRoot),
+        "directory download failure should recursively clean the temporary local directory");
+
+    ReplacementFaultRemoteFileSystem managerDownloadRemote;
+    seedDownloadSource(managerDownloadRemote);
+    seedLocalDownloadTarget(localDownloadTarget);
+    TransferQueue downloadReplacementQueue;
+    TransferJob downloadReplacementJob;
+    downloadReplacementJob.id = "directory-download-replacement";
+    downloadReplacementJob.name = "replacement-folder";
+    downloadReplacementJob.kind = TransferJobKind::DirectoryReplacement;
+    downloadReplacementJob.direction = TransferDirection::Download;
+    downloadReplacementJob.localPath = localDownloadTarget.string();
+    downloadReplacementJob.remotePath = remoteTarget;
+    downloadReplacementJob.replaceExisting = true;
+    downloadReplacementQueue.enqueue(downloadReplacementJob);
+    TransferManager downloadReplacementManager(managerDownloadRemote, downloadReplacementQueue);
+    downloadReplacementManager.processPending();
+    require(downloadReplacementQueue.find(downloadReplacementJob.id)->status == TransferStatus::Completed,
+        "directory download replacement task should be runnable through TransferManager");
+    require(std::filesystem::is_regular_file(localDownloadTarget / "new-root.txt")
+            && !std::filesystem::exists(localDownloadTarget / "old-only.txt"),
+        "directory download replacement task should install the remote directory contents");
+    require(!hasLocalReplacementArtifact(tempRoot),
+        "manager directory download replacement should leave no local artifacts");
+
+    std::filesystem::remove_all(tempRoot);
 }
 
 void checkExternalEditDocumentAndFileCache()
@@ -360,6 +1035,8 @@ void checkTransferJob()
     require(toString(download.status) == "canceling", "canceling status text mismatch");
     download.kind = TransferJobKind::Directory;
     require(toString(download.kind) == "directory", "directory job kind text mismatch");
+    download.kind = TransferJobKind::DirectoryReplacement;
+    require(toString(download.kind) == "directory-replacement", "directory replacement job kind text mismatch");
     download.kind = TransferJobKind::File;
     require(toString(download.kind) == "file", "file job kind text mismatch");
 
@@ -633,6 +1310,8 @@ int main()
     try
     {
         checkFakeRemoteFileSystem();
+        checkFileReplacement();
+        checkDirectoryReplacement();
         checkExternalEditDocumentAndFileCache();
         checkTransferJob();
         checkTransferQueueAndManager();

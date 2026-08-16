@@ -54,11 +54,13 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <thread>
 
 QAction *findActionByText(MainWindow &window, const QString &text);
@@ -100,6 +102,103 @@ bool waitForRemotePath(
         }
         catch (const std::exception &)
         {
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return false;
+}
+
+bool waitForRemoteFileSize(
+    FakeRemoteFileSystem *fileSystem,
+    const QString &directory,
+    const QString &path,
+    std::int64_t expectedSize)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    while (fileSystem != nullptr && std::chrono::steady_clock::now() < deadline)
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        try
+        {
+            const std::vector<FileItem> items = fileSystem->listDirectory(directory.toStdString());
+            const auto found = std::find_if(items.begin(), items.end(), [&path](const FileItem &item) {
+                return item.path == path.toStdString() && item.type == FileItemType::File;
+            });
+            if (found != items.end() && found->size == expectedSize)
+            {
+                return true;
+            }
+        }
+        catch (const std::exception &)
+        {
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return false;
+}
+
+bool waitForRemoteDirectoryReplacement(
+    FakeRemoteFileSystem *fileSystem,
+    const QString &parentDirectory,
+    const QString &targetDirectory,
+    const QString &requiredChild,
+    const QString &removedChild)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    while (fileSystem != nullptr && std::chrono::steady_clock::now() < deadline)
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        try
+        {
+            const std::vector<FileItem> parentItems = fileSystem->listDirectory(parentDirectory.toStdString());
+            const bool hasArtifacts = std::any_of(parentItems.begin(), parentItems.end(), [](const FileItem &item) {
+                return item.name.rfind(".dirbridge-", 0) == 0;
+            });
+            const std::vector<FileItem> targetItems = fileSystem->listDirectory(targetDirectory.toStdString());
+            if (!hasArtifacts
+                && containsRemotePath(targetItems, requiredChild.toStdString(), FileItemType::Directory)
+                && !containsRemotePath(targetItems, removedChild.toStdString(), FileItemType::File))
+            {
+                return true;
+            }
+        }
+        catch (const std::exception &)
+        {
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return false;
+}
+
+bool waitForLocalDirectoryReplacement(
+    const std::filesystem::path &parentDirectory,
+    const std::filesystem::path &targetDirectory,
+    const std::filesystem::path &requiredChild,
+    const std::filesystem::path &removedChild)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        bool hasArtifacts = false;
+        std::error_code error;
+        for (std::filesystem::directory_iterator iterator(parentDirectory, error), end;
+             !error && iterator != end;
+             iterator.increment(error))
+        {
+            if (iterator->path().filename().string().rfind(".dirbridge-", 0) == 0)
+            {
+                hasArtifacts = true;
+                break;
+            }
+        }
+        if (!error
+            && !hasArtifacts
+            && std::filesystem::is_directory(targetDirectory)
+            && std::filesystem::is_regular_file(requiredChild)
+            && !std::filesystem::exists(removedChild))
+        {
+            return true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
@@ -1075,7 +1174,7 @@ bool checkFileTreeDropWorkflow()
     QDropEvent conflictingDropEvent(QPointF(targetPosition), Qt::CopyAction, &conflictingMimeData, Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(localTree->viewport(), &conflictingDropEvent);
     QApplication::processEvents();
-    const QString renamedMovedPath = QDir(targetDirectory).filePath("move-source-renamed.txt");
+    const QString renamedMovedPath = QDir(targetDirectory).filePath("move-source (1).txt");
     if (!conflictingDragEnterEvent.isAccepted()
         || !conflictingDropEvent.isAccepted()
         || QFileInfo::exists(sourcePath)
@@ -2515,7 +2614,7 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
         return false;
     }
     window.moveRemotePathsForTesting({sourceFile}, uploadDirectory);
-    const QString renamedFile = uploadDirectory + "/readme-renamed.txt";
+    const QString renamedFile = uploadDirectory + "/readme (1).txt";
     const std::vector<FileItem> rootItemsAfterFileRename = fileSystem->listDirectory(remotePath.toStdString());
     const std::vector<FileItem> uploadItemsAfterFileRename = fileSystem->listDirectory(uploadDirectory.toStdString());
     if (containsRemotePath(rootItemsAfterFileRename, sourceFile.toStdString(), FileItemType::File)
@@ -2535,7 +2634,7 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
 
     const QString sourceConflictDirectory = remotePath + "/conflict-folder";
     const QString targetConflictDirectory = uploadDirectory + "/conflict-folder";
-    const QString renamedConflictDirectory = uploadDirectory + "/conflict-folder-renamed";
+    const QString renamedConflictDirectory = uploadDirectory + "/conflict-folder (1)";
     const QString sourceConflictFile = sourceConflictDirectory + "/source-only.txt";
     const QString targetConflictFile = targetConflictDirectory + "/target-only.txt";
     result = fileSystem->createDirectory(sourceConflictDirectory.toStdString());
@@ -2600,7 +2699,7 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
         output << "DirBridge file conflict upload\n";
     }
     const QString remoteConflictFile = remotePath + "/file-conflict.txt";
-    const QString renamedRemoteConflictFile = remotePath + "/file-conflict-renamed.txt";
+    const QString renamedRemoteConflictFile = remotePath + "/file-conflict (1).txt";
     result = fileSystem->createFile(remoteConflictFile.toStdString());
     if (!result.success)
     {
@@ -2620,7 +2719,7 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
         output << "preserve existing local file\n";
     }
     window.downloadRemoteFileForTesting(remoteConflictFile);
-    const std::filesystem::path renamedLocalDownload = downloadRoot / "file-conflict-renamed.txt";
+    const std::filesystem::path renamedLocalDownload = downloadRoot / "file-conflict (1).txt";
     const auto renamedFileDownloadDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
     while (!std::filesystem::is_regular_file(renamedLocalDownload)
         && std::chrono::steady_clock::now() < renamedFileDownloadDeadline)
@@ -2635,6 +2734,86 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
         return false;
     }
 
+    const auto armOverwriteDialog = [](QTimer &timer, bool &observed) {
+        QObject::connect(&timer, &QTimer::timeout, &timer, [&timer, &observed]() {
+            QWidget *modalWidget = QApplication::activeModalWidget();
+            if (modalWidget == nullptr || modalWidget->objectName() != "transferConflictDialog")
+            {
+                return;
+            }
+            auto *actionCombo = modalWidget->findChild<QComboBox *>("conflictActionCombo");
+            auto *confirmButton = modalWidget->findChild<QPushButton *>("conflictConfirmButton");
+            auto *targetDetails = modalWidget->findChild<QLabel *>("conflictTargetDetails");
+            auto *sourceDetails = modalWidget->findChild<QLabel *>("conflictSourceDetails");
+            if (actionCombo == nullptr || confirmButton == nullptr
+                || targetDetails == nullptr || sourceDetails == nullptr
+                || targetDetails->text().contains("修改时间未知")
+                || sourceDetails->text().contains("修改时间未知"))
+            {
+                return;
+            }
+            const int overwriteIndex = actionCombo->findText("覆盖");
+            if (overwriteIndex < 0)
+            {
+                return;
+            }
+            actionCombo->setCurrentIndex(overwriteIndex);
+            observed = true;
+            timer.stop();
+            confirmButton->click();
+        });
+        timer.start(10);
+    };
+
+    bool uploadConflictDialogObserved = false;
+    QTimer uploadConflictDialogTimer;
+    window.setDialogsSuppressedForTesting(false);
+    armOverwriteDialog(uploadConflictDialogTimer, uploadConflictDialogObserved);
+    window.uploadLocalFileForTesting(QString::fromStdString(localConflictUpload.u8string()));
+    const bool uploadOverwriteCompleted = waitForRemoteFileSize(
+            fileSystem,
+            remotePath,
+            remoteConflictFile,
+            static_cast<std::int64_t>(std::filesystem::file_size(localConflictUpload)));
+    uploadConflictDialogTimer.stop();
+    window.setDialogsSuppressedForTesting(true);
+    if (!uploadConflictDialogObserved || !uploadOverwriteCompleted)
+    {
+        QTextStream(stderr) << "File upload conflict did not show the new dialog and safely replace the remote target" << Qt::endl;
+        return false;
+    }
+
+    {
+        std::ofstream output(existingLocalDownload, std::ios::binary | std::ios::trunc);
+        output << "replace this local target\n";
+    }
+    bool downloadConflictDialogObserved = false;
+    QTimer downloadConflictDialogTimer;
+    window.setDialogsSuppressedForTesting(false);
+    armOverwriteDialog(downloadConflictDialogTimer, downloadConflictDialogObserved);
+    window.downloadRemoteFileForTesting(remoteConflictFile);
+    const auto overwrittenDownloadDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    std::string overwrittenDownloadText;
+    while (std::chrono::steady_clock::now() < overwrittenDownloadDeadline)
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        std::ifstream input(existingLocalDownload, std::ios::binary);
+        overwrittenDownloadText.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+        if (overwrittenDownloadText.rfind("fake remote file:", 0) == 0)
+        {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    downloadConflictDialogTimer.stop();
+    window.setDialogsSuppressedForTesting(true);
+    if (!downloadConflictDialogObserved || overwrittenDownloadText.rfind("fake remote file:", 0) != 0)
+    {
+        QTextStream(stderr) << "File download conflict did not show the new dialog and safely replace the local target" << Qt::endl;
+        return false;
+    }
+
+    const QString uploadedDirectory = remotePath + "/dirbridge-folder";
     window.uploadLocalPathForTesting(QString::fromStdString(localDirectory.u8string()));
     if (!waitForTransferRow(transferTable, "dirbridge-folder", "上传", "已完成"))
     {
@@ -2642,7 +2821,34 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
         dumpTransferRows(transferTable);
         return false;
     }
-    const QString renamedUploadedDirectory = remotePath + "/dirbridge-folder-renamed";
+
+    const QString directoryTargetOnlyFile = uploadedDirectory + "/target-only-before-replacement.txt";
+    result = fileSystem->createFile(directoryTargetOnlyFile.toStdString());
+    if (!result.success)
+    {
+        QTextStream(stderr) << "Unable to prepare directory replacement target-only file" << Qt::endl;
+        return false;
+    }
+    bool directoryConflictDialogObserved = false;
+    QTimer directoryConflictDialogTimer;
+    window.setDialogsSuppressedForTesting(false);
+    armOverwriteDialog(directoryConflictDialogTimer, directoryConflictDialogObserved);
+    window.uploadLocalPathForTesting(QString::fromStdString(localDirectory.u8string()));
+    const bool directoryOverwriteCompleted = waitForRemoteDirectoryReplacement(
+        fileSystem,
+        remotePath,
+        uploadedDirectory,
+        uploadedDirectory + "/nested",
+        directoryTargetOnlyFile);
+    directoryConflictDialogTimer.stop();
+    window.setDialogsSuppressedForTesting(true);
+    if (!directoryConflictDialogObserved || !directoryOverwriteCompleted)
+    {
+        QTextStream(stderr) << "Directory upload conflict did not show overwrite or safely replace the remote directory" << Qt::endl;
+        return false;
+    }
+
+    const QString renamedUploadedDirectory = remotePath + "/dirbridge-folder (1)";
     window.uploadLocalPathForTesting(QString::fromStdString(localDirectory.u8string()));
     if (!waitForRemotePath(fileSystem, remotePath, renamedUploadedDirectory, FileItemType::Directory)
         || !waitForRemotePath(
@@ -2663,7 +2869,6 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
     transferTable->setCurrentItem(selectedUploadParent);
     selectedUploadParent->setSelected(true);
     const QString selectedUploadId = selectedUploadParent->data(0, Qt::UserRole).toString();
-    const QString uploadedDirectory = "/home/testuser/remote_test/dirbridge-folder";
     const QString movedDirectory = "/home/testuser/remote_test/upload/dirbridge-folder";
     window.moveRemotePathsForTesting({uploadedDirectory}, "/home/testuser/remote_test/upload");
     QApplication::processEvents();
@@ -2695,8 +2900,34 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
         dumpTransferRows(transferTable);
         return false;
     }
+
+    const std::filesystem::path localDirectoryTargetOnlyFile = downloadRoot
+        / "dirbridge-folder"
+        / "target-only-before-replacement.txt";
+    {
+        std::ofstream output(localDirectoryTargetOnlyFile, std::ios::binary | std::ios::trunc);
+        output << "remove after safe directory download replacement\n";
+    }
+    bool directoryDownloadConflictDialogObserved = false;
+    QTimer directoryDownloadConflictDialogTimer;
+    window.setDialogsSuppressedForTesting(false);
+    armOverwriteDialog(directoryDownloadConflictDialogTimer, directoryDownloadConflictDialogObserved);
     window.downloadRemotePathForTesting(movedDirectory);
-    const std::filesystem::path renamedDownloadedFile = downloadRoot / "dirbridge-folder-renamed" / "nested" / "inside.txt";
+    const bool directoryDownloadOverwriteCompleted = waitForLocalDirectoryReplacement(
+        downloadRoot,
+        downloadRoot / "dirbridge-folder",
+        downloadedDeepFile,
+        localDirectoryTargetOnlyFile);
+    directoryDownloadConflictDialogTimer.stop();
+    window.setDialogsSuppressedForTesting(true);
+    if (!directoryDownloadConflictDialogObserved || !directoryDownloadOverwriteCompleted)
+    {
+        QTextStream(stderr) << "Directory download conflict did not show overwrite or safely replace the local directory" << Qt::endl;
+        return false;
+    }
+
+    window.downloadRemotePathForTesting(movedDirectory);
+    const std::filesystem::path renamedDownloadedFile = downloadRoot / "dirbridge-folder (1)" / "nested" / "inside.txt";
     const auto renamedDownloadDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
     while (!std::filesystem::is_regular_file(renamedDownloadedFile)
         && std::chrono::steady_clock::now() < renamedDownloadDeadline)

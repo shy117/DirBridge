@@ -1,6 +1,7 @@
 #ifndef DIRBRIDGE_UI_PANEL_SHARED_H
 #define DIRBRIDGE_UI_PANEL_SHARED_H
 
+#include <QDateTime>
 #include <QIcon>
 #include <QString>
 
@@ -60,6 +61,13 @@ QString promptConflictRename(
  * @return 格式化后的大小文本。
  */
 QString formatFileSize(qint64 size);
+
+/**
+ * @brief 解析远程目录列表中的修改时间。
+ * @param value ISO、本地标准格式或 Unix LIST 格式时间文本。
+ * @return 可解析的时间；格式未知时返回无效时间。
+ */
+QDateTime parseRemoteModifiedTime(const QString &value);
 
 /**
  * @brief 取得默认本地起始目录。

@@ -86,6 +86,13 @@ public:
     void setRemoteKnownDirectories(const QStringList &directories);
     void setRemoteItems(const QString &path, const std::vector<FileItem> &items, const QString &status, bool addToHistory = true);
     /**
+     * @brief 从当前远程目录缓存中查找指定项目。
+     * @param path 远程项目绝对路径。
+     * @param item 接收项目元数据，可为空。
+     * @return 当前缓存中存在该项目时返回 true。
+     */
+    bool remoteItem(const QString &path, FileItem *item = nullptr) const;
+    /**
      * @brief 显示远程会话连接过程中的过渡状态。
      * @param status 面向用户的连接进度文本。
      */

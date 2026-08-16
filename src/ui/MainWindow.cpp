@@ -586,9 +586,7 @@ QString conflictRenameCandidate(const QString &originalName, bool isDirectory, i
         baseName = originalName;
     }
 
-    const QString marker = index == 1
-        ? QString("-renamed")
-        : QString("-renamed-%1").arg(index);
+    const QString marker = QString(" (%1)").arg(index);
     return suffix.isEmpty()
         ? baseName + marker
         : baseName + marker + "." + suffix;

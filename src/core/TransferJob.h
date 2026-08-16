@@ -24,7 +24,8 @@ enum class TransferStatus
 enum class TransferJobKind
 {
     File,
-    Directory
+    Directory,
+    DirectoryReplacement
 };
 
 struct TransferJob
@@ -50,6 +51,7 @@ struct TransferJob
     int finishedChildren = 0;
     bool preparationFinished = true;
     bool preparationFailed = false;
+    bool replaceExisting = false;
     std::string errorMessage;
 };
 

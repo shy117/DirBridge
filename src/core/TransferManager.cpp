@@ -1,5 +1,7 @@
 #include "core/TransferManager.h"
 
+#include "core/FileReplacement.h"
+
 #include <algorithm>
 #include <utility>
 
@@ -84,10 +86,58 @@ RemoteOperationResult TransferManager::runJob(const TransferJob &job)
     switch (job.direction)
     {
     case TransferDirection::Upload:
+        if (job.kind == TransferJobKind::DirectoryReplacement)
+        {
+            if (!job.replaceExisting)
+            {
+                return {false, "directory replacement job must explicitly replace an existing target"};
+            }
+            return file_replacement::uploadDirectoryReplacing(
+                *remoteFileSystem,
+                job.localPath,
+                job.remotePath,
+                [this, &job](std::int64_t transferredBytes, std::int64_t totalBytes) {
+                    return m_progressCallback ? m_progressCallback(job, transferredBytes, totalBytes) : true;
+                });
+        }
+        if (job.replaceExisting)
+        {
+            return file_replacement::uploadFileReplacing(
+                *remoteFileSystem,
+                job.localPath,
+                job.remotePath,
+                [this, &job](std::int64_t transferredBytes, std::int64_t totalBytes) {
+                    return m_progressCallback ? m_progressCallback(job, transferredBytes, totalBytes) : true;
+                });
+        }
         return remoteFileSystem->uploadFile(job.localPath, job.remotePath, [this, &job](std::int64_t transferredBytes, std::int64_t totalBytes) {
             return m_progressCallback ? m_progressCallback(job, transferredBytes, totalBytes) : true;
         });
     case TransferDirection::Download:
+        if (job.kind == TransferJobKind::DirectoryReplacement)
+        {
+            if (!job.replaceExisting)
+            {
+                return {false, "directory replacement job must explicitly replace an existing target"};
+            }
+            return file_replacement::downloadDirectoryReplacing(
+                *remoteFileSystem,
+                job.remotePath,
+                job.localPath,
+                [this, &job](std::int64_t transferredBytes, std::int64_t totalBytes) {
+                    return m_progressCallback ? m_progressCallback(job, transferredBytes, totalBytes) : true;
+                });
+        }
+        if (job.replaceExisting)
+        {
+            return file_replacement::downloadFileReplacing(
+                *remoteFileSystem,
+                job.remotePath,
+                job.localPath,
+                [this, &job](std::int64_t transferredBytes, std::int64_t totalBytes) {
+                    return m_progressCallback ? m_progressCallback(job, transferredBytes, totalBytes) : true;
+                });
+        }
         return remoteFileSystem->downloadFile(job.remotePath, job.localPath, [this, &job](std::int64_t transferredBytes, std::int64_t totalBytes) {
             return m_progressCallback ? m_progressCallback(job, transferredBytes, totalBytes) : true;
         });

@@ -17,7 +17,6 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMap>
-#include <QLocale>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPushButton>
@@ -40,36 +39,11 @@ namespace
 {
 QString formattedModifiedTime(const QString &value)
 {
-    const QString normalized = value.simplified();
-    if (normalized.isEmpty())
+    if (value.simplified().isEmpty())
     {
         return {};
     }
-
-    QDateTime parsed = QDateTime::fromString(normalized, "yyyy-MM-dd HH:mm:ss");
-    if (!parsed.isValid())
-    {
-        parsed = QDateTime::fromString(normalized, Qt::ISODate);
-    }
-    if (!parsed.isValid())
-    {
-        const QStringList parts = normalized.split(' ');
-        if (parts.size() == 3 && parts.at(2).contains(':'))
-        {
-            const QDateTime now = QDateTime::currentDateTime();
-            parsed = QLocale::c().toDateTime(
-                QString("%1 %2 %3 %4").arg(parts.at(0), parts.at(1), QString::number(now.date().year()), parts.at(2)),
-                "MMM d yyyy HH:mm");
-            if (parsed.isValid() && parsed > now.addDays(1))
-            {
-                parsed = parsed.addYears(-1);
-            }
-        }
-        else if (parts.size() == 3)
-        {
-            parsed = QLocale::c().toDateTime(normalized, "MMM d yyyy");
-        }
-    }
+    const QDateTime parsed = parseRemoteModifiedTime(value);
     return parsed.isValid() ? parsed.toString("yyyy/MM/dd HH:mm:ss") : value;
 }
 
@@ -216,9 +190,7 @@ QString localConflictRenameCandidate(const QFileInfo &sourceInfo, int index)
     {
         baseName = sourceInfo.fileName();
     }
-    const QString marker = index == 1
-        ? QString("-renamed")
-        : QString("-renamed-%1").arg(index);
+    const QString marker = QString(" (%1)").arg(index);
     return suffix.isEmpty()
         ? baseName + marker
         : baseName + marker + "." + suffix;
