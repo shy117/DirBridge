@@ -10,6 +10,15 @@
 #include "ui/MainWindow.h"
 #include "ui/panel_shared.h"
 
+#ifdef _WIN32
+#include "platform/windows/WindowsShellDataObject.h"
+
+#include <ole2.h>
+#include <shlobj.h>
+#include <shldisp.h>
+#include <windows.h>
+#endif
+
 #include <QAction>
 #include <QAbstractItemDelegate>
 #include <QAbstractItemView>
@@ -23,6 +32,7 @@
 #include <QMenuBar>
 #include <QMetaObject>
 #include <QMimeData>
+#include <QMouseEvent>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -32,9 +42,11 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHeaderView>
+#include <QItemSelectionModel>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeyEvent>
 #include <QProgressBar>
 #include <QPointer>
 #include <QPushButton>
@@ -53,6 +65,7 @@
 #include <QTextStream>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
+#include <QUrl>
 
 #include <algorithm>
 #include <atomic>
@@ -314,7 +327,10 @@ bool checkFileCreateRenameWorkflow()
         return false;
     }
 
-    table->selectRow(originalRow);
+    table->setCurrentCell(
+        originalRow,
+        0,
+        QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
     QMetaObject::invokeMethod(shortcut, "activated", Qt::DirectConnection);
     QApplication::processEvents();
     auto *editor = panel.findChild<QLineEdit *>("inlineRenameEditor");
@@ -352,7 +368,10 @@ bool checkFileCreateRenameWorkflow()
         return false;
     }
 
-    table->selectRow(renamedRow);
+    table->setCurrentCell(
+        renamedRow,
+        0,
+        QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
     QMetaObject::invokeMethod(shortcut, "activated", Qt::DirectConnection);
     QApplication::processEvents();
     editor = panel.findChild<QLineEdit *>("inlineRenameEditor");
@@ -1089,6 +1108,140 @@ QTreeWidgetItem *findTreeItemByPath(QTreeWidgetItem *item, const QString &path)
 }
 
 /**
+ * @brief 验证一次鼠标按压只会启动一次拖拽，避免 OLE 嵌套事件循环重复进入。
+ * @return 连续移动不重复启动、下一次按压仍可启动时返回 true。
+ */
+bool checkSingleDragStartPerMousePress()
+{
+    FilePanel panel(FilePanel::Mode::RemotePlaceholder);
+    panel.resize(900, 600);
+    panel.setRemoteSessionId("drag-gesture-session");
+    panel.setRemoteItems(
+        "/remote",
+        {FileItem{"sample.txt", "/remote/sample.txt", FileItemType::File, 12, "", "", ""}},
+        "",
+        false);
+    int dragStartCount = 0;
+    panel.setRemoteShellDragRequestedHandler([&dragStartCount](const QList<RemoteTransferItem> &) {
+        ++dragStartCount;
+    });
+    panel.show();
+    QApplication::processEvents();
+
+    auto *table = panel.findChild<QTableWidget *>("remoteFileTable");
+    const int row = table == nullptr ? -1 : findTableRowByName(table, "sample.txt");
+    if (table == nullptr || row < 0 || table->item(row, 0) == nullptr)
+    {
+        return false;
+    }
+    table->setCurrentCell(row, 0, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    const QPoint startPosition = table->visualItemRect(table->item(row, 0)).center();
+    const QPoint dragPosition = startPosition + QPoint(QApplication::startDragDistance() + 12, 0);
+
+    auto sendPressAndMoves = [&]() {
+        QMouseEvent pressEvent(
+            QEvent::MouseButtonPress,
+            QPointF(startPosition),
+            QPointF(startPosition),
+            QPointF(table->viewport()->mapToGlobal(startPosition)),
+            Qt::LeftButton,
+            Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(table->viewport(), &pressEvent);
+        QMouseEvent firstMove(
+            QEvent::MouseMove,
+            QPointF(dragPosition),
+            QPointF(dragPosition),
+            QPointF(table->viewport()->mapToGlobal(dragPosition)),
+            Qt::NoButton,
+            Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(table->viewport(), &firstMove);
+        QMouseEvent repeatedMove(
+            QEvent::MouseMove,
+            QPointF(dragPosition + QPoint(4, 0)),
+            QPointF(dragPosition + QPoint(4, 0)),
+            QPointF(table->viewport()->mapToGlobal(dragPosition + QPoint(4, 0))),
+            Qt::NoButton,
+            Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(table->viewport(), &repeatedMove);
+    };
+
+    sendPressAndMoves();
+    if (dragStartCount != 1)
+    {
+        QTextStream(stderr) << "One mouse press started the remote drag more than once" << Qt::endl;
+        return false;
+    }
+
+    QMouseEvent releaseEvent(
+        QEvent::MouseButtonRelease,
+        QPointF(dragPosition),
+        QPointF(dragPosition),
+        QPointF(table->viewport()->mapToGlobal(dragPosition)),
+        Qt::LeftButton,
+        Qt::NoButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(table->viewport(), &releaseEvent);
+    sendPressAndMoves();
+    if (dragStartCount != 2)
+    {
+        QTextStream(stderr) << "A new mouse press could not start another remote drag" << Qt::endl;
+        return false;
+    }
+    return true;
+}
+
+/**
+ * @brief 验证本地目录刷新只增量更新变化项，避免下载完成后重建全部行。
+ * @return 未变化项目的表格项和选择状态得到保留时返回 true。
+ */
+bool checkIncrementalLocalDirectoryRefresh()
+{
+    QTemporaryDir temporaryDirectory;
+    if (!temporaryDirectory.isValid())
+    {
+        return false;
+    }
+
+    const QString stablePath = QDir(temporaryDirectory.path()).filePath("stable.txt");
+    QFile stableFile(stablePath);
+    if (!stableFile.open(QIODevice::WriteOnly | QIODevice::NewOnly)
+        || stableFile.write("stable") != 6)
+    {
+        return false;
+    }
+    stableFile.close();
+
+    FilePanel panel(FilePanel::Mode::Local);
+    panel.setLocalPathForTesting(temporaryDirectory.path());
+    auto *table = panel.findChild<QTableWidget *>("localFileTable");
+    const int stableRow = table == nullptr ? -1 : findTableRowByName(table, "stable.txt");
+    if (stableRow < 0 || table->item(stableRow, 0) == nullptr)
+    {
+        return false;
+    }
+    QTableWidgetItem *stableItem = table->item(stableRow, 0);
+    table->setCurrentItem(stableItem, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+
+    QFile addedFile(QDir(temporaryDirectory.path()).filePath("added.txt"));
+    if (!addedFile.open(QIODevice::WriteOnly | QIODevice::NewOnly)
+        || addedFile.write("added") != 5)
+    {
+        return false;
+    }
+    addedFile.close();
+    panel.refresh();
+
+    const int refreshedStableRow = findTableRowByName(table, "stable.txt");
+    return refreshedStableRow >= 0
+        && table->item(refreshedStableRow, 0) == stableItem
+        && stableItem->isSelected()
+        && findTableRowByName(table, "added.txt") >= 0;
+}
+
+/**
  * @brief 验证本地文件树仅接收拖放以及同盘本地项目移动。
  * @return 文件树行为和同盘移动结果符合预期时返回 true。
  */
@@ -1141,6 +1294,7 @@ bool checkFileTreeDropWorkflow()
     const QPoint targetPosition = localTree->visualItemRect(targetItem).center();
     QMimeData mimeData;
     mimeData.setUrls({QUrl::fromLocalFile(sourcePath)});
+    mimeData.setData(panel_shared::LocalPathMimeType, QByteArrayLiteral("1"));
     QDragEnterEvent dragEnterEvent(targetPosition, Qt::CopyAction, &mimeData, Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(localTree->viewport(), &dragEnterEvent);
     if (!dragEnterEvent.isAccepted())
@@ -1169,6 +1323,7 @@ bool checkFileTreeDropWorkflow()
     conflictingSource.close();
     QMimeData conflictingMimeData;
     conflictingMimeData.setUrls({QUrl::fromLocalFile(sourcePath)});
+    conflictingMimeData.setData(panel_shared::LocalPathMimeType, QByteArrayLiteral("1"));
     QDragEnterEvent conflictingDragEnterEvent(targetPosition, Qt::CopyAction, &conflictingMimeData, Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(localTree->viewport(), &conflictingDragEnterEvent);
     QDropEvent conflictingDropEvent(QPointF(targetPosition), Qt::CopyAction, &conflictingMimeData, Qt::LeftButton, Qt::NoModifier);
@@ -1198,11 +1353,48 @@ bool checkFileTreeDropWorkflow()
     multiFileB.close();
     QMimeData multiMimeData;
     multiMimeData.setUrls({QUrl::fromLocalFile(multiSourceA), QUrl::fromLocalFile(multiSourceB)});
+    multiMimeData.setData(panel_shared::LocalPathMimeType, QByteArrayLiteral("1"));
     QDragEnterEvent multiDragEnterEvent(targetPosition, Qt::CopyAction, &multiMimeData, Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(localTree->viewport(), &multiDragEnterEvent);
-    if (multiDragEnterEvent.isAccepted())
+    if (!multiDragEnterEvent.isAccepted())
     {
-        QTextStream(stderr) << "Local tree accepted a prohibited multi-item drag" << Qt::endl;
+        QTextStream(stderr) << "Local tree did not accept an internal multi-item drag" << Qt::endl;
+        return false;
+    }
+    QDropEvent multiDropEvent(QPointF(targetPosition), Qt::MoveAction, &multiMimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(localTree->viewport(), &multiDropEvent);
+    QApplication::processEvents();
+    if (!multiDropEvent.isAccepted()
+        || QFileInfo::exists(multiSourceA)
+        || QFileInfo::exists(multiSourceB)
+        || !QFileInfo::exists(QDir(targetDirectory).filePath("multi-a.txt"))
+        || !QFileInfo::exists(QDir(targetDirectory).filePath("multi-b.txt")))
+    {
+        QTextStream(stderr) << "Local tree did not move all selected items" << Qt::endl;
+        return false;
+    }
+
+    const QString externalSourcePath = QDir(temporaryDirectory.path()).filePath("explorer-source.txt");
+    QFile externalSource(externalSourcePath);
+    if (!externalSource.open(QIODevice::WriteOnly | QIODevice::NewOnly))
+    {
+        return false;
+    }
+    externalSource.write("external copy");
+    externalSource.close();
+    QMimeData externalMimeData;
+    externalMimeData.setUrls({QUrl::fromLocalFile(externalSourcePath)});
+    QDragEnterEvent externalDragEnterEvent(targetPosition, Qt::CopyAction, &externalMimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(localTree->viewport(), &externalDragEnterEvent);
+    QDropEvent externalDropEvent(QPointF(targetPosition), Qt::CopyAction, &externalMimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(localTree->viewport(), &externalDropEvent);
+    QApplication::processEvents();
+    if (!externalDragEnterEvent.isAccepted()
+        || !externalDropEvent.isAccepted()
+        || !QFileInfo::exists(externalSourcePath)
+        || !QFileInfo::exists(QDir(targetDirectory).filePath("explorer-source.txt")))
+    {
+        QTextStream(stderr) << "External local drag did not preserve the source while copying" << Qt::endl;
         return false;
     }
 
@@ -1216,13 +1408,34 @@ bool checkFileTreeDropWorkflow()
     return true;
 }
 
+void dumpTransferRows(QTreeWidget *table);
+
 bool checkRemoteSingleItemDrops(MainWindow &window, const QString &remotePath)
 {
     QTableWidget *localTable = window.findChild<QTableWidget *>("localFileTable");
+    QTableWidget *remoteTable = window.findChild<QTableWidget *>("remoteFileTable");
     QTreeWidget *transferTable = window.findChild<QTreeWidget *>("transferTable");
     QTemporaryDir downloadDirectory;
-    if (localTable == nullptr || transferTable == nullptr || !downloadDirectory.isValid())
+    if (localTable == nullptr || remoteTable == nullptr || transferTable == nullptr || !downloadDirectory.isValid())
     {
+        return false;
+    }
+
+    QJsonObject invalidPayload;
+    invalidPayload.insert("version", 1);
+    invalidPayload.insert("sessionId", QString());
+    invalidPayload.insert("items", QJsonArray());
+    QJsonObject mixedSessionPayload;
+    mixedSessionPayload.insert("version", 1);
+    mixedSessionPayload.insert("sessionId", "session-a");
+    mixedSessionPayload.insert("items", QJsonArray{
+        QJsonObject{{"path", "/a.txt"}, {"sessionId", "session-a"}, {"name", "a.txt"}},
+        QJsonObject{{"path", "/b.txt"}, {"sessionId", "session-b"}, {"name", "b.txt"}}});
+    if (!panel_shared::decodeRemoteTransferItems(QJsonDocument(invalidPayload).toJson(QJsonDocument::Compact)).isEmpty()
+        || !panel_shared::decodeRemoteTransferItems(QJsonDocument(mixedSessionPayload).toJson(QJsonDocument::Compact)).isEmpty()
+        || !panel_shared::decodeRemoteTransferItems(QByteArray(1024 * 1024 + 1, 'x')).isEmpty())
+    {
+        QTextStream(stderr) << "Invalid remote clipboard metadata was not rejected" << Qt::endl;
         return false;
     }
     window.setLocalPathForTesting(downloadDirectory.path());
@@ -1263,6 +1476,528 @@ bool checkRemoteSingleItemDrops(MainWindow &window, const QString &remotePath)
         QTextStream(stderr) << "Dropped remote directory was not downloaded as a directory" << Qt::endl;
         return false;
     }
+
+    const QString uploadA = QDir(downloadDirectory.path()).filePath("explorer-upload-a.txt");
+    const QString uploadB = QDir(downloadDirectory.path()).filePath("explorer-upload-b.txt");
+    const QString uploadDirectory = QDir(downloadDirectory.path()).filePath("explorer-upload-folder");
+    const QString uploadNestedFile = QDir(uploadDirectory).filePath("nested.txt");
+    if (!QDir().mkpath(uploadDirectory))
+    {
+        return false;
+    }
+    QFile uploadFileA(uploadA);
+    QFile uploadFileB(uploadB);
+    QFile uploadNested(uploadNestedFile);
+    if (!uploadFileA.open(QIODevice::WriteOnly | QIODevice::NewOnly)
+        || !uploadFileB.open(QIODevice::WriteOnly | QIODevice::NewOnly)
+        || !uploadNested.open(QIODevice::WriteOnly | QIODevice::NewOnly))
+    {
+        return false;
+    }
+    uploadFileA.write("upload a");
+    uploadFileB.write("upload b");
+    uploadNested.write("nested upload");
+    uploadFileA.close();
+    uploadFileB.close();
+    uploadNested.close();
+    QMimeData uploadMimeData;
+    uploadMimeData.setUrls({
+        QUrl::fromLocalFile(uploadA),
+        QUrl::fromLocalFile(uploadB),
+        QUrl::fromLocalFile(uploadDirectory)});
+    const QPoint remoteBlankPosition(8, std::max(8, remoteTable->viewport()->height() - 8));
+    QDragEnterEvent uploadDragEnter(remoteBlankPosition, Qt::CopyAction, &uploadMimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(remoteTable->viewport(), &uploadDragEnter);
+    QDropEvent uploadDrop(QPointF(remoteBlankPosition), Qt::CopyAction, &uploadMimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(remoteTable->viewport(), &uploadDrop);
+    if (!uploadDragEnter.isAccepted()
+        || !uploadDrop.isAccepted()
+        || !QFileInfo::exists(uploadA)
+        || !QFileInfo::exists(uploadB)
+        || !QFileInfo(uploadDirectory).isDir()
+        || !QFileInfo::exists(uploadNestedFile)
+        || !waitForTransferRow(transferTable, "explorer-upload-a.txt", "上传", "已完成")
+        || !waitForTransferRow(transferTable, "explorer-upload-b.txt", "上传", "已完成")
+        || !waitForTransferRow(transferTable, "explorer-upload-folder", "上传", "已完成"))
+    {
+        QTextStream(stderr) << "External multi-item drag did not upload all local files" << Qt::endl;
+        return false;
+    }
+
+#ifdef _WIN32
+    const int remoteShellFolderRow = findTableRowByName(remoteTable, "explorer-upload-folder");
+    if (remoteShellFolderRow < 0)
+    {
+        return false;
+    }
+    remoteTable->selectRow(remoteShellFolderRow);
+    QKeyEvent copyRemoteShellFolderEvent(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
+    QApplication::sendEvent(remoteTable->viewport(), &copyRemoteShellFolderEvent);
+    const HRESULT folderOleInitResult = OleInitialize(nullptr);
+    IDataObject *folderShellClipboard = nullptr;
+    bool folderShellDataValid = copyRemoteShellFolderEvent.isAccepted()
+        && SUCCEEDED(folderOleInitResult)
+        && SUCCEEDED(OleGetClipboard(&folderShellClipboard))
+        && folderShellClipboard != nullptr;
+    FORMATETC folderDescriptorFormat{};
+    folderDescriptorFormat.cfFormat = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(CFSTR_FILEDESCRIPTORW));
+    folderDescriptorFormat.dwAspect = DVASPECT_CONTENT;
+    folderDescriptorFormat.lindex = -1;
+    folderDescriptorFormat.tymed = TYMED_HGLOBAL;
+    STGMEDIUM folderDescriptorMedium{};
+    folderShellDataValid = folderShellDataValid
+        && SUCCEEDED(folderShellClipboard->GetData(&folderDescriptorFormat, &folderDescriptorMedium));
+    LONG nestedFileIndex = -1;
+    if (folderShellDataValid)
+    {
+        auto *descriptor = static_cast<FILEGROUPDESCRIPTORW *>(GlobalLock(folderDescriptorMedium.hGlobal));
+        folderShellDataValid = descriptor != nullptr && descriptor->cItems == 2;
+        if (descriptor != nullptr)
+        {
+            for (UINT index = 0; index < descriptor->cItems; ++index)
+            {
+                const QString descriptorName = QDir::fromNativeSeparators(
+                    QString::fromWCharArray(descriptor->fgd[index].cFileName));
+                if (descriptorName == "explorer-upload-folder/nested.txt")
+                {
+                    nestedFileIndex = static_cast<LONG>(index);
+                    break;
+                }
+            }
+            GlobalUnlock(folderDescriptorMedium.hGlobal);
+        }
+        ReleaseStgMedium(&folderDescriptorMedium);
+        folderShellDataValid = folderShellDataValid && nestedFileIndex >= 0;
+    }
+    FORMATETC folderContentsFormat{};
+    folderContentsFormat.cfFormat = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(CFSTR_FILECONTENTS));
+    folderContentsFormat.dwAspect = DVASPECT_CONTENT;
+    folderContentsFormat.lindex = nestedFileIndex;
+    folderContentsFormat.tymed = TYMED_ISTREAM;
+    STGMEDIUM folderContentsMedium{};
+    folderShellDataValid = folderShellDataValid
+        && SUCCEEDED(folderShellClipboard->GetData(&folderContentsFormat, &folderContentsMedium));
+    if (folderShellDataValid)
+    {
+        char buffer[256]{};
+        ULONG bytesRead = 0;
+        folderShellDataValid = folderContentsMedium.pstm != nullptr
+            && SUCCEEDED(folderContentsMedium.pstm->Read(buffer, sizeof(buffer), &bytesRead))
+            && bytesRead > 0;
+        ReleaseStgMedium(&folderContentsMedium);
+    }
+    if (folderShellClipboard != nullptr)
+    {
+        folderShellClipboard->Release();
+    }
+    if (SUCCEEDED(folderOleInitResult))
+    {
+        OleUninitialize();
+    }
+    bool shellFolderTransferGrouped = false;
+    const auto shellFolderDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!shellFolderTransferGrouped && std::chrono::steady_clock::now() < shellFolderDeadline)
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        for (int index = 0; index < transferTable->topLevelItemCount(); ++index)
+        {
+            QTreeWidgetItem *parent = transferTable->topLevelItem(index);
+            if (parent == nullptr
+                || parent->text(0) != "explorer-upload-folder"
+                || parent->text(1) != "已完成"
+                || parent->text(4) != "资源管理器/桌面（由 Windows 决定）"
+                || parent->text(5) != "<-"
+                || parent->childCount() != 1)
+            {
+                continue;
+            }
+            QTreeWidgetItem *child = parent->child(0);
+            shellFolderTransferGrouped = child != nullptr
+                && child->text(0) == "nested.txt"
+                && child->text(1) == "已完成"
+                && child->text(5) == "<-";
+            if (shellFolderTransferGrouped)
+            {
+                break;
+            }
+        }
+        if (!shellFolderTransferGrouped)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    if (!folderShellDataValid || !shellFolderTransferGrouped)
+    {
+        QTextStream(stderr) << "Windows Shell folder download was not grouped in the transfer table" << Qt::endl;
+        dumpTransferRows(transferTable);
+        return false;
+    }
+#endif
+
+    const QString pasteTarget = QDir(downloadDirectory.path()).filePath("clipboard-target");
+    if (!QDir().mkpath(pasteTarget))
+    {
+        return false;
+    }
+    window.setLocalPathForTesting(pasteTarget);
+    const int remoteReadmeRow = findTableRowByName(remoteTable, "readme.txt");
+    if (remoteReadmeRow < 0)
+    {
+        return false;
+    }
+    remoteTable->selectRow(remoteReadmeRow);
+    QKeyEvent copyRemoteEvent(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
+    QApplication::sendEvent(remoteTable->viewport(), &copyRemoteEvent);
+    const QMimeData *remoteClipboard = QApplication::clipboard()->mimeData();
+    if (!copyRemoteEvent.isAccepted()
+        || remoteClipboard == nullptr
+        || !remoteClipboard->hasFormat(panel_shared::RemotePathMimeType))
+    {
+        QTextStream(stderr) << "Remote Ctrl+C did not create transferable clipboard data" << Qt::endl;
+        return false;
+    }
+    const QList<RemoteTransferItem> copiedItems = panel_shared::decodeRemoteTransferItems(
+        remoteClipboard->data(panel_shared::RemotePathMimeType));
+    if (copiedItems.size() != 1 || copiedItems.constFirst().sessionId.isEmpty())
+    {
+        QTextStream(stderr) << "Remote clipboard data lost its source session" << Qt::endl;
+        return false;
+    }
+
+#ifdef _WIN32
+    const HRESULT oleInitResult = OleInitialize(nullptr);
+    IDataObject *shellClipboard = nullptr;
+    bool shellDataValid = SUCCEEDED(oleInitResult)
+        && SUCCEEDED(OleGetClipboard(&shellClipboard))
+        && shellClipboard != nullptr;
+    FORMATETC descriptorFormat{};
+    descriptorFormat.cfFormat = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(CFSTR_FILEDESCRIPTORW));
+    descriptorFormat.dwAspect = DVASPECT_CONTENT;
+    descriptorFormat.lindex = -1;
+    descriptorFormat.tymed = TYMED_HGLOBAL;
+    STGMEDIUM descriptorMedium{};
+    shellDataValid = shellDataValid && SUCCEEDED(shellClipboard->GetData(&descriptorFormat, &descriptorMedium));
+    if (shellDataValid)
+    {
+        auto *descriptor = static_cast<FILEGROUPDESCRIPTORW *>(GlobalLock(descriptorMedium.hGlobal));
+        shellDataValid = descriptor != nullptr
+            && descriptor->cItems == 1
+            && QString::fromWCharArray(descriptor->fgd[0].cFileName) == "readme.txt";
+        if (descriptor != nullptr)
+        {
+            GlobalUnlock(descriptorMedium.hGlobal);
+        }
+        ReleaseStgMedium(&descriptorMedium);
+    }
+    FORMATETC contentsFormat{};
+    contentsFormat.cfFormat = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(CFSTR_FILECONTENTS));
+    contentsFormat.dwAspect = DVASPECT_CONTENT;
+    contentsFormat.lindex = 0;
+    contentsFormat.tymed = TYMED_ISTREAM;
+    STGMEDIUM contentsMedium{};
+    shellDataValid = shellDataValid && SUCCEEDED(shellClipboard->GetData(&contentsFormat, &contentsMedium));
+    if (shellDataValid)
+    {
+        char buffer[256]{};
+        ULONG bytesRead = 0;
+        shellDataValid = contentsMedium.pstm != nullptr
+            && SUCCEEDED(contentsMedium.pstm->Read(buffer, sizeof(buffer), &bytesRead))
+            && bytesRead > 0;
+        ReleaseStgMedium(&contentsMedium);
+    }
+    if (shellClipboard != nullptr)
+    {
+        shellClipboard->Release();
+    }
+    if (SUCCEEDED(oleInitResult))
+    {
+        OleUninitialize();
+    }
+    if (!shellDataValid)
+    {
+        QTextStream(stderr) << "Remote Ctrl+C did not expose a Windows Shell file descriptor" << Qt::endl;
+        return false;
+    }
+    bool shellDownloadRecorded = false;
+    const auto shellTransferDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!shellDownloadRecorded && std::chrono::steady_clock::now() < shellTransferDeadline)
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        for (int index = 0; index < transferTable->topLevelItemCount(); ++index)
+        {
+            QTreeWidgetItem *item = transferTable->topLevelItem(index);
+            if (item != nullptr
+                && item->text(0) == "readme.txt"
+                && item->text(1) == "已完成"
+                && item->text(4) == "资源管理器/桌面（由 Windows 决定）"
+                && item->text(5) == "<-"
+                && item->text(6) == "/home/testuser/remote_test/readme.txt")
+            {
+                shellDownloadRecorded = true;
+                break;
+            }
+        }
+        if (!shellDownloadRecorded)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    if (!shellDownloadRecorded)
+    {
+        QTextStream(stderr) << "Windows Shell content download was not recorded in the transfer table" << Qt::endl;
+        dumpTransferRows(transferTable);
+        return false;
+    }
+#endif
+
+    QKeyEvent pasteLocalEvent(QEvent::KeyPress, Qt::Key_V, Qt::ControlModifier);
+    QApplication::sendEvent(localTable->viewport(), &pasteLocalEvent);
+    const QString pastedLocalFile = QDir(pasteTarget).filePath("readme.txt");
+    bool localClipboardDownloadCompleted = false;
+    const auto localClipboardDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!localClipboardDownloadCompleted && std::chrono::steady_clock::now() < localClipboardDeadline)
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        for (int index = 0; index < transferTable->topLevelItemCount(); ++index)
+        {
+            QTreeWidgetItem *item = transferTable->topLevelItem(index);
+            if (item != nullptr
+                && item->text(0) == "readme.txt"
+                && item->text(1) == "已完成"
+                && QDir::fromNativeSeparators(item->text(4)) == QDir::fromNativeSeparators(pastedLocalFile)
+                && item->text(5) == "<-")
+            {
+                localClipboardDownloadCompleted = QFileInfo::exists(pastedLocalFile);
+                break;
+            }
+        }
+        if (!localClipboardDownloadCompleted)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    if (!pasteLocalEvent.isAccepted() || !localClipboardDownloadCompleted)
+    {
+        QTextStream(stderr) << "Local Ctrl+V did not download the remote clipboard item" << Qt::endl;
+        return false;
+    }
+
+    const QString folderPasteTarget = QDir(downloadDirectory.path()).filePath("folder-clipboard-target");
+    if (!QDir().mkpath(folderPasteTarget))
+    {
+        return false;
+    }
+    window.setLocalPathForTesting(folderPasteTarget);
+    const int remoteDownloadRow = findTableRowByName(remoteTable, "download");
+    if (remoteDownloadRow < 0)
+    {
+        return false;
+    }
+    remoteTable->selectRow(remoteDownloadRow);
+    QKeyEvent copyRemoteDirectoryEvent(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
+    QApplication::sendEvent(remoteTable->viewport(), &copyRemoteDirectoryEvent);
+    const QMimeData *directoryClipboard = QApplication::clipboard()->mimeData();
+    QKeyEvent pasteRemoteDirectoryEvent(QEvent::KeyPress, Qt::Key_V, Qt::ControlModifier);
+    QApplication::sendEvent(localTable->viewport(), &pasteRemoteDirectoryEvent);
+    const QString pastedLocalDirectory = QDir(folderPasteTarget).filePath("download");
+    bool localDirectoryClipboardDownloadCompleted = false;
+    const auto localDirectoryClipboardDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!localDirectoryClipboardDownloadCompleted
+        && std::chrono::steady_clock::now() < localDirectoryClipboardDeadline)
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        for (int index = 0; index < transferTable->topLevelItemCount(); ++index)
+        {
+            QTreeWidgetItem *item = transferTable->topLevelItem(index);
+            if (item != nullptr
+                && item->text(0) == "download"
+                && item->text(1) == "已完成"
+                && QDir::fromNativeSeparators(item->text(4)) == QDir::fromNativeSeparators(pastedLocalDirectory)
+                && item->text(5) == "<-")
+            {
+                localDirectoryClipboardDownloadCompleted = QFileInfo(pastedLocalDirectory).isDir();
+                break;
+            }
+        }
+        if (!localDirectoryClipboardDownloadCompleted)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    if (!copyRemoteDirectoryEvent.isAccepted()
+        || directoryClipboard == nullptr
+        || !directoryClipboard->hasFormat(panel_shared::RemotePathMimeType)
+        || !pasteRemoteDirectoryEvent.isAccepted()
+        || !localDirectoryClipboardDownloadCompleted)
+    {
+        QTextStream(stderr) << "Remote folder copy/paste did not preserve the empty directory" << Qt::endl;
+        return false;
+    }
+
+    const QString clipboardUpload = QDir(downloadDirectory.path()).filePath("clipboard-upload.txt");
+    QFile clipboardUploadFile(clipboardUpload);
+    if (!clipboardUploadFile.open(QIODevice::WriteOnly | QIODevice::NewOnly))
+    {
+        return false;
+    }
+    clipboardUploadFile.write("clipboard upload");
+    clipboardUploadFile.close();
+    window.setLocalPathForTesting(downloadDirectory.path());
+    QApplication::processEvents();
+    const int localClipboardRow = findTableRowByName(localTable, "clipboard-upload.txt");
+    if (localClipboardRow < 0)
+    {
+        return false;
+    }
+    localTable->selectRow(localClipboardRow);
+    QKeyEvent copyLocalEvent(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
+    QApplication::sendEvent(localTable->viewport(), &copyLocalEvent);
+    const QMimeData *localClipboard = QApplication::clipboard()->mimeData();
+    if (!copyLocalEvent.isAccepted()
+        || localClipboard == nullptr
+        || localClipboard->urls().size() != 1
+        || localClipboard->urls().constFirst().toLocalFile() != clipboardUpload)
+    {
+        QTextStream(stderr) << "Local Ctrl+C did not create a standard file URL" << Qt::endl;
+        return false;
+    }
+    remoteTable->clearSelection();
+    remoteTable->setCurrentCell(-1, -1);
+    QKeyEvent pasteRemoteEvent(QEvent::KeyPress, Qt::Key_V, Qt::ControlModifier);
+    QApplication::sendEvent(remoteTable->viewport(), &pasteRemoteEvent);
+    if (!pasteRemoteEvent.isAccepted()
+        || !waitForTransferRow(transferTable, "clipboard-upload.txt", "上传", "已完成"))
+    {
+        QTextStream(stderr) << "Remote Ctrl+V did not upload the local clipboard item" << Qt::endl;
+        return false;
+    }
+#ifdef _WIN32
+    WindowsShellDragFile shellDirectory;
+    shellDirectory.fileName = L"folder";
+    shellDirectory.isDirectory = true;
+    WindowsShellDragFile shellFile;
+    shellFile.fileName = L"folder\\nested.txt";
+    shellFile.size = 5;
+    const QString shellMaterializedPath = QDir(downloadDirectory.path()).filePath("shell-materialized.txt");
+    shellFile.materialize = [shellMaterializedPath](
+                                std::wstring &temporaryPath,
+                                const std::shared_ptr<std::atomic_bool> &canceled) {
+        if (canceled->load())
+        {
+            return false;
+        }
+        QFile file(shellMaterializedPath);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) || file.write("hello") != 5)
+        {
+            return false;
+        }
+        file.close();
+        temporaryPath = QDir::toNativeSeparators(shellMaterializedPath).toStdWString();
+        return true;
+    };
+    int lazyFileProviderCalls = 0;
+    bool shellTreeValid = setWindowsShellClipboard(
+        [&lazyFileProviderCalls, shellDirectory, shellFile](std::vector<WindowsShellDragFile> &files) {
+            ++lazyFileProviderCalls;
+            files = {shellDirectory, shellFile};
+            return true;
+        },
+        QByteArray("shell-smoke"));
+    const HRESULT treeOleInit = OleInitialize(nullptr);
+    IDataObject *treeClipboard = nullptr;
+    shellTreeValid = shellTreeValid
+        && SUCCEEDED(treeOleInit)
+        && SUCCEEDED(OleGetClipboard(&treeClipboard))
+        && treeClipboard != nullptr;
+    IDataObjectAsyncCapability *asyncCapability = nullptr;
+    WINBOOL asyncMode = FALSE;
+    WINBOOL asyncOperationRunning = FALSE;
+    shellTreeValid = shellTreeValid
+        && SUCCEEDED(treeClipboard->QueryInterface(
+            IID_IDataObjectAsyncCapability,
+            reinterpret_cast<void **>(&asyncCapability)))
+        && asyncCapability != nullptr
+        && SUCCEEDED(asyncCapability->GetAsyncMode(&asyncMode))
+        && asyncMode == TRUE
+        && SUCCEEDED(asyncCapability->StartOperation(nullptr))
+        && SUCCEEDED(asyncCapability->InOperation(&asyncOperationRunning))
+        && asyncOperationRunning == TRUE
+        && SUCCEEDED(asyncCapability->EndOperation(S_OK, nullptr, DROPEFFECT_COPY));
+    asyncOperationRunning = TRUE;
+    shellTreeValid = shellTreeValid
+        && SUCCEEDED(asyncCapability->InOperation(&asyncOperationRunning))
+        && asyncOperationRunning == FALSE;
+    if (asyncCapability != nullptr)
+    {
+        asyncCapability->Release();
+    }
+    FORMATETC applicationMetadataFormat{};
+    applicationMetadataFormat.cfFormat = static_cast<CLIPFORMAT>(
+        RegisterClipboardFormatW(L"application/x-dirbridge-remote-paths"));
+    applicationMetadataFormat.dwAspect = DVASPECT_CONTENT;
+    applicationMetadataFormat.lindex = -1;
+    applicationMetadataFormat.tymed = TYMED_HGLOBAL;
+    STGMEDIUM applicationMetadataMedium{};
+    shellTreeValid = shellTreeValid
+        && SUCCEEDED(treeClipboard->GetData(&applicationMetadataFormat, &applicationMetadataMedium))
+        && lazyFileProviderCalls == 0;
+    if (applicationMetadataMedium.hGlobal != nullptr)
+    {
+        ReleaseStgMedium(&applicationMetadataMedium);
+    }
+    FORMATETC treeDescriptorFormat{};
+    treeDescriptorFormat.cfFormat = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(CFSTR_FILEDESCRIPTORW));
+    treeDescriptorFormat.dwAspect = DVASPECT_CONTENT;
+    treeDescriptorFormat.lindex = -1;
+    treeDescriptorFormat.tymed = TYMED_HGLOBAL;
+    STGMEDIUM treeDescriptorMedium{};
+    shellTreeValid = shellTreeValid && SUCCEEDED(treeClipboard->GetData(&treeDescriptorFormat, &treeDescriptorMedium));
+    shellTreeValid = shellTreeValid && lazyFileProviderCalls == 1;
+    if (shellTreeValid)
+    {
+        auto *descriptor = static_cast<FILEGROUPDESCRIPTORW *>(GlobalLock(treeDescriptorMedium.hGlobal));
+        shellTreeValid = descriptor != nullptr
+            && descriptor->cItems == 2
+            && (descriptor->fgd[0].dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0
+            && QString::fromWCharArray(descriptor->fgd[1].cFileName) == "folder\\nested.txt";
+        if (descriptor != nullptr)
+        {
+            GlobalUnlock(treeDescriptorMedium.hGlobal);
+        }
+        ReleaseStgMedium(&treeDescriptorMedium);
+    }
+    FORMATETC treeContentsFormat{};
+    treeContentsFormat.cfFormat = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(CFSTR_FILECONTENTS));
+    treeContentsFormat.dwAspect = DVASPECT_CONTENT;
+    treeContentsFormat.lindex = 1;
+    treeContentsFormat.tymed = TYMED_ISTREAM;
+    STGMEDIUM treeContentsMedium{};
+    shellTreeValid = shellTreeValid && SUCCEEDED(treeClipboard->GetData(&treeContentsFormat, &treeContentsMedium));
+    if (shellTreeValid)
+    {
+        char content[8]{};
+        ULONG bytesRead = 0;
+        shellTreeValid = treeContentsMedium.pstm != nullptr
+            && SUCCEEDED(treeContentsMedium.pstm->Read(content, sizeof(content), &bytesRead))
+            && QByteArray(content, static_cast<int>(bytesRead)) == "hello";
+        ReleaseStgMedium(&treeContentsMedium);
+    }
+    if (treeClipboard != nullptr)
+    {
+        treeClipboard->Release();
+    }
+    if (SUCCEEDED(treeOleInit))
+    {
+        OleUninitialize();
+    }
+    clearWindowsShellClipboard();
+    if (!shellTreeValid)
+    {
+        QTextStream(stderr) << "Windows Shell directory descriptor or delayed file stream is invalid" << Qt::endl;
+        return false;
+    }
+#endif
+    QApplication::clipboard()->clear();
     return true;
 }
 
@@ -2821,23 +3556,48 @@ bool checkRemoteDirectoryOperationWorkflow(MainWindow &window)
     armOverwriteDialog(downloadConflictDialogTimer, downloadConflictDialogObserved);
     window.downloadRemoteFileForTesting(remoteConflictFile);
     const auto overwrittenDownloadDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
-    std::string overwrittenDownloadText;
+    const QString existingLocalDownloadText = QDir::fromNativeSeparators(
+        QString::fromStdString(existingLocalDownload.u8string()));
+    bool downloadOverwriteCompleted = false;
     while (std::chrono::steady_clock::now() < overwrittenDownloadDeadline)
     {
         QApplication::processEvents(QEventLoop::AllEvents, 50);
-        std::ifstream input(existingLocalDownload, std::ios::binary);
-        overwrittenDownloadText.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
-        if (overwrittenDownloadText.rfind("fake remote file:", 0) == 0)
+        for (int index = 0; index < transferTable->topLevelItemCount(); ++index)
+        {
+            QTreeWidgetItem *item = transferTable->topLevelItem(index);
+            if (item != nullptr
+                && item->text(0) == "file-conflict.txt"
+                && QDir::fromNativeSeparators(item->text(4)) == existingLocalDownloadText
+                && item->text(5) == "<-"
+                && item->text(1) == "已完成")
+            {
+                downloadOverwriteCompleted = true;
+                break;
+            }
+        }
+        if (downloadOverwriteCompleted)
         {
             break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
+    std::ifstream overwrittenDownload(existingLocalDownload, std::ios::binary);
+    const std::string overwrittenDownloadText{
+        std::istreambuf_iterator<char>(overwrittenDownload),
+        std::istreambuf_iterator<char>()};
     downloadConflictDialogTimer.stop();
     window.setDialogsSuppressedForTesting(true);
-    if (!downloadConflictDialogObserved || overwrittenDownloadText.rfind("fake remote file:", 0) != 0)
+    if (!downloadConflictDialogObserved || !downloadOverwriteCompleted
+        || overwrittenDownloadText.rfind("fake remote file:", 0) != 0)
     {
-        QTextStream(stderr) << "File download conflict did not show the new dialog and safely replace the local target" << Qt::endl;
+        QTextStream(stderr)
+            << "File download conflict did not show the new dialog and safely replace the local target"
+            << " (dialog=" << downloadConflictDialogObserved
+            << ", completed=" << downloadOverwriteCompleted
+            << ", bytes=" << overwrittenDownloadText.size()
+            << ", content=" << QString::fromStdString(overwrittenDownloadText.substr(0, 64)) << ')'
+            << Qt::endl;
+        dumpTransferRows(transferTable);
         return false;
     }
 
@@ -3084,6 +3844,27 @@ bool checkRemoteUiWorkflow(MainWindow &window)
         && checkRemoteMultiSessionWorkflow(window)
         && baseWorkflowOk
         && checkWindowCloseDuringUploadPreparation();
+}
+
+/**
+ * @brief 针对内存假后端运行剪贴板与资源管理器拖放工作流。
+ * @param window 待测试的主窗口。
+ * @return 双向复制粘贴及拖放检查通过时返回 true。
+ */
+bool checkClipboardDragWorkflow(MainWindow &window)
+{
+    return checkSingleDragStartPerMousePress()
+        && checkIncrementalLocalDirectoryRefresh()
+        && checkRemoteUiWorkflow(
+        window,
+        "SFTP",
+        "fake-host",
+        "22",
+        "testuser",
+        "",
+        "/home/testuser/remote_test",
+        {"download", "upload", "edit", "readme.txt"},
+        true);
 }
 
 /**

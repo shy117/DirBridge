@@ -48,6 +48,7 @@ const TransferJob *TransferQueue::retry(const std::string &id, const std::string
     if (job == nullptr
         || job->kind == TransferJobKind::Directory
         || job->kind == TransferJobKind::DirectoryEntry
+        || job->externallyManaged
         || (job->status != TransferStatus::Failed && job->status != TransferStatus::Canceled))
     {
         return nullptr;
@@ -99,6 +100,7 @@ TransferJob *TransferQueue::nextPending()
     const auto job = std::find_if(m_jobs.begin(), m_jobs.end(), [](const TransferJob &current) {
         return current.kind != TransferJobKind::Directory
             && current.kind != TransferJobKind::DirectoryEntry
+            && !current.externallyManaged
             && current.status == TransferStatus::Pending;
     });
     return job == m_jobs.end() ? nullptr : &(*job);

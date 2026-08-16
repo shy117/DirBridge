@@ -21,6 +21,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QMimeData>
 #include <QPointer>
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
@@ -31,6 +32,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <array>
 
 using namespace panel_shared;
@@ -125,6 +127,8 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
     QAction *renameAction = nullptr;
     QAction *permissionsAction = nullptr;
     QAction *removeAction = nullptr;
+    QAction *copyAction = nullptr;
+    QAction *pasteAction = nullptr;
     QAction *copyPathAction = nullptr;
     QAction *propertiesAction = nullptr;
     QAction *copyFolderPathAction = nullptr;
@@ -175,6 +179,8 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
         }
         removeAction = menu.addAction(fluentIcon("delete"), "删除");
         menu.addSeparator();
+        copyAction = menu.addAction(fluentIcon("copy"), "复制");
+        copyAction->setEnabled(m_clipboardCopyRequested != nullptr);
         copyPathAction = menu.addAction(fluentIcon("copy"), "复制路径");
         copyFolderPathAction = menu.addAction(fluentIcon("copy"), "复制文件夹路径");
     }
@@ -182,6 +188,27 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
     {
         copyFolderPathAction = menu.addAction(fluentIcon("copy"), "复制文件夹路径");
     }
+
+    const QMimeData *clipboardData = QApplication::clipboard()->mimeData();
+    bool canPaste = false;
+    if (m_clipboardPasteRequested && clipboardData != nullptr)
+    {
+        if (isLocal)
+        {
+            canPaste = clipboardData->hasFormat(RemotePathMimeType)
+                && !panel_shared::decodeRemoteTransferItems(clipboardData->data(RemotePathMimeType)).isEmpty();
+        }
+        else if (clipboardData->hasUrls())
+        {
+            const QList<QUrl> urls = clipboardData->urls();
+            canPaste = !urls.isEmpty()
+                && std::all_of(urls.cbegin(), urls.cend(), [](const QUrl &url) {
+                    return url.isLocalFile() && QFileInfo::exists(url.toLocalFile());
+                });
+        }
+    }
+    pasteAction = menu.addAction(fluentIcon("clipboard_paste"), "粘贴");
+    pasteAction->setEnabled(canPaste);
 
     menu.addSeparator();
     QMenu *newMenu = menu.addMenu(fluentIcon("add"), "新建");
@@ -233,6 +260,18 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
     if (selectedAction == copyFolderPathAction)
     {
         QApplication::clipboard()->setText(isLocal ? QDir::toNativeSeparators(m_currentPath) : m_currentPath);
+        return;
+    }
+
+    if (selectedAction == copyAction && m_clipboardCopyRequested)
+    {
+        m_clipboardCopyRequested(selectedFileTransferItems());
+        return;
+    }
+
+    if (selectedAction == pasteAction && m_clipboardPasteRequested)
+    {
+        m_clipboardPasteRequested(selectedIsDirectory ? selectedPath : m_currentPath);
         return;
     }
 

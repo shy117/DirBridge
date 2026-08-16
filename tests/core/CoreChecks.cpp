@@ -1183,6 +1183,23 @@ void checkTransferQueueAndManager()
     require(aggregateQueue.find(directoryParent.id) == nullptr, "clearFinished should remove canceled directory parent");
     require(aggregateQueue.find(directoryChild.id) != nullptr, "clearing directory parent should not implicitly remove unfinished children");
 
+    TransferQueue externalQueue;
+    TransferJob shellDownload;
+    shellDownload.id = "shell-download";
+    shellDownload.name = "readme.txt";
+    shellDownload.direction = TransferDirection::Download;
+    shellDownload.localPath = "Windows Shell";
+    shellDownload.remotePath = "/home/testuser/remote_test/readme.txt";
+    shellDownload.status = TransferStatus::Pending;
+    shellDownload.externallyManaged = true;
+    externalQueue.enqueue(shellDownload);
+    require(externalQueue.nextPending() == nullptr,
+        "externally managed shell downloads should not be executed by the normal transfer queue");
+    shellDownload.status = TransferStatus::Failed;
+    externalQueue.update(shellDownload);
+    require(externalQueue.retry(shellDownload.id, "retry-shell-download") == nullptr,
+        "externally managed shell downloads should not be retried without a Windows destination");
+
     const std::size_t removed = queue.clearFinished();
     require(removed >= 3, "clearFinished should remove completed, failed, and canceled jobs");
     require(queue.find(upload.id) == nullptr, "clearFinished should remove completed upload");

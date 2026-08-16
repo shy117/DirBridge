@@ -53,6 +53,7 @@ struct TransferJob
     bool preparationFinished = true;
     bool preparationFailed = false;
     bool replaceExisting = false;
+    bool externallyManaged = false;
     std::string errorMessage;
 };
 

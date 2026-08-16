@@ -11,10 +11,8 @@
 #include <QFileInfo>
 #include <QHeaderView>
 #include <QHash>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QLabel>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QMap>
 #include <QMimeData>
@@ -23,6 +21,7 @@
 #include <QSignalBlocker>
 #include <QStorageInfo>
 #include <QStyle>
+#include <QSet>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QToolTip>
@@ -45,50 +44,6 @@ QString formattedModifiedTime(const QString &value)
     }
     const QDateTime parsed = parseRemoteModifiedTime(value);
     return parsed.isValid() ? parsed.toString("yyyy/MM/dd HH:mm:ss") : value;
-}
-
-QByteArray encodeRemoteTransferItems(const QList<RemoteTransferItem> &items)
-{
-    QJsonArray array;
-    for (const RemoteTransferItem &item : items)
-    {
-        QJsonObject object;
-        object.insert("path", item.path);
-        object.insert("isDirectory", item.isDirectory);
-        array.append(object);
-    }
-    return QJsonDocument(array).toJson(QJsonDocument::Compact);
-}
-
-QList<RemoteTransferItem> decodeRemoteTransferItems(const QByteArray &payload)
-{
-    QList<RemoteTransferItem> items;
-    QJsonParseError error;
-    const QJsonDocument document = QJsonDocument::fromJson(payload, &error);
-    if (error.error != QJsonParseError::NoError || !document.isArray())
-    {
-        return items;
-    }
-
-    QSet<QString> seenPaths;
-    for (const QJsonValue &value : document.array())
-    {
-        if (!value.isObject())
-        {
-            continue;
-        }
-        const QJsonObject object = value.toObject();
-        RemoteTransferItem item;
-        item.path = object.value("path").toString();
-        item.isDirectory = object.value("isDirectory").toBool();
-        if (item.path.isEmpty() || seenPaths.contains(item.path))
-        {
-            continue;
-        }
-        seenPaths.insert(item.path);
-        items.append(item);
-    }
-    return items;
 }
 
 QString normalizedLocalPath(const QString &path)
@@ -209,6 +164,30 @@ bool FilePanel::eventFilter(QObject *watched, QEvent *event)
     const bool isLocalTreeViewport = m_localTree != nullptr && watched == m_localTree->viewport();
     const bool isRemoteTreeViewport = m_remoteTree != nullptr && watched == m_remoteTree->viewport();
     const bool isDropViewport = isTableViewport || isLocalTreeViewport || isRemoteTreeViewport;
+    if (isTableViewport && event->type() == QEvent::KeyPress)
+    {
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        const Qt::KeyboardModifiers modifiers = keyEvent->modifiers() & Qt::KeyboardModifierMask;
+        if (modifiers == Qt::ControlModifier && keyEvent->key() == Qt::Key_C && m_clipboardCopyRequested)
+        {
+            m_clipboardCopyRequested(selectedFileTransferItems());
+            keyEvent->accept();
+            return true;
+        }
+        if (modifiers == Qt::ControlModifier && keyEvent->key() == Qt::Key_V && m_clipboardPasteRequested)
+        {
+            QString targetDirectory = m_currentPath;
+            const int row = m_table->currentRow();
+            QTableWidgetItem *nameItem = row < 0 ? nullptr : m_table->item(row, 0);
+            if (nameItem != nullptr && nameItem->data(Qt::UserRole + 1).toBool())
+            {
+                targetDirectory = nameItem->data(Qt::UserRole).toString();
+            }
+            m_clipboardPasteRequested(targetDirectory);
+            keyEvent->accept();
+            return true;
+        }
+    }
     if (!isDropViewport)
     {
         return QWidget::eventFilter(watched, event);
@@ -220,6 +199,18 @@ bool FilePanel::eventFilter(QObject *watched, QEvent *event)
         if (mouseEvent->button() == Qt::LeftButton)
         {
             m_dragStartPosition = mouseEvent->pos();
+            m_dragStartedForCurrentPress = false;
+        }
+        return QWidget::eventFilter(watched, event);
+    }
+
+    if (isTableViewport && event->type() == QEvent::MouseButtonRelease)
+    {
+        auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (mouseEvent->button() == Qt::LeftButton)
+        {
+            m_dragStartedForCurrentPress = false;
+            m_dragStartPosition = QPoint();
         }
         return QWidget::eventFilter(watched, event);
     }
@@ -227,9 +218,18 @@ bool FilePanel::eventFilter(QObject *watched, QEvent *event)
     if (isTableViewport && event->type() == QEvent::MouseMove)
     {
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
-        if ((mouseEvent->buttons() & Qt::LeftButton) != 0
+        const bool leftButtonHeld = (mouseEvent->buttons() & Qt::LeftButton) != 0;
+        if (m_dragStartedForCurrentPress && leftButtonHeld)
+        {
+            // 自定义拖拽返回后仍可能收到本次按压的 MouseMove；阻止 QTableWidget 再启动内置拖拽。
+            mouseEvent->accept();
+            return true;
+        }
+        if (leftButtonHeld
             && (mouseEvent->pos() - m_dragStartPosition).manhattanLength() >= QApplication::startDragDistance())
         {
+            // DoDragDrop 会运行嵌套事件循环；必须在进入拖拽前锁定本次按压，避免 MouseMove 重入。
+            m_dragStartedForCurrentPress = true;
             startDragFromSelection();
             return true;
         }
@@ -250,6 +250,7 @@ bool FilePanel::eventFilter(QObject *watched, QEvent *event)
             return Qt::MoveAction;
         }
         if (m_mode == Mode::Local && mimeData->hasUrls()
+            && mimeData->hasFormat(LocalPathMimeType)
             && (watched == m_localTree->viewport() || watched == m_table->viewport()))
         {
             for (const QUrl &url : mimeData->urls())
@@ -398,9 +399,10 @@ void FilePanel::startDragFromSelection()
     {
         return;
     }
-    if (items.size() != 1)
+
+    if (m_mode == Mode::RemotePlaceholder && m_remoteShellDragRequested)
     {
-        showFileOperationWarning(this, "无法拖拽", "暂不支持批量拖拽，请仅选择一个项目。");
+        m_remoteShellDragRequested(items);
         return;
     }
 
@@ -413,10 +415,11 @@ void FilePanel::startDragFromSelection()
             urls.append(QUrl::fromLocalFile(item.path));
         }
         mimeData->setUrls(urls);
+        mimeData->setData(LocalPathMimeType, QByteArrayLiteral("1"));
     }
     else
     {
-        mimeData->setData(RemotePathMimeType, encodeRemoteTransferItems(items));
+        mimeData->setData(RemotePathMimeType, panel_shared::encodeRemoteTransferItems(items));
     }
 
     auto *drag = new QDrag(this);
@@ -436,15 +439,28 @@ bool FilePanel::canAcceptTransferDrop(const QMimeData *mimeData, QObject *watche
         return false;
     }
 
+    const auto hasOnlyLocalUrls = [mimeData]() {
+        if (!mimeData->hasUrls())
+        {
+            return false;
+        }
+        const QList<QUrl> urls = mimeData->urls();
+        if (urls.isEmpty())
+        {
+            return false;
+        }
+        return std::all_of(urls.cbegin(), urls.cend(), [](const QUrl &url) {
+            return url.isLocalFile();
+        });
+    };
+
     if (m_mode == Mode::RemotePlaceholder)
     {
         return (m_localFilesDroppedOnRemote != nullptr
-                && mimeData->hasUrls()
-                && mimeData->urls().size() == 1
-                && mimeData->urls().constFirst().isLocalFile())
+                && hasOnlyLocalUrls())
             || (m_remoteFilesDroppedOnRemote != nullptr
                 && mimeData->hasFormat(RemotePathMimeType)
-                && decodeRemoteTransferItems(mimeData->data(RemotePathMimeType)).size() == 1);
+                && !panel_shared::decodeRemoteTransferItems(mimeData->data(RemotePathMimeType)).isEmpty());
     }
 
     if (m_mode == Mode::Local)
@@ -452,11 +468,9 @@ bool FilePanel::canAcceptTransferDrop(const QMimeData *mimeData, QObject *watche
         if (mimeData->hasFormat(RemotePathMimeType))
         {
             return m_remoteFilesDroppedOnLocal != nullptr
-                && decodeRemoteTransferItems(mimeData->data(RemotePathMimeType)).size() == 1;
+                && !panel_shared::decodeRemoteTransferItems(mimeData->data(RemotePathMimeType)).isEmpty();
         }
-        return mimeData->hasUrls()
-            && mimeData->urls().size() == 1
-            && mimeData->urls().constFirst().isLocalFile()
+        return hasOnlyLocalUrls()
             && (watched == m_localTree->viewport() || watched == m_table->viewport());
     }
 
@@ -479,7 +493,7 @@ void FilePanel::handleTransferDrop(const QMimeData *mimeData, const QPoint &posi
     {
         if (mimeData->hasFormat(RemotePathMimeType) && m_remoteFilesDroppedOnRemote)
         {
-            const QList<RemoteTransferItem> remoteItems = decodeRemoteTransferItems(mimeData->data(RemotePathMimeType));
+            const QList<RemoteTransferItem> remoteItems = panel_shared::decodeRemoteTransferItems(mimeData->data(RemotePathMimeType));
             if (!remoteItems.isEmpty())
             {
                 m_remoteFilesDroppedOnRemote(remoteItems, dropTargetDirectory(watched, position));
@@ -502,7 +516,7 @@ void FilePanel::handleTransferDrop(const QMimeData *mimeData, const QPoint &posi
         }
         if (!localPaths.isEmpty())
         {
-            m_localFilesDroppedOnRemote(localPaths);
+            m_localFilesDroppedOnRemote(localPaths, dropTargetDirectory(watched, position));
         }
         return;
     }
@@ -520,15 +534,18 @@ void FilePanel::handleTransferDrop(const QMimeData *mimeData, const QPoint &posi
         }
         if (!localPaths.isEmpty())
         {
-            handleLocalPathDrop(localPaths, dropTargetDirectory(watched, position));
+            handleLocalPathDrop(
+                localPaths,
+                dropTargetDirectory(watched, position),
+                mimeData->hasFormat(LocalPathMimeType));
         }
         return;
     }
 
-    const QList<RemoteTransferItem> remoteItems = decodeRemoteTransferItems(mimeData->data(RemotePathMimeType));
+    const QList<RemoteTransferItem> remoteItems = panel_shared::decodeRemoteTransferItems(mimeData->data(RemotePathMimeType));
     if (!remoteItems.isEmpty())
     {
-        m_remoteFilesDroppedOnLocal(remoteItems);
+        m_remoteFilesDroppedOnLocal(remoteItems, dropTargetDirectory(watched, position));
     }
 }
 
@@ -605,6 +622,7 @@ void FilePanel::showTransferDropHint(QObject *watched, const QMimeData *mimeData
 
     QString actionText;
     if (m_mode == Mode::Local && mimeData->hasUrls()
+        && mimeData->hasFormat(LocalPathMimeType)
         && (watched == m_localTree->viewport() || watched == m_table->viewport()))
     {
         for (const QUrl &url : mimeData->urls())
@@ -615,6 +633,11 @@ void FilePanel::showTransferDropHint(QObject *watched, const QMimeData *mimeData
                 break;
             }
         }
+    }
+    else if (m_mode == Mode::Local && mimeData->hasUrls()
+        && (watched == m_localTree->viewport() || watched == m_table->viewport()))
+    {
+        actionText = "复制到";
     }
     else if (m_mode == Mode::RemotePlaceholder && mimeData->hasFormat(RemotePathMimeType)
         && (watched == m_remoteTree->viewport() || watched == m_table->viewport()))
@@ -643,9 +666,12 @@ void FilePanel::showTransferDropHint(QObject *watched, const QMimeData *mimeData
  * @param sourcePaths 本地源项目列表。
  * @param targetDirectory 目标目录。
  */
-void FilePanel::handleLocalPathDrop(const QStringList &sourcePaths, const QString &targetDirectory)
+void FilePanel::handleLocalPathDrop(
+    const QStringList &sourcePaths,
+    const QString &targetDirectory,
+    bool internalMove)
 {
-    if (sourcePaths.size() != 1 || targetDirectory.isEmpty() || !QFileInfo(targetDirectory).isDir())
+    if (sourcePaths.isEmpty() || targetDirectory.isEmpty() || !QFileInfo(targetDirectory).isDir())
     {
         return;
     }
@@ -722,7 +748,7 @@ void FilePanel::handleLocalPathDrop(const QStringList &sourcePaths, const QStrin
             }
             target = QDir(targetDirectory).filePath(newName);
         }
-        items.append({source, target, isSameLocalVolume(source, targetDirectory)});
+        items.append({source, target, internalMove && isSameLocalVolume(source, targetDirectory)});
     }
 
     for (const LocalDropItem &item : items)
@@ -784,6 +810,13 @@ QList<RemoteTransferItem> FilePanel::selectedFileTransferItems() const
 
         RemoteTransferItem item;
         item.path = path;
+        item.sessionId = m_remoteSessionId;
+        item.name = nameItem->text();
+        item.size = nameItem->data(Qt::UserRole + 3).toLongLong();
+        if (item.size < 0)
+        {
+            item.size = -1;
+        }
         item.isDirectory = nameItem->data(Qt::UserRole + 1).toBool();
         items.append(item);
     }
@@ -826,28 +859,84 @@ QString FilePanel::remoteDropTargetDirectory(const QPoint &position) const
 void FilePanel::populateLocalDirectory(const QString &path)
 {
     m_table->setSortingEnabled(false);
-    m_table->setRowCount(0);
 
     const QDir dir(path);
     const QFileInfoList entries = dir.entryInfoList(
         QDir::AllEntries | QDir::NoDotAndDotDot,
         QDir::DirsFirst | QDir::Name | QDir::IgnoreCase);
 
+    QSet<QString> entryPaths;
     for (const QFileInfo &entry : entries)
     {
-        const int row = m_table->rowCount();
-        m_table->insertRow(row);
+        entryPaths.insert(normalizedLocalPath(entry.absoluteFilePath()).toCaseFolded());
+    }
+    for (int row = m_table->rowCount() - 1; row >= 0; --row)
+    {
+        const QTableWidgetItem *nameItem = m_table->item(row, 0);
+        const QString itemPath = nameItem == nullptr
+            ? QString()
+            : normalizedLocalPath(nameItem->data(Qt::UserRole).toString()).toCaseFolded();
+        if (itemPath.isEmpty() || !entryPaths.contains(itemPath))
+        {
+            m_table->removeRow(row);
+        }
+    }
 
-        QTableWidgetItem *nameItem = createItem(entry.fileName(), m_iconProvider.icon(entry));
+    QHash<QString, int> existingRows;
+    for (int row = 0; row < m_table->rowCount(); ++row)
+    {
+        const QTableWidgetItem *nameItem = m_table->item(row, 0);
+        if (nameItem != nullptr)
+        {
+            existingRows.insert(
+                normalizedLocalPath(nameItem->data(Qt::UserRole).toString()).toCaseFolded(),
+                row);
+        }
+    }
+
+    for (const QFileInfo &entry : entries)
+    {
+        const QString pathKey = normalizedLocalPath(entry.absoluteFilePath()).toCaseFolded();
+        int row = existingRows.value(pathKey, -1);
+        if (row < 0)
+        {
+            row = m_table->rowCount();
+            m_table->insertRow(row);
+            existingRows.insert(pathKey, row);
+        }
+
+        QTableWidgetItem *nameItem = m_table->item(row, 0);
+        if (nameItem == nullptr)
+        {
+            nameItem = createItem(entry.fileName(), m_iconProvider.icon(entry));
+            m_table->setItem(row, 0, nameItem);
+        }
+        else
+        {
+            nameItem->setText(entry.fileName());
+        }
         nameItem->setData(Qt::UserRole, entry.absoluteFilePath());
         nameItem->setData(Qt::UserRole + 1, entry.isDir());
         nameItem->setToolTip(entry.absoluteFilePath());
 
-        m_table->setItem(row, 0, nameItem);
-        m_table->setItem(row, 1, createItem(entry.isDir() ? "" : formatFileSize(entry.size())));
-        m_table->setItem(row, 2, createItem(entry.isDir() ? "文件夹" : entry.suffix().isEmpty() ? "文件" : entry.suffix()));
-        m_table->setItem(row, 3, createItem(entry.lastModified().toString("yyyy/MM/dd HH:mm:ss")));
-        m_table->setItem(row, 4, createItem(entry.permission(QFile::WriteUser) ? "可写" : "只读"));
+        const QStringList values{
+            entry.isDir() ? "" : formatFileSize(entry.size()),
+            entry.isDir() ? "文件夹" : entry.suffix().isEmpty() ? "文件" : entry.suffix(),
+            entry.lastModified().toString("yyyy/MM/dd HH:mm:ss"),
+            entry.permission(QFile::WriteUser) ? "可写" : "只读"};
+        for (int column = 1; column <= values.size(); ++column)
+        {
+            QTableWidgetItem *item = m_table->item(row, column);
+            if (item == nullptr)
+            {
+                item = createItem(values.at(column - 1));
+                m_table->setItem(row, column, item);
+            }
+            else
+            {
+                item->setText(values.at(column - 1));
+            }
+        }
     }
 
     m_table->setSortingEnabled(true);
@@ -987,6 +1076,7 @@ void FilePanel::populateRemoteItems(const QString &path, const std::vector<FileI
         QTableWidgetItem *nameItem = createItem(name, icon);
         nameItem->setData(Qt::UserRole, QString::fromStdString(entry.path));
         nameItem->setData(Qt::UserRole + 1, isDirectory);
+        nameItem->setData(Qt::UserRole + 3, static_cast<qlonglong>(entry.size));
         nameItem->setData(FileOwnerRole, QString::fromStdString(entry.owner));
         nameItem->setToolTip(QString::fromStdString(entry.path));
 

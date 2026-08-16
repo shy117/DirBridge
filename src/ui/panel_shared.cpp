@@ -1,4 +1,5 @@
 #include "ui/panel_shared.h"
+#include "ui/FilePanel.h"
 
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -10,17 +11,140 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QLocale>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QStandardPaths>
 #include <QStyle>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QSet>
 
 #include <algorithm>
 
 namespace panel_shared
 {
+namespace
+{
+constexpr int maxRemoteTransferPayloadBytes = 1024 * 1024;
+constexpr int maxRemoteTransferItems = 4096;
+constexpr int maxRemoteTransferStringLength = 32768;
+
+bool hasControlCharacter(const QString &value)
+{
+    return std::any_of(value.cbegin(), value.cend(), [](QChar character) {
+        return character.unicode() < 0x20;
+    });
+}
+
+bool isValidTransferMetadataString(const QString &value, bool allowEmpty)
+{
+    return (allowEmpty || !value.isEmpty())
+        && value.size() <= maxRemoteTransferStringLength
+        && !hasControlCharacter(value);
+}
+}
+
+QByteArray encodeRemoteTransferItems(const QList<RemoteTransferItem> &items)
+{
+    QJsonObject payload;
+    payload.insert("version", 1);
+    payload.insert("sessionId", items.isEmpty() ? QString() : items.constFirst().sessionId);
+    QJsonArray array;
+    for (const RemoteTransferItem &item : items)
+    {
+        QJsonObject object;
+        object.insert("path", item.path);
+        object.insert("sessionId", item.sessionId);
+        object.insert("name", item.name);
+        if (item.size >= 0)
+        {
+            object.insert("size", item.size);
+        }
+        object.insert("isDirectory", item.isDirectory);
+        array.append(object);
+    }
+    payload.insert("items", array);
+    return QJsonDocument(payload).toJson(QJsonDocument::Compact);
+}
+
+QList<RemoteTransferItem> decodeRemoteTransferItems(const QByteArray &payload)
+{
+    QList<RemoteTransferItem> items;
+    if (payload.isEmpty() || payload.size() > maxRemoteTransferPayloadBytes)
+    {
+        return items;
+    }
+
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(payload, &error);
+    if (error.error != QJsonParseError::NoError || (!document.isArray() && !document.isObject()))
+    {
+        return items;
+    }
+
+    QJsonArray array;
+    QString payloadSessionId;
+    if (document.isArray())
+    {
+        array = document.array();
+    }
+    else
+    {
+        const QJsonObject object = document.object();
+        if (object.value("version").toInt() != 1 || !object.value("items").isArray())
+        {
+            return items;
+        }
+        payloadSessionId = object.value("sessionId").toString();
+        if (!isValidTransferMetadataString(payloadSessionId, false))
+        {
+            return items;
+        }
+        array = object.value("items").toArray();
+    }
+
+    if (array.isEmpty() || array.size() > maxRemoteTransferItems)
+    {
+        return items;
+    }
+
+    QSet<QString> seenPaths;
+    for (const QJsonValue &value : array)
+    {
+        if (!value.isObject())
+        {
+            continue;
+        }
+        const QJsonObject object = value.toObject();
+        RemoteTransferItem item;
+        item.path = object.value("path").toString();
+        item.sessionId = object.value("sessionId").toString(payloadSessionId);
+        item.name = object.value("name").toString();
+        item.size = object.value("size").toInteger(-1);
+        item.isDirectory = object.value("isDirectory").toBool();
+        const bool versionedPayload = document.isObject();
+        if ((versionedPayload && item.sessionId != payloadSessionId)
+            || !isValidTransferMetadataString(item.path, false)
+            || !isValidTransferMetadataString(item.sessionId, !versionedPayload)
+            || !isValidTransferMetadataString(item.name, !versionedPayload)
+            || item.size < -1
+            || seenPaths.contains(item.path))
+        {
+            if (versionedPayload)
+            {
+                return {};
+            }
+            continue;
+        }
+        seenPaths.insert(item.path);
+        items.append(item);
+    }
+    return items;
+}
+
 QIcon fluentIcon(const QString &name)
 {
     return QIcon(QString(":/icons/fluent/%1_24_regular.svg").arg(name));

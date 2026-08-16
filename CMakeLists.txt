@@ -272,7 +272,12 @@ target_link_libraries(DirBridge
 )
 
 if(WIN32)
+    target_sources(DirBridge PRIVATE
+        src/platform/windows/WindowsShellDataObject.cpp
+        src/platform/windows/WindowsShellDataObject.h
+    )
     target_link_libraries(DirBridge PRIVATE DirBridgeTerminal DirBridgeTerminalQt)
+    target_link_libraries(DirBridge PRIVATE ole32 shell32 shlwapi)
     add_dependencies(
         DirBridge
         DirBridgeSshAskPass

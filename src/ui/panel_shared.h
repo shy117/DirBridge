@@ -2,7 +2,9 @@
 #define DIRBRIDGE_UI_PANEL_SHARED_H
 
 #include <QDateTime>
+#include <QByteArray>
 #include <QIcon>
+#include <QList>
 #include <QString>
 
 #include <vector>
@@ -11,11 +13,16 @@
 
 class QFileIconProvider;
 class QWidget;
+struct RemoteTransferItem;
 
 namespace panel_shared
 {
 inline constexpr const char *RemotePathMimeType = "application/x-dirbridge-remote-paths";
+inline constexpr const char *LocalPathMimeType = "application/x-dirbridge-local-paths";
 inline constexpr int FileOwnerRole = Qt::UserRole + 2;
+
+QByteArray encodeRemoteTransferItems(const QList<RemoteTransferItem> &items);
+QList<RemoteTransferItem> decodeRemoteTransferItems(const QByteArray &payload);
 
 /**
  * @brief 从 Qt 资源中加载 Fluent UI SVG 图标。

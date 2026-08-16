@@ -20,6 +20,13 @@ bool checkRemoteUiObjects(MainWindow &window);
 bool checkRemoteUiWorkflow(MainWindow &window);
 
 /**
+ * @brief 运行复制粘贴及资源管理器拖放工作流冒烟测试。
+ * @param window 待测试的主窗口。
+ * @return 文件交互工作流通过时返回 true。
+ */
+bool checkClipboardDragWorkflow(MainWindow &window);
+
+/**
  * @brief 运行真实远程连接与导航冒烟测试。
  * @param window 待测试的主窗口。
  * @return 真实工作流通过时返回 true。

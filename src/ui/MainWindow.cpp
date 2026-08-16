@@ -1,5 +1,9 @@
 #include "ui/MainWindow.h"
 
+#ifdef _WIN32
+#include "platform/windows/WindowsShellDataObject.h"
+#endif
+
 #include "logging/AppLogger.h"
 #include "protocol/CurlRemoteFileSystem.h"
 #include "core/TransferManager.h"
@@ -706,6 +710,10 @@ void MainWindow::closeEvent(QCloseEvent *event)
     {
         m_closePending = true;
         setEnabled(false);
+#ifdef _WIN32
+        // 只释放仍由 DirBridge 设置的虚拟文件剪贴板，不影响用户后来复制的其他内容。
+        clearWindowsShellClipboard();
+#endif
         cancelActiveTransfersForClose();
         if (m_sshTerminalManager != nullptr)
         {
@@ -893,7 +901,13 @@ void MainWindow::moveRemotePathsForTesting(const QStringList &sourcePaths, const
             FileItem sourceItem;
             if (remotePathExists(*session, sourcePath, &sourceItem))
             {
-                sourceItems.append({sourcePath, sourceItem.type == FileItemType::Directory});
+                RemoteTransferItem transferItem;
+                transferItem.path = sourcePath;
+                transferItem.sessionId = session->id;
+                transferItem.name = QString::fromStdString(sourceItem.name);
+                transferItem.size = sourceItem.size;
+                transferItem.isDirectory = sourceItem.type == FileItemType::Directory;
+                sourceItems.append(std::move(transferItem));
             }
         }
         moveRemotePaths(*session, sourceItems, targetDirectory);

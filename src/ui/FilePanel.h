@@ -26,6 +26,9 @@ class QTreeWidget;
 struct RemoteTransferItem
 {
     QString path;
+    QString sessionId;
+    QString name;
+    qint64 size = -1;
     bool isDirectory = false;
 };
 
@@ -65,12 +68,15 @@ public:
      * @brief 设置本地文件拖放到远程面板时使用的回调。
      * @param handler 接收待上传本地文件路径的回调。
      */
-    void setLocalFilesDroppedOnRemoteHandler(std::function<void(const QStringList &)> handler);
+    void setLocalFilesDroppedOnRemoteHandler(std::function<void(const QStringList &, const QString &)> handler);
     /**
      * @brief 设置远程文件拖放到本地面板时使用的回调。
      * @param handler 接收带文件类型的远程项目列表。
      */
-    void setRemoteFilesDroppedOnLocalHandler(std::function<void(const QList<RemoteTransferItem> &)> handler);
+    void setRemoteFilesDroppedOnLocalHandler(std::function<void(const QList<RemoteTransferItem> &, const QString &)> handler);
+    void setClipboardCopyRequestedHandler(std::function<void(const QList<RemoteTransferItem> &)> handler);
+    void setClipboardPasteRequestedHandler(std::function<void(const QString &)> handler);
+    void setRemoteShellDragRequestedHandler(std::function<void(const QList<RemoteTransferItem> &)> handler);
     /**
      * @brief 设置远程项目拖放到远程目录时使用的回调。
      * @param handler 接收带文件类型的远程项目列表和目标远程目录的回调。
@@ -83,6 +89,7 @@ public:
     void queueInlineRenameForPath(const QString &path);
     QString currentPath() const;
     void setRemoteSummary(const QString &curlVersion, bool hasFtp, bool hasSftp);
+    void setRemoteSessionId(const QString &sessionId);
     void setRemoteKnownDirectories(const QStringList &directories);
     void setRemoteItems(const QString &path, const std::vector<FileItem> &items, const QString &status, bool addToHistory = true);
     /**
@@ -162,7 +169,7 @@ private:
     void startDragFromSelection();
     bool canAcceptTransferDrop(const QMimeData *mimeData, QObject *watched = nullptr) const;
     void handleTransferDrop(const QMimeData *mimeData, const QPoint &position, QObject *watched = nullptr);
-    void handleLocalPathDrop(const QStringList &sourcePaths, const QString &targetDirectory);
+    void handleLocalPathDrop(const QStringList &sourcePaths, const QString &targetDirectory, bool internalMove);
     void showTransferDropHint(QObject *watched, const QMimeData *mimeData, const QString &targetDirectory);
     QString dropTargetDirectory(QObject *watched, const QPoint &position) const;
     QString remoteDropTargetDirectory(const QPoint &position) const;
@@ -211,9 +218,13 @@ private:
     std::function<void(const QString &)> m_remoteEditRequested;
     std::function<bool(const QString &)> m_remoteEditActiveQuery;
     std::function<void(const QString &)> m_remoteEditCloseRequested;
-    std::function<void(const QStringList &)> m_localFilesDroppedOnRemote;
-    std::function<void(const QList<RemoteTransferItem> &)> m_remoteFilesDroppedOnLocal;
+    std::function<void(const QStringList &, const QString &)> m_localFilesDroppedOnRemote;
+    std::function<void(const QList<RemoteTransferItem> &, const QString &)> m_remoteFilesDroppedOnLocal;
     std::function<void(const QList<RemoteTransferItem> &, const QString &)> m_remoteFilesDroppedOnRemote;
+    std::function<void(const QList<RemoteTransferItem> &)> m_clipboardCopyRequested;
+    std::function<void(const QString &)> m_clipboardPasteRequested;
+    std::function<void(const QList<RemoteTransferItem> &)> m_remoteShellDragRequested;
+    QString m_remoteSessionId;
 
     QPushButton *m_backButton = nullptr;
     QPushButton *m_forwardButton = nullptr;
@@ -226,6 +237,7 @@ private:
     QTreeWidget *m_remoteTree = nullptr;
     QTableWidget *m_table = nullptr;
     QPoint m_dragStartPosition;
+    bool m_dragStartedForCurrentPress = false;
     bool m_dialogsSuppressedForTesting = false;
 };
 

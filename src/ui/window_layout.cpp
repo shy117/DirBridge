@@ -1,6 +1,7 @@
 #include "ui/MainWindow.h"
 
 #include "ui/FilePanel.h"
+#include "ui/panel_shared.h"
 #include "ui/window_shared.h"
 
 #include <QAction>
@@ -18,6 +19,7 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMimeData>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSplitter>
@@ -28,6 +30,7 @@
 #include <QToolBar>
 #include <QToolButton>
 #include <QTreeWidget>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -263,6 +266,52 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
             localTabs->setTabText(tabIndex, localTabTitle(path));
         }
     });
+    m_localPanel->setClipboardCopyRequestedHandler([](const QList<RemoteTransferItem> &items) {
+        auto *mimeData = new QMimeData();
+        QList<QUrl> urls;
+        for (const RemoteTransferItem &item : items)
+        {
+            if (QFileInfo::exists(item.path))
+            {
+                urls.append(QUrl::fromLocalFile(item.path));
+            }
+        }
+        if (urls.isEmpty())
+        {
+            delete mimeData;
+            return;
+        }
+        mimeData->setUrls(urls);
+        QApplication::clipboard()->setMimeData(mimeData);
+    });
+    m_localPanel->setClipboardPasteRequestedHandler([this](const QString &targetDirectory) {
+        const QMimeData *mimeData = QApplication::clipboard()->mimeData();
+        if (mimeData == nullptr || !mimeData->hasFormat(panel_shared::RemotePathMimeType))
+        {
+            return;
+        }
+        const QList<RemoteTransferItem> remoteItems = panel_shared::decodeRemoteTransferItems(
+            mimeData->data(panel_shared::RemotePathMimeType));
+        for (const RemoteTransferItem &item : remoteItems)
+        {
+            RemoteSession *session = item.sessionId.isEmpty()
+                ? currentRemoteSession()
+                : remoteSessionById(item.sessionId.toStdString());
+            if (session == nullptr || !session->connected)
+            {
+                showWarningMessage("粘贴失败", "源远程会话已关闭或不可用。");
+                continue;
+            }
+            if (item.isDirectory)
+            {
+                downloadRemotePath(*session, item.path, targetDirectory);
+            }
+            else
+            {
+                downloadRemoteFile(*session, item.path, targetDirectory);
+            }
+        }
+    });
     m_localPanel->setLocalUploadRequestedHandler([this](const QString &localPath) {
         RemoteSession *session = currentRemoteSession();
         if (session != nullptr)
@@ -274,20 +323,24 @@ void MainWindow::setupCentralWorkspace(const DependencyCheckResult &dependencyCh
             showWarningMessage("上传失败", "请先连接远程会话。");
         }
     });
-    m_localPanel->setRemoteFilesDroppedOnLocalHandler([this](const QList<RemoteTransferItem> &remoteItems) {
+    m_localPanel->setRemoteFilesDroppedOnLocalHandler([this](const QList<RemoteTransferItem> &remoteItems, const QString &targetDirectory) {
         for (const RemoteTransferItem &item : remoteItems)
         {
-            RemoteSession *session = currentRemoteSession();
-            if (session != nullptr)
+            RemoteSession *session = item.sessionId.isEmpty()
+                ? currentRemoteSession()
+                : remoteSessionById(item.sessionId.toStdString());
+            if (session == nullptr || !session->connected)
             {
-                if (item.isDirectory)
-                {
-                    downloadRemotePath(*session, item.path);
-                }
-                else
-                {
-                    downloadRemoteFile(*session, item.path);
-                }
+                showWarningMessage("下载失败", "源远程会话已关闭或不可用。");
+                continue;
+            }
+            if (item.isDirectory)
+            {
+                downloadRemotePath(*session, item.path, targetDirectory);
+            }
+            else
+            {
+                downloadRemoteFile(*session, item.path, targetDirectory);
             }
         }
     });

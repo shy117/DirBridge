@@ -183,7 +183,7 @@ void FilePanel::setRemoteEditCloseRequestedHandler(std::function<void(const QStr
  * @brief 设置本地文件拖放到远程面板时的上传回调。
  * @param handler 接收本地路径列表的回调。
  */
-void FilePanel::setLocalFilesDroppedOnRemoteHandler(std::function<void(const QStringList &)> handler)
+void FilePanel::setLocalFilesDroppedOnRemoteHandler(std::function<void(const QStringList &, const QString &)> handler)
 {
     m_localFilesDroppedOnRemote = std::move(handler);
 }
@@ -192,9 +192,28 @@ void FilePanel::setLocalFilesDroppedOnRemoteHandler(std::function<void(const QSt
  * @brief 设置远程文件拖放到本地面板时的下载回调。
  * @param handler 接收带文件类型的远程项目列表。
  */
-void FilePanel::setRemoteFilesDroppedOnLocalHandler(std::function<void(const QList<RemoteTransferItem> &)> handler)
+void FilePanel::setRemoteFilesDroppedOnLocalHandler(std::function<void(const QList<RemoteTransferItem> &, const QString &)> handler)
 {
     m_remoteFilesDroppedOnLocal = std::move(handler);
+}
+
+void FilePanel::setClipboardCopyRequestedHandler(std::function<void(const QList<RemoteTransferItem> &)> handler)
+{
+    m_clipboardCopyRequested = std::move(handler);
+}
+
+void FilePanel::setClipboardPasteRequestedHandler(std::function<void(const QString &)> handler)
+{
+    m_clipboardPasteRequested = std::move(handler);
+}
+
+/**
+ * @brief 设置远程项目拖出到系统文件管理器时使用的回调。
+ * @param handler 接收当前选中的远程项目。
+ */
+void FilePanel::setRemoteShellDragRequestedHandler(std::function<void(const QList<RemoteTransferItem> &)> handler)
+{
+    m_remoteShellDragRequested = std::move(handler);
 }
 
 /**
@@ -267,6 +286,11 @@ void FilePanel::setRemoteKnownDirectories(const QStringList &directories)
 {
     m_remoteKnownDirectories = directories;
     m_remoteKnownDirectories.removeDuplicates();
+}
+
+void FilePanel::setRemoteSessionId(const QString &sessionId)
+{
+    m_remoteSessionId = sessionId;
 }
 
 /**

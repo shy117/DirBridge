@@ -29,6 +29,7 @@ int main(int argc, char *argv[])
     QCommandLineOption smokeTestOption("smoke-test", "Show the main window briefly and exit.");
     QCommandLineOption uiRemoteSmokeTestOption("ui-remote-smoke-test", "Check remote UI object wiring and exit.");
     QCommandLineOption uiRemoteWorkflowSmokeTestOption("ui-remote-workflow-smoke-test", "Check remote UI state workflow with fake backend and exit.");
+    QCommandLineOption uiClipboardDragSmokeTestOption("ui-clipboard-drag-smoke-test", "Check clipboard and Explorer drag/drop workflows with fake backend and exit.");
     QCommandLineOption uiRemoteLiveSmokeTestOption("ui-remote-live-smoke-test", "Check remote UI state workflow with a real FTP/SFTP server and exit.");
     QCommandLineOption uiSavedSiteSmokeTestOption("ui-saved-site-smoke-test", "Check a saved site connection without exposing its password.", "site-name");
     QCommandLineOption uiRemoteLiveRefreshSmokeTestOption("ui-remote-live-refresh-smoke-test", "Check remote UI refresh with a real FTP/SFTP server and exit.");
@@ -38,6 +39,7 @@ int main(int argc, char *argv[])
     parser.addOption(smokeTestOption);
     parser.addOption(uiRemoteSmokeTestOption);
     parser.addOption(uiRemoteWorkflowSmokeTestOption);
+    parser.addOption(uiClipboardDragSmokeTestOption);
     parser.addOption(uiRemoteLiveSmokeTestOption);
     parser.addOption(uiSavedSiteSmokeTestOption);
     parser.addOption(uiRemoteLiveRefreshSmokeTestOption);
@@ -83,6 +85,14 @@ int main(int argc, char *argv[])
         const bool ok = checkRemoteUiWorkflow(window);
         AppLogger::shutdown();
         return ok ? 0 : 5;
+    }
+
+    if (parser.isSet(uiClipboardDragSmokeTestOption))
+    {
+        window.setDialogsSuppressedForTesting(true);
+        const bool ok = checkClipboardDragWorkflow(window);
+        AppLogger::shutdown();
+        return ok ? 0 : 10;
     }
 
     if (parser.isSet(uiRemoteLiveSmokeTestOption))

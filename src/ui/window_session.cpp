@@ -4,17 +4,27 @@
 
 #include "logging/AppLogger.h"
 #include "ui/FilePanel.h"
+#include "ui/panel_shared.h"
 #include "ui/window_shared.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <future>
 #include <map>
 
 #include <QComboBox>
+#include <QApplication>
+#include <QClipboard>
 #include <QDateTime>
+#include <QEventLoop>
+#include <QElapsedTimer>
+#include <QFileInfo>
 #include <QInputDialog>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
+#include <QMimeData>
 #include <QPushButton>
 #include <QUuid>
 #include <QStatusBar>
@@ -22,8 +32,378 @@
 #include <QTabWidget>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
+#include <QUrl>
+
+#ifdef _WIN32
+#include "platform/windows/WindowsShellDataObject.h"
+
+#include <QDir>
+#include <QFile>
+#include <QPointer>
+#include <QProgressDialog>
+#include <QSet>
+#include <QStandardPaths>
+#endif
 
 using namespace window_shared;
+
+#ifdef _WIN32
+namespace
+{
+struct ShellPreparationResult
+{
+    std::vector<WindowsShellDragFile> files;
+    QString error;
+    bool canceled = false;
+};
+
+struct ShellTransferParent
+{
+    QString id;
+    QString name;
+    QString remotePath;
+};
+
+struct ShellTransferCallbacks
+{
+    std::function<void(
+        const QString &,
+        const QString &,
+        const QString &,
+        const ShellTransferParent &,
+        qint64,
+        const std::shared_ptr<std::atomic_bool> &)> started;
+    std::function<void(const QString &, std::int64_t, std::int64_t)> progressed;
+    std::function<void(const QString &, const RemoteOperationResult &, bool)> finished;
+};
+
+QString shellSafeSegment(const QString &rawName)
+{
+    QString sanitized;
+    sanitized.reserve(rawName.size());
+    for (const QChar character : rawName)
+    {
+        const ushort code = character.unicode();
+        if (code < 0x20 || QStringLiteral("<>:\"/\\|?*").contains(character))
+        {
+            sanitized.append('_');
+        }
+        else
+        {
+            sanitized.append(character);
+        }
+    }
+    while (sanitized.endsWith(' ') || sanitized.endsWith('.'))
+    {
+        sanitized.chop(1);
+    }
+    if (sanitized.isEmpty())
+    {
+        sanitized = "_";
+    }
+
+    const QString stem = sanitized.section('.', 0, 0).toUpper();
+    static const QSet<QString> reservedNames{
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"};
+    if (reservedNames.contains(stem))
+    {
+        sanitized.prepend('_');
+    }
+    return sanitized.left(120);
+}
+
+QString uniqueShellPath(const QString &parent, const QString &rawName, QSet<QString> &usedPaths)
+{
+    constexpr int maxShellRelativePathLength = 240;
+    QString safeName = shellSafeSegment(rawName);
+    const int availableNameLength = maxShellRelativePathLength - parent.size() - (parent.isEmpty() ? 0 : 1);
+    if (availableNameLength <= 0)
+    {
+        return {};
+    }
+    if (safeName.size() > availableNameLength)
+    {
+        safeName = availableNameLength == 1
+            ? QStringLiteral("~")
+            : safeName.left(availableNameLength - 1) + '~';
+    }
+    const auto relativePath = [&parent](const QString &name) {
+        return parent.isEmpty() ? name : parent + '/' + name;
+    };
+    QString candidateName = safeName;
+    QString candidate = relativePath(candidateName);
+    int suffix = 1;
+    while (usedPaths.contains(candidate.toLower()))
+    {
+        const QString marker = QString(" (%1)").arg(suffix++);
+        const int dot = safeName.lastIndexOf('.');
+        QString stem = dot > 0 ? safeName.left(dot) : safeName;
+        QString extension = dot > 0 ? safeName.mid(dot) : QString();
+        if (marker.size() >= availableNameLength)
+        {
+            return {};
+        }
+        if (extension.size() + marker.size() >= availableNameLength)
+        {
+            extension.clear();
+        }
+        stem = stem.left(availableNameLength - marker.size() - extension.size());
+        if (stem.isEmpty())
+        {
+            return {};
+        }
+        candidateName = stem + marker + extension;
+        candidate = relativePath(candidateName);
+    }
+    usedPaths.insert(candidate.toLower());
+    return candidate;
+}
+
+WindowsShellDragFile makeShellFile(
+    const std::shared_ptr<RemoteFileSystem> &fileSystem,
+    const QString &remotePath,
+    const QString &relativePath,
+    const ShellTransferParent &transferParent,
+    qint64 size,
+    const ShellTransferCallbacks &transferCallbacks)
+{
+    WindowsShellDragFile file;
+    file.fileName = QDir::toNativeSeparators(relativePath).toStdWString();
+    file.size = size >= 0 ? static_cast<unsigned long long>(size) : 0ULL;
+    file.materialize = [fileSystem, remotePath, relativePath, transferParent, size, transferCallbacks](
+                           std::wstring &temporaryPath,
+                           const std::shared_ptr<std::atomic_bool> &canceled) {
+        const QString tempRoot = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+        if (tempRoot.isEmpty() || canceled->load())
+        {
+            return false;
+        }
+        const QString localPath = QDir(tempRoot).filePath(
+            QString("DirBridgeShellDrop-%1.tmp").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+        temporaryPath = QDir::toNativeSeparators(localPath).toStdWString();
+        const QString transferId = QString("shell-download-%1").arg(
+            QUuid::createUuid().toString(QUuid::WithoutBraces));
+        if (transferCallbacks.started)
+        {
+            transferCallbacks.started(
+                transferId,
+                relativePath.section('/', -1),
+                remotePath,
+                transferParent,
+                size,
+                canceled);
+        }
+        const RemoteOperationResult result = fileSystem->downloadFile(
+            remotePath.toStdString(),
+            localPath.toStdString(),
+            [canceled, transferCallbacks, transferId](std::int64_t transferredBytes, std::int64_t totalBytes) {
+                if (transferCallbacks.progressed)
+                {
+                    transferCallbacks.progressed(transferId, transferredBytes, totalBytes);
+                }
+                return !canceled->load();
+            });
+        if (transferCallbacks.finished)
+        {
+            transferCallbacks.finished(transferId, result, canceled->load());
+        }
+        if (!result.success)
+        {
+            QFile::remove(localPath);
+            temporaryPath.clear();
+            return false;
+        }
+        return true;
+    };
+    return file;
+}
+
+bool appendShellNode(
+    const std::shared_ptr<RemoteFileSystem> &fileSystem,
+    const QString &remotePath,
+    const QString &name,
+    bool isDirectory,
+    qint64 size,
+    const QString &parentRelativePath,
+    const ShellTransferParent &transferParent,
+    QSet<QString> &usedPaths,
+    std::vector<WindowsShellDragFile> &files,
+    const ShellTransferCallbacks &transferCallbacks,
+    const std::shared_ptr<std::atomic_bool> &canceled,
+    const std::shared_ptr<std::atomic_int> &visited,
+    QString *error)
+{
+    if (canceled->load())
+    {
+        return false;
+    }
+    const QString relativePath = uniqueShellPath(parentRelativePath, name, usedPaths);
+    if (relativePath.isEmpty())
+    {
+        if (error != nullptr)
+        {
+            *error = QString("目录层级或同名项目数量超出 Windows 文件名限制：%1").arg(remotePath);
+        }
+        return false;
+    }
+    if (isDirectory)
+    {
+        WindowsShellDragFile directory;
+        directory.fileName = QDir::toNativeSeparators(relativePath).toStdWString();
+        directory.isDirectory = true;
+        files.push_back(std::move(directory));
+        visited->fetch_add(1);
+
+        std::vector<FileItem> children;
+        try
+        {
+            children = fileSystem->listDirectory(remotePath.toStdString());
+        }
+        catch (const std::exception &exception)
+        {
+            if (error != nullptr)
+            {
+                *error = QString::fromUtf8(exception.what());
+            }
+            return false;
+        }
+        for (const FileItem &child : children)
+        {
+            if (!appendShellNode(
+                    fileSystem,
+                    QString::fromStdString(child.path),
+                    QString::fromStdString(child.name),
+                    child.type == FileItemType::Directory,
+                    child.size,
+                    relativePath,
+                    transferParent,
+                    usedPaths,
+                    files,
+                    transferCallbacks,
+                    canceled,
+                    visited,
+                    error))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    files.push_back(makeShellFile(
+        fileSystem,
+        remotePath,
+        relativePath,
+        transferParent,
+        size,
+        transferCallbacks));
+    visited->fetch_add(1);
+    return true;
+}
+
+ShellPreparationResult collectShellFiles(
+    const std::shared_ptr<RemoteFileSystem> &fileSystem,
+    const QList<RemoteTransferItem> &items,
+    const ShellTransferCallbacks &transferCallbacks,
+    const std::shared_ptr<std::atomic_bool> &canceled,
+    const std::shared_ptr<std::atomic_int> &visited)
+{
+    ShellPreparationResult prepared;
+    QSet<QString> usedPaths;
+    for (const RemoteTransferItem &item : items)
+    {
+        ShellTransferParent transferParent;
+        if (item.isDirectory)
+        {
+            transferParent.id = QString("shell-download-directory-%1").arg(
+                QUuid::createUuid().toString(QUuid::WithoutBraces));
+            transferParent.name = item.name;
+            transferParent.remotePath = item.path;
+        }
+        if (!appendShellNode(
+                fileSystem,
+                item.path,
+                item.name,
+                item.isDirectory,
+                item.size,
+                QString(),
+                transferParent,
+                usedPaths,
+                prepared.files,
+                transferCallbacks,
+                canceled,
+                visited,
+                &prepared.error))
+        {
+            prepared.canceled = canceled->load();
+            return prepared;
+        }
+    }
+    return prepared;
+}
+
+ShellPreparationResult prepareShellFilesBlocking(
+    const std::shared_ptr<RemoteFileSystem> &fileSystem,
+    const QList<RemoteTransferItem> &items,
+    const ShellTransferCallbacks &transferCallbacks)
+{
+    return collectShellFiles(
+        fileSystem,
+        items,
+        transferCallbacks,
+        std::make_shared<std::atomic_bool>(false),
+        std::make_shared<std::atomic_int>(0));
+}
+
+ShellPreparationResult prepareShellFilesWithDialog(
+    const std::shared_ptr<RemoteFileSystem> &fileSystem,
+    const QList<RemoteTransferItem> &items,
+    const ShellTransferCallbacks &transferCallbacks,
+    QWidget *parent)
+{
+    auto canceled = std::make_shared<std::atomic_bool>(false);
+    auto visited = std::make_shared<std::atomic_int>(0);
+    auto future = std::async(std::launch::async, [fileSystem, items, transferCallbacks, canceled, visited]() {
+        return collectShellFiles(fileSystem, items, transferCallbacks, canceled, visited);
+    });
+
+    QProgressDialog progress("正在准备 Windows 文件数据…", "取消", 0, 0, parent);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.setAutoClose(false);
+    QElapsedTimer elapsed;
+    elapsed.start();
+    bool progressShown = false;
+    while (future.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready)
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+        progress.setLabelText(QString("正在准备 Windows 文件数据（已发现 %1 项）…").arg(visited->load()));
+        if (!progressShown && elapsed.elapsed() >= 300)
+        {
+            progress.show();
+            progressShown = true;
+        }
+        if (progress.wasCanceled())
+        {
+            canceled->store(true);
+        }
+    }
+    progress.close();
+    try
+    {
+        return future.get();
+    }
+    catch (const std::exception &exception)
+    {
+        ShellPreparationResult failed;
+        failed.error = QString::fromUtf8(exception.what());
+        return failed;
+    }
+}
+} // namespace
+#endif
 
 /**
  * @brief 创建会话管理树，并绑定双击与右键交互。
@@ -457,6 +837,144 @@ MainWindow::RemoteSession *MainWindow::createRemoteSession(const SiteProfile &pr
     session->panel->setObjectName("remotePanel");
 
     RemoteSession *sessionPtr = session.get();
+#ifdef _WIN32
+    const auto makeShellTransferCallbacks = [this, sessionPtr]() {
+        ShellTransferCallbacks callbacks;
+        const QPointer<MainWindow> shellWindow(this);
+        const QString sessionId = sessionPtr->id;
+        const QString sessionName = sessionPtr->displayName;
+        callbacks.started = [shellWindow, sessionId, sessionName](
+                                const QString &transferId,
+                                const QString &name,
+                                const QString &remotePath,
+                                const ShellTransferParent &transferParent,
+                                qint64 size,
+                                const std::shared_ptr<std::atomic_bool> &canceled) {
+            MainWindow *window = shellWindow.data();
+            if (window == nullptr)
+            {
+                return;
+            }
+            QMetaObject::invokeMethod(window, [
+                shellWindow,
+                sessionId,
+                sessionName,
+                transferId,
+                name,
+                remotePath,
+                transferParent,
+                size,
+                canceled]() {
+                if (shellWindow == nullptr)
+                {
+                    return;
+                }
+                if (!transferParent.id.isEmpty()
+                    && shellWindow->m_transferQueue.find(transferParent.id.toStdString()) == nullptr)
+                {
+                    TransferJob parentJob;
+                    parentJob.id = transferParent.id.toStdString();
+                    parentJob.name = transferParent.name.toStdString();
+                    parentJob.kind = TransferJobKind::Directory;
+                    parentJob.direction = TransferDirection::Download;
+                    parentJob.status = TransferStatus::Running;
+                    parentJob.localPath = QStringLiteral("资源管理器/桌面（由 Windows 决定）").toStdString();
+                    parentJob.remotePath = transferParent.remotePath.toStdString();
+                    parentJob.sessionId = sessionId.toStdString();
+                    parentJob.sessionName = sessionName.toStdString();
+                    parentJob.totalBytes = 0;
+                    parentJob.transferredBytes = 0;
+                    parentJob.startedAtMs = QDateTime::currentMSecsSinceEpoch();
+                    parentJob.lastProgressAtMs = parentJob.startedAtMs;
+                    parentJob.preparationFinished = true;
+                    parentJob.externallyManaged = true;
+                    shellWindow->m_transferQueue.enqueue(std::move(parentJob));
+                }
+                TransferJob job;
+                job.id = transferId.toStdString();
+                job.name = name.toStdString();
+                job.kind = TransferJobKind::File;
+                job.parentId = transferParent.id.toStdString();
+                job.direction = TransferDirection::Download;
+                job.status = TransferStatus::Running;
+                job.localPath = QStringLiteral("资源管理器/桌面（由 Windows 决定）").toStdString();
+                job.remotePath = remotePath.toStdString();
+                job.sessionId = sessionId.toStdString();
+                job.sessionName = sessionName.toStdString();
+                job.totalBytes = size >= 0 ? size : -1;
+                job.startedAtMs = QDateTime::currentMSecsSinceEpoch();
+                job.lastProgressAtMs = job.startedAtMs;
+                job.externallyManaged = true;
+                shellWindow->m_transferQueue.enqueue(std::move(job));
+                shellWindow->m_transferCancelFlags[transferId.toStdString()] = canceled;
+                shellWindow->scheduleTransferTableRefresh();
+            }, Qt::QueuedConnection);
+        };
+        callbacks.progressed = [shellWindow](
+                                   const QString &transferId,
+                                   std::int64_t transferredBytes,
+                                   std::int64_t totalBytes) {
+            MainWindow *window = shellWindow.data();
+            if (window == nullptr)
+            {
+                return;
+            }
+            QMetaObject::invokeMethod(window, [shellWindow, transferId, transferredBytes, totalBytes]() {
+                if (shellWindow != nullptr)
+                {
+                    shellWindow->handleTransferProgress(transferId, transferredBytes, totalBytes);
+                }
+            }, Qt::QueuedConnection);
+        };
+        callbacks.finished = [shellWindow](
+                                 const QString &transferId,
+                                 const RemoteOperationResult &result,
+                                 bool canceled) {
+            MainWindow *window = shellWindow.data();
+            if (window == nullptr)
+            {
+                return;
+            }
+            QMetaObject::invokeMethod(window, [shellWindow, transferId, result, canceled]() {
+                if (shellWindow == nullptr)
+                {
+                    return;
+                }
+                TransferJob *job = shellWindow->m_transferQueue.find(transferId.toStdString());
+                if (job != nullptr)
+                {
+                    const bool wasCanceling = job->status == TransferStatus::Canceling
+                        || job->status == TransferStatus::Canceled;
+                    if (canceled || wasCanceling)
+                    {
+                        job->status = TransferStatus::Canceled;
+                        job->errorMessage = "transfer canceled";
+                    }
+                    else if (result.success)
+                    {
+                        job->status = TransferStatus::Completed;
+                        if (job->totalBytes >= 0)
+                        {
+                            job->transferredBytes = job->totalBytes;
+                        }
+                        job->errorMessage = result.message;
+                    }
+                    else
+                    {
+                        job->status = TransferStatus::Failed;
+                        job->errorMessage = result.message;
+                    }
+                    job->finishedAtMs = QDateTime::currentMSecsSinceEpoch();
+                    job->currentBytesPerSecond = 0.0;
+                }
+                shellWindow->m_transferCancelFlags.erase(transferId.toStdString());
+                shellWindow->scheduleTransferTableRefresh();
+            }, Qt::QueuedConnection);
+        };
+        return callbacks;
+    };
+#endif
+    sessionPtr->panel->setRemoteSessionId(sessionPtr->id);
     sessionPtr->panel->setRemotePathRequestedHandler([this, sessionPtr](const QString &path, bool addToHistory) {
         loadRemotePath(*sessionPtr, path, addToHistory);
     });
@@ -488,6 +1006,80 @@ MainWindow::RemoteSession *MainWindow::createRemoteSession(const SiteProfile &pr
         }
         downloadRemoteFile(*sessionPtr, remotePath);
     });
+#ifdef _WIN32
+    sessionPtr->panel->setRemoteShellDragRequestedHandler([this, sessionPtr, makeShellTransferCallbacks](const QList<RemoteTransferItem> &remoteItems) {
+        if (!sessionPtr->connected || !sessionPtr->fileSystem)
+        {
+            showWarningMessage("无法拖出远程项目", "远程会话尚未连接，无法读取文件内容。");
+            return;
+        }
+
+        ++sessionPtr->activeRemoteOperationCount;
+        beginBackgroundTask();
+        QPointer<MainWindow> shellWindow(this);
+        const QString sessionId = sessionPtr->id;
+        const std::shared_ptr<RemoteFileSystem> fileSystem = sessionPtr->fileSystem;
+        const ShellTransferCallbacks transferCallbacks = makeShellTransferCallbacks();
+        auto fileProvider = [fileSystem, remoteItems, shellWindow, transferCallbacks](std::vector<WindowsShellDragFile> &files) {
+            if (shellWindow == nullptr)
+            {
+                return false;
+            }
+            ShellPreparationResult prepared = prepareShellFilesBlocking(
+                fileSystem,
+                remoteItems,
+                transferCallbacks);
+            if (prepared.canceled)
+            {
+                return false;
+            }
+            if (!prepared.error.isEmpty())
+            {
+                MainWindow *window = shellWindow.data();
+                if (window != nullptr)
+                {
+                    const QString errorMessage = prepared.error;
+                    QMetaObject::invokeMethod(window, [shellWindow, errorMessage]() {
+                        if (shellWindow != nullptr)
+                        {
+                            shellWindow->showWarningMessage(
+                                "无法拖出远程项目",
+                                QString("远程目录枚举失败：%1").arg(errorMessage));
+                        }
+                    }, Qt::QueuedConnection);
+                }
+                return false;
+            }
+            files = std::move(prepared.files);
+            return !files.empty();
+        };
+        auto onReleased = [shellWindow, sessionId]() {
+            if (shellWindow != nullptr)
+            {
+                QMetaObject::invokeMethod(shellWindow.data(), [shellWindow, sessionId]() {
+                    if (shellWindow != nullptr)
+                    {
+                        RemoteSession *currentSession = shellWindow->remoteSessionById(sessionId.toStdString());
+                        if (currentSession != nullptr)
+                        {
+                            currentSession->activeRemoteOperationCount = std::max(
+                                0,
+                                currentSession->activeRemoteOperationCount - 1);
+                        }
+                        shellWindow->finishBackgroundTask();
+                    }
+                }, Qt::QueuedConnection);
+            }
+        };
+        if (!executeWindowsShellDrag(
+                std::move(fileProvider),
+                panel_shared::encodeRemoteTransferItems(remoteItems),
+                std::move(onReleased)))
+        {
+            showWarningMessage("拖出失败", "无法启动 Windows 拖放操作。");
+        }
+    });
+#endif
     sessionPtr->panel->setRemoteEditRequestedHandler([this, sessionPtr](const QString &remotePath) {
         if (m_externalEditManager != nullptr)
         {
@@ -504,13 +1096,92 @@ MainWindow::RemoteSession *MainWindow::createRemoteSession(const SiteProfile &pr
             m_externalEditManager->closeDocument(sessionPtr->id, remotePath);
         }
     });
-    sessionPtr->panel->setLocalFilesDroppedOnRemoteHandler([this, sessionPtr](const QStringList &localPaths) {
+    sessionPtr->panel->setClipboardCopyRequestedHandler(
+#ifdef _WIN32
+        [this, sessionPtr, makeShellTransferCallbacks](const QList<RemoteTransferItem> &remoteItems) {
+#else
+        [this, sessionPtr](const QList<RemoteTransferItem> &remoteItems) {
+#endif
+        if (remoteItems.isEmpty())
+        {
+            return;
+        }
+#ifdef _WIN32
+        if (!sessionPtr->connected || !sessionPtr->fileSystem)
+        {
+            showWarningMessage("无法复制远程项目", "远程会话尚未连接，无法准备剪贴板数据。");
+            return;
+        }
+        const ShellPreparationResult prepared = prepareShellFilesWithDialog(
+            sessionPtr->fileSystem,
+            remoteItems,
+            makeShellTransferCallbacks(),
+            this);
+        if (prepared.canceled)
+        {
+            return;
+        }
+        if (!prepared.error.isEmpty())
+        {
+            showWarningMessage("无法复制远程项目", QString("远程目录枚举失败：%1").arg(prepared.error));
+            return;
+        }
+
+        beginBackgroundTask();
+        QPointer<MainWindow> shellWindow(this);
+        auto onReleased = [shellWindow]() {
+            if (shellWindow != nullptr)
+            {
+                QMetaObject::invokeMethod(shellWindow.data(), [shellWindow]() {
+                    if (shellWindow != nullptr)
+                    {
+                        shellWindow->finishBackgroundTask();
+                    }
+                }, Qt::QueuedConnection);
+            }
+        };
+        if (!setWindowsShellClipboard(
+                prepared.files,
+                panel_shared::encodeRemoteTransferItems(remoteItems),
+                std::move(onReleased)))
+        {
+            showWarningMessage("复制失败", "无法设置 Windows 系统剪贴板。");
+        }
+#else
+        auto *mimeData = new QMimeData();
+        mimeData->setData(panel_shared::RemotePathMimeType, panel_shared::encodeRemoteTransferItems(remoteItems));
+        QApplication::clipboard()->setMimeData(mimeData);
+#endif
+    });
+    sessionPtr->panel->setClipboardPasteRequestedHandler([this, sessionPtr](const QString &targetDirectory) {
+        const QMimeData *mimeData = QApplication::clipboard()->mimeData();
+        if (mimeData == nullptr || !mimeData->hasUrls())
+        {
+            return;
+        }
+        for (const QUrl &url : mimeData->urls())
+        {
+            if (url.isLocalFile() && QFileInfo::exists(url.toLocalFile()))
+            {
+                uploadLocalPath(*sessionPtr, QFileInfo(url.toLocalFile()).absoluteFilePath(), targetDirectory);
+            }
+        }
+    });
+    sessionPtr->panel->setLocalFilesDroppedOnRemoteHandler([this, sessionPtr](const QStringList &localPaths, const QString &targetDirectory) {
         for (const QString &localPath : localPaths)
         {
-            uploadLocalPath(*sessionPtr, localPath);
+            uploadLocalPath(*sessionPtr, localPath, targetDirectory);
         }
     });
     sessionPtr->panel->setRemoteFilesDroppedOnRemoteHandler([this, sessionPtr](const QList<RemoteTransferItem> &remoteItems, const QString &targetDirectory) {
+        for (const RemoteTransferItem &item : remoteItems)
+        {
+            if (!item.sessionId.isEmpty() && item.sessionId != sessionPtr->id)
+            {
+                showWarningMessage("远程移动失败", "暂不支持跨远程会话直接移动，请先下载到本地再上传。");
+                return;
+            }
+        }
         moveRemotePaths(*sessionPtr, remoteItems, targetDirectory);
     });
 

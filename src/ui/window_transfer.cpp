@@ -27,6 +27,7 @@
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
+#include <QTreeWidgetItemIterator>
 
 using namespace window_shared;
 
@@ -90,6 +91,17 @@ TransferConflictDialog::ItemDetails remoteConflictDetails(const FileItem &item, 
     details.size = item.type == FileItemType::File ? item.size : -1;
     details.modifiedTime = panel_shared::parseRemoteModifiedTime(QString::fromStdString(item.modifiedTime));
     return details;
+}
+
+bool isSameLocalDirectory(const QString &left, const QString &right)
+{
+    const QString normalizedLeft = QDir::cleanPath(QFileInfo(left).absoluteFilePath());
+    const QString normalizedRight = QDir::cleanPath(QFileInfo(right).absoluteFilePath());
+#ifdef _WIN32
+    return normalizedLeft.compare(normalizedRight, Qt::CaseInsensitive) == 0;
+#else
+    return normalizedLeft == normalizedRight;
+#endif
 }
 
 }
@@ -712,9 +724,11 @@ void MainWindow::handleTransferFinished(const QString &jobId, const RemoteOperat
         {
             bool refreshLocalDirectory = job->parentId.empty()
                 && job->status == TransferStatus::Completed;
+            const TransferJob *completedRoot = job;
             if (!job->parentId.empty())
             {
                 const TransferJob *parent = m_transferQueue.find(job->parentId);
+                completedRoot = parent;
                 refreshLocalDirectory = parent != nullptr
                     && parent->preparationFinished
                     && std::all_of(m_transferQueue.jobs().begin(), m_transferQueue.jobs().end(), [parent](const TransferJob &candidate) {
@@ -724,7 +738,11 @@ void MainWindow::handleTransferFinished(const QString &jobId, const RemoteOperat
                             || candidate.status == TransferStatus::Canceled;
                     });
             }
-            if (refreshLocalDirectory)
+            const QString completedTargetDirectory = completedRoot == nullptr
+                ? QString()
+                : QFileInfo(QString::fromStdString(completedRoot->localPath)).absolutePath();
+            if (refreshLocalDirectory
+                && isSameLocalDirectory(completedTargetDirectory, m_localPanel->currentPath()))
             {
                 m_localPanel->refresh();
             }
@@ -793,6 +811,82 @@ void MainWindow::refreshTransferTable()
     const bool followLatest = scrollBar == nullptr
         || m_transferTable->topLevelItemCount() == 0
         || scrollBar->value() >= scrollBar->maximum() - 2;
+
+    const auto updateExistingItem = [this](QTreeWidgetItem *item, const TransferJob &job) {
+        if (item == nullptr)
+        {
+            return;
+        }
+        item->setText(0, QString::fromStdString(job.name));
+        item->setText(1, transferStatusText(job.status));
+        item->setText(2, QString("%1%").arg(progressPercent(job)));
+        item->setText(3, transferSizeProgressText(job));
+        item->setText(4, QString::fromStdString(job.localPath));
+        item->setText(5, job.direction == TransferDirection::Upload ? "->" : "<-");
+        item->setText(6, QString::fromStdString(job.remotePath));
+        item->setText(7, transferSpeedText(job.currentBytesPerSecond));
+        item->setText(8, transferRemainingText(job));
+        item->setText(9, transferElapsedText(job));
+        item->setData(0, Qt::UserRole, QString::fromStdString(job.id));
+        auto *bar = qobject_cast<QProgressBar *>(m_transferTable->itemWidget(item, 2));
+        if (bar == nullptr)
+        {
+            bar = new QProgressBar(m_transferTable);
+            bar->setRange(0, 100);
+            bar->setTextVisible(true);
+            bar->setFormat("%p%");
+            bar->setMinimumWidth(120);
+            bar->setMaximumHeight(18);
+            m_transferTable->setItemWidget(item, 2, bar);
+        }
+        bar->setValue(progressPercent(job));
+    };
+
+    std::map<std::string, QTreeWidgetItem *> existingItems;
+    QTreeWidgetItemIterator existingIterator(m_transferTable);
+    while (*existingIterator != nullptr)
+    {
+        QTreeWidgetItem *item = *existingIterator;
+        existingItems[item->data(0, Qt::UserRole).toString().toStdString()] = item;
+        ++existingIterator;
+    }
+    bool sameStructure = existingItems.size() == m_transferQueue.jobs().size();
+    if (sameStructure)
+    {
+        for (const TransferJob &job : m_transferQueue.jobs())
+        {
+            const auto existing = existingItems.find(job.id);
+            if (existing == existingItems.end())
+            {
+                sameStructure = false;
+                break;
+            }
+            QTreeWidgetItem *parentItem = existing->second->parent();
+            const QString existingParentId = parentItem == nullptr
+                ? QString()
+                : parentItem->data(0, Qt::UserRole).toString();
+            if (existingParentId != QString::fromStdString(job.parentId))
+            {
+                sameStructure = false;
+                break;
+            }
+        }
+    }
+    if (sameStructure)
+    {
+        const QSignalBlocker selectionBlocker(m_transferTable);
+        for (const TransferJob &job : m_transferQueue.jobs())
+        {
+            updateExistingItem(existingItems.at(job.id), job);
+        }
+        if (followLatest && scrollBar != nullptr)
+        {
+            m_transferTable->scrollToBottom();
+        }
+        updateTransferActionButtons();
+        return;
+    }
+
     const QSignalBlocker selectionBlocker(m_transferTable);
     std::map<std::string, bool> expandedStates;
     for (int index = 0; index < m_transferTable->topLevelItemCount(); ++index)
@@ -912,6 +1006,7 @@ void MainWindow::updateTransferActionButtons()
             || selectedJob->status == TransferStatus::Running);
     const bool canRetry = selectedJob != nullptr
         && selectedJob->kind != TransferJobKind::DirectoryEntry
+        && !selectedJob->externallyManaged
         && (selectedJob->status == TransferStatus::Failed || selectedJob->status == TransferStatus::Canceled);
     const bool hasFinishedJobs = std::any_of(m_transferQueue.jobs().begin(), m_transferQueue.jobs().end(), [](const TransferJob &job) {
         return job.status == TransferStatus::Completed
@@ -1134,7 +1229,7 @@ bool MainWindow::remotePathExists(RemoteSession &session, const QString &remoteP
  * @param session 目标远程会话。
  * @param localPath 本地文件路径。
  */
-void MainWindow::uploadLocalFile(RemoteSession &session, const QString &localPath)
+void MainWindow::uploadLocalFile(RemoteSession &session, const QString &localPath, const QString &targetDirectory)
 {
     if (!session.connected)
     {
@@ -1155,7 +1250,8 @@ void MainWindow::uploadLocalFile(RemoteSession &session, const QString &localPat
     job.direction = TransferDirection::Upload;
     job.status = TransferStatus::Preparing;
     job.localPath = localPath.toStdString();
-    job.remotePath = joinRemotePath(session.currentPath, localInfo.fileName()).toStdString();
+    const QString destinationDirectory = targetDirectory.isEmpty() ? session.currentPath : targetDirectory;
+    job.remotePath = joinRemotePath(destinationDirectory, localInfo.fileName()).toStdString();
     job.sessionId = session.id.toStdString();
     job.sessionName = session.displayName.toStdString();
     job.totalBytes = localInfo.size();
@@ -1370,12 +1466,12 @@ void MainWindow::finishSingleFileUploadPreparation(const QString &jobId, bool ex
  * @param session 目标远程会话。
  * @param localPath 本地文件或目录路径。
  */
-void MainWindow::uploadLocalPath(RemoteSession &session, const QString &localPath)
+void MainWindow::uploadLocalPath(RemoteSession &session, const QString &localPath, const QString &targetDirectory)
 {
     const QFileInfo localInfo(localPath);
     if (localInfo.isFile())
     {
-        uploadLocalFile(session, localPath);
+        uploadLocalFile(session, localPath, targetDirectory);
         return;
     }
 
@@ -1385,13 +1481,14 @@ void MainWindow::uploadLocalPath(RemoteSession &session, const QString &localPat
         return;
     }
 
-    QString remoteDirectoryPath = joinRemotePath(session.currentPath, localInfo.fileName());
+    const QString destinationDirectory = targetDirectory.isEmpty() ? session.currentPath : targetDirectory;
+    QString remoteDirectoryPath = joinRemotePath(destinationDirectory, localInfo.fileName());
     bool replaceDirectory = false;
     FileItem existingRemoteItem;
     if (remotePathExists(session, remoteDirectoryPath, &existingRemoteItem))
     {
         const auto targetNameExists = [&](const QString &candidateName) {
-            return remotePathExists(session, joinRemotePath(session.currentPath, candidateName));
+            return remotePathExists(session, joinRemotePath(destinationDirectory, candidateName));
         };
         TransferConflictDialog::Options options;
         options.direction = TransferConflictDialog::Direction::Upload;
@@ -1619,7 +1716,7 @@ void MainWindow::startLocalDirectoryUploadPreparation(RemoteSession &session, co
  * @param session 目标远程会话。
  * @param remotePath 远程文件路径。
  */
-void MainWindow::downloadRemoteFile(RemoteSession &session, const QString &remotePath)
+void MainWindow::downloadRemoteFile(RemoteSession &session, const QString &remotePath, const QString &targetDirectory)
 {
     if (!session.connected)
     {
@@ -1633,13 +1730,14 @@ void MainWindow::downloadRemoteFile(RemoteSession &session, const QString &remot
     }
 
     const QFileInfo remoteInfo(remotePath);
-    QString localPath = QDir(m_localPanel->currentPath()).filePath(remoteInfo.fileName());
+    const QString destinationDirectory = targetDirectory.isEmpty() ? m_localPanel->currentPath() : targetDirectory;
+    QString localPath = QDir(destinationDirectory).filePath(remoteInfo.fileName());
     bool replaceExisting = false;
     if (QFileInfo::exists(localPath))
     {
         const QFileInfo targetInfo(localPath);
         const auto targetNameExists = [&](const QString &candidateName) {
-            return QFileInfo::exists(QDir(m_localPanel->currentPath()).filePath(candidateName));
+            return QFileInfo::exists(QDir(destinationDirectory).filePath(candidateName));
         };
         FileItem remoteItem;
         remoteItem.name = remoteInfo.fileName().toStdString();
@@ -1704,7 +1802,7 @@ void MainWindow::downloadRemoteFile(RemoteSession &session, const QString &remot
                 options.suggestedName = newName;
                 continue;
             }
-            localPath = QDir(m_localPanel->currentPath()).filePath(newName);
+            localPath = QDir(destinationDirectory).filePath(newName);
             break;
         }
     }
@@ -1745,7 +1843,7 @@ void MainWindow::downloadRemoteFile(const QString &remotePath)
  * @param session 目标远程会话。
  * @param remotePath 远程目录路径。
  */
-void MainWindow::downloadRemotePath(RemoteSession &session, const QString &remotePath)
+void MainWindow::downloadRemotePath(RemoteSession &session, const QString &remotePath, const QString &targetDirectory)
 {
     if (m_localPanel == nullptr || m_localPanel->currentPath().isEmpty())
     {
@@ -1753,13 +1851,14 @@ void MainWindow::downloadRemotePath(RemoteSession &session, const QString &remot
         return;
     }
 
-    QString localPath = QDir(m_localPanel->currentPath()).filePath(remoteBaseName(remotePath));
+    const QString destinationDirectory = targetDirectory.isEmpty() ? m_localPanel->currentPath() : targetDirectory;
+    QString localPath = QDir(destinationDirectory).filePath(remoteBaseName(remotePath));
     bool replaceExisting = false;
     if (QFileInfo::exists(localPath))
     {
         const QFileInfo targetInfo(localPath);
         const auto targetNameExists = [&](const QString &candidateName) {
-            return QFileInfo::exists(QDir(m_localPanel->currentPath()).filePath(candidateName));
+            return QFileInfo::exists(QDir(destinationDirectory).filePath(candidateName));
         };
         FileItem remoteItem;
         remoteItem.name = remoteBaseName(remotePath).toStdString();
@@ -1824,7 +1923,7 @@ void MainWindow::downloadRemotePath(RemoteSession &session, const QString &remot
                 options.suggestedName = newName;
                 continue;
             }
-            localPath = QDir(m_localPanel->currentPath()).filePath(newName);
+            localPath = QDir(destinationDirectory).filePath(newName);
             break;
         }
     }
