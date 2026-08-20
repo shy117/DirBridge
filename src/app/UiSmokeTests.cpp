@@ -1532,7 +1532,7 @@ bool checkRemoteSingleItemDrops(MainWindow &window, const QString &remotePath)
     }
     remoteTable->selectRow(remoteShellFolderRow);
     QKeyEvent copyRemoteShellFolderEvent(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
-    QApplication::sendEvent(remoteTable->viewport(), &copyRemoteShellFolderEvent);
+    QApplication::sendEvent(remoteTable, &copyRemoteShellFolderEvent);
     const HRESULT folderOleInitResult = OleInitialize(nullptr);
     IDataObject *folderShellClipboard = nullptr;
     bool folderShellDataValid = copyRemoteShellFolderEvent.isAccepted()
@@ -1647,7 +1647,7 @@ bool checkRemoteSingleItemDrops(MainWindow &window, const QString &remotePath)
     }
     remoteTable->selectRow(remoteReadmeRow);
     QKeyEvent copyRemoteEvent(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
-    QApplication::sendEvent(remoteTable->viewport(), &copyRemoteEvent);
+    QApplication::sendEvent(remoteTable, &copyRemoteEvent);
     const QMimeData *remoteClipboard = QApplication::clipboard()->mimeData();
     if (!copyRemoteEvent.isAccepted()
         || remoteClipboard == nullptr
@@ -1751,7 +1751,7 @@ bool checkRemoteSingleItemDrops(MainWindow &window, const QString &remotePath)
 #endif
 
     QKeyEvent pasteLocalEvent(QEvent::KeyPress, Qt::Key_V, Qt::ControlModifier);
-    QApplication::sendEvent(localTable->viewport(), &pasteLocalEvent);
+    QApplication::sendEvent(localTable, &pasteLocalEvent);
     const QString pastedLocalFile = QDir(pasteTarget).filePath("readme.txt");
     bool localClipboardDownloadCompleted = false;
     const auto localClipboardDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -1795,10 +1795,10 @@ bool checkRemoteSingleItemDrops(MainWindow &window, const QString &remotePath)
     }
     remoteTable->selectRow(remoteDownloadRow);
     QKeyEvent copyRemoteDirectoryEvent(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
-    QApplication::sendEvent(remoteTable->viewport(), &copyRemoteDirectoryEvent);
+    QApplication::sendEvent(remoteTable, &copyRemoteDirectoryEvent);
     const QMimeData *directoryClipboard = QApplication::clipboard()->mimeData();
     QKeyEvent pasteRemoteDirectoryEvent(QEvent::KeyPress, Qt::Key_V, Qt::ControlModifier);
-    QApplication::sendEvent(localTable->viewport(), &pasteRemoteDirectoryEvent);
+    QApplication::sendEvent(localTable, &pasteRemoteDirectoryEvent);
     const QString pastedLocalDirectory = QDir(folderPasteTarget).filePath("download");
     bool localDirectoryClipboardDownloadCompleted = false;
     const auto localDirectoryClipboardDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -1851,7 +1851,7 @@ bool checkRemoteSingleItemDrops(MainWindow &window, const QString &remotePath)
     }
     localTable->selectRow(localClipboardRow);
     QKeyEvent copyLocalEvent(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
-    QApplication::sendEvent(localTable->viewport(), &copyLocalEvent);
+    QApplication::sendEvent(localTable, &copyLocalEvent);
     const QMimeData *localClipboard = QApplication::clipboard()->mimeData();
     if (!copyLocalEvent.isAccepted()
         || localClipboard == nullptr
@@ -1864,7 +1864,7 @@ bool checkRemoteSingleItemDrops(MainWindow &window, const QString &remotePath)
     remoteTable->clearSelection();
     remoteTable->setCurrentCell(-1, -1);
     QKeyEvent pasteRemoteEvent(QEvent::KeyPress, Qt::Key_V, Qt::ControlModifier);
-    QApplication::sendEvent(remoteTable->viewport(), &pasteRemoteEvent);
+    QApplication::sendEvent(remoteTable, &pasteRemoteEvent);
     if (!pasteRemoteEvent.isAccepted()
         || !waitForTransferRow(transferTable, "clipboard-upload.txt", "上传", "已完成"))
     {

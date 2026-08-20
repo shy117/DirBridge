@@ -944,22 +944,25 @@ void clearWindowsShellClipboard()
     {
         return;
     }
-    IDataObject *current = nullptr;
-    const HRESULT getResult = OleGetClipboard(&current);
-    bool ownsClipboard = false;
-    if (SUCCEEDED(getResult) && current != nullptr)
+
+    IDataObject *clipboardObject = nullptr;
     {
         std::lock_guard<std::mutex> lock(g_clipboardMutex);
-        ownsClipboard = current == g_clipboardObject;
+        if (g_clipboardObject != nullptr)
+        {
+            clipboardObject = static_cast<IDataObject *>(g_clipboardObject);
+            clipboardObject->AddRef();
+        }
     }
-    if (ownsClipboard)
+
+    if (clipboardObject != nullptr)
     {
-        OleSetClipboard(nullptr);
-        OleFlushClipboard();
+        if (OleIsCurrentClipboard(clipboardObject) == S_OK)
+        {
+            OleSetClipboard(nullptr);
+        }
+        clipboardObject->Release();
     }
-    if (current != nullptr)
-    {
-        current->Release();
-    }
+
     OleUninitialize();
 }

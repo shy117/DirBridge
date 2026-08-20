@@ -17,6 +17,7 @@
 #include <QHBoxLayout>
 #include <QIODevice>
 #include <QLabel>
+#include <QKeySequence>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
@@ -172,6 +173,7 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
             }
         }
         renameAction = menu.addAction(fluentIcon("edit"), "重命名");
+        renameAction->setShortcut(QKeySequence(Qt::Key_F2));
         if (!isLocal)
         {
             permissionsAction = menu.addAction(fluentIcon("lock_closed"), "更改权限...");
@@ -180,6 +182,7 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
         removeAction = menu.addAction(fluentIcon("delete"), "删除");
         menu.addSeparator();
         copyAction = menu.addAction(fluentIcon("copy"), "复制");
+        copyAction->setShortcut(QKeySequence(QKeySequence::Copy));
         copyAction->setEnabled(m_clipboardCopyRequested != nullptr);
         copyPathAction = menu.addAction(fluentIcon("copy"), "复制路径");
         copyFolderPathAction = menu.addAction(fluentIcon("copy"), "复制文件夹路径");
@@ -208,6 +211,7 @@ void FilePanel::showUnifiedContextMenu(const QPoint &position)
         }
     }
     pasteAction = menu.addAction(fluentIcon("clipboard_paste"), "粘贴");
+    pasteAction->setShortcut(QKeySequence(QKeySequence::Paste));
     pasteAction->setEnabled(canPaste);
 
     menu.addSeparator();
@@ -989,6 +993,11 @@ QString FilePanel::selectedEntryPath() const
 
     QTableWidgetItem *nameItem = m_table->item(items.first()->row(), 0);
     if (nameItem == nullptr)
+    {
+        return QString();
+    }
+
+    if (nameItem->data(ItemKindRole).toInt() == static_cast<int>(ItemKind::ParentDirectory))
     {
         return QString();
     }

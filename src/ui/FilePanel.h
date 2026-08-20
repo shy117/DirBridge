@@ -41,6 +41,14 @@ public:
         RemotePlaceholder
     };
 
+    enum class ItemKind
+    {
+        Normal = 0,
+        ParentDirectory = 1
+    };
+
+    static constexpr int ItemKindRole = Qt::UserRole + 4;
+
     explicit FilePanel(Mode mode, QWidget *parent = nullptr);
 
     void setFileTreeVisible(bool visible);

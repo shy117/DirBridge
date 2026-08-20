@@ -495,6 +495,7 @@ void FilePanel::setupUi()
     }
 
     m_contentSplitter->addWidget(m_table);
+    m_table->installEventFilter(this);
     m_table->viewport()->installEventFilter(this);
     if (m_localTree != nullptr)
     {

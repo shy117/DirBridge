@@ -36,6 +36,42 @@ using namespace panel_shared;
 
 namespace
 {
+class NavigationItem final : public QTableWidgetItem
+{
+public:
+    using QTableWidgetItem::QTableWidgetItem;
+
+    bool operator<(const QTableWidgetItem &other) const override
+    {
+        const bool leftParent = data(FilePanel::ItemKindRole).toInt()
+            == static_cast<int>(FilePanel::ItemKind::ParentDirectory);
+        const bool rightParent = other.data(FilePanel::ItemKindRole).toInt()
+            == static_cast<int>(FilePanel::ItemKind::ParentDirectory);
+        if (leftParent != rightParent)
+        {
+            return leftParent;
+        }
+        return QTableWidgetItem::operator<(other);
+    }
+};
+
+bool isParentDirectoryItem(const QTableWidgetItem *item)
+{
+    return item != nullptr
+        && item->data(FilePanel::ItemKindRole).toInt()
+            == static_cast<int>(FilePanel::ItemKind::ParentDirectory);
+}
+
+QString remoteParentPath(QString path)
+{
+    while (path.size() > 1 && path.endsWith('/'))
+    {
+        path.chop(1);
+    }
+    const int slashIndex = path.lastIndexOf('/');
+    return slashIndex <= 0 ? QString("/") : path.left(slashIndex);
+}
+
 QString formattedModifiedTime(const QString &value)
 {
     if (value.simplified().isEmpty())
@@ -160,14 +196,35 @@ QString localConflictRenameCandidate(const QFileInfo &sourceInfo, int index)
  */
 bool FilePanel::eventFilter(QObject *watched, QEvent *event)
 {
+    const bool isTable = m_table != nullptr && watched == m_table;
     const bool isTableViewport = m_table != nullptr && watched == m_table->viewport();
     const bool isLocalTreeViewport = m_localTree != nullptr && watched == m_localTree->viewport();
     const bool isRemoteTreeViewport = m_remoteTree != nullptr && watched == m_remoteTree->viewport();
     const bool isDropViewport = isTableViewport || isLocalTreeViewport || isRemoteTreeViewport;
-    if (isTableViewport && event->type() == QEvent::KeyPress)
+    if ((isTable || isTableViewport) && event->type() == QEvent::KeyPress)
     {
         auto *keyEvent = static_cast<QKeyEvent *>(event);
         const Qt::KeyboardModifiers modifiers = keyEvent->modifiers() & Qt::KeyboardModifierMask;
+        if (modifiers == Qt::NoModifier
+            && (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter))
+        {
+            const int row = m_table->currentRow();
+            QTableWidgetItem *nameItem = row < 0 ? nullptr : m_table->item(row, 0);
+            if (isParentDirectoryItem(nameItem))
+            {
+                const QString parentPath = nameItem->data(Qt::UserRole).toString();
+                if (m_mode == Mode::RemotePlaceholder)
+                {
+                    requestRemotePath(parentPath, true);
+                }
+                else
+                {
+                    navigateTo(parentPath);
+                }
+                keyEvent->accept();
+                return true;
+            }
+        }
         if (modifiers == Qt::ControlModifier && keyEvent->key() == Qt::Key_C && m_clipboardCopyRequested)
         {
             m_clipboardCopyRequested(selectedFileTransferItems());
@@ -179,7 +236,9 @@ bool FilePanel::eventFilter(QObject *watched, QEvent *event)
             QString targetDirectory = m_currentPath;
             const int row = m_table->currentRow();
             QTableWidgetItem *nameItem = row < 0 ? nullptr : m_table->item(row, 0);
-            if (nameItem != nullptr && nameItem->data(Qt::UserRole + 1).toBool())
+            if (nameItem != nullptr
+                && nameItem->data(Qt::UserRole + 1).toBool()
+                && !isParentDirectoryItem(nameItem))
             {
                 targetDirectory = nameItem->data(Qt::UserRole).toString();
             }
@@ -273,13 +332,18 @@ bool FilePanel::eventFilter(QObject *watched, QEvent *event)
             || (m_mode == Mode::RemotePlaceholder && mimeData->hasFormat(RemotePathMimeType));
     };
 
-    auto isTableDirectoryTarget = [this, watched](const QPoint &position) {
+    auto isTableDirectoryTarget = [this, watched](const QMimeData *mimeData, const QPoint &position) {
         if (watched != m_table->viewport())
         {
             return true;
         }
         const int row = m_table->rowAt(position.y());
         QTableWidgetItem *nameItem = row < 0 ? nullptr : m_table->item(row, 0);
+        if (isParentDirectoryItem(nameItem))
+        {
+            return (m_mode == Mode::Local && mimeData->hasFormat(LocalPathMimeType))
+                || (m_mode == Mode::RemotePlaceholder && mimeData->hasFormat(RemotePathMimeType));
+        }
         return nameItem != nullptr && nameItem->data(Qt::UserRole + 1).toBool();
     };
 
@@ -305,7 +369,8 @@ bool FilePanel::eventFilter(QObject *watched, QEvent *event)
         {
             const QPoint position = dropPosition();
             const QString targetDirectory = dropTargetDirectory(watched, position);
-            if (requiresTableDirectoryTarget(dragEvent->mimeData()) && !isTableDirectoryTarget(position))
+            if (requiresTableDirectoryTarget(dragEvent->mimeData())
+                && !isTableDirectoryTarget(dragEvent->mimeData(), position))
             {
                 QToolTip::hideText();
                 dragEvent->ignore();
@@ -337,7 +402,8 @@ bool FilePanel::eventFilter(QObject *watched, QEvent *event)
             const QPoint dropPosition = dropEvent->pos();
 #endif
             const QString targetDirectory = dropTargetDirectory(watched, dropPosition);
-            if (requiresTableDirectoryTarget(dropEvent->mimeData()) && !isTableDirectoryTarget(dropPosition))
+            if (requiresTableDirectoryTarget(dropEvent->mimeData())
+                && !isTableDirectoryTarget(dropEvent->mimeData(), dropPosition))
             {
                 QToolTip::hideText();
                 dropEvent->ignore();
@@ -803,7 +869,7 @@ QList<RemoteTransferItem> FilePanel::selectedFileTransferItems() const
         }
 
         const QString path = nameItem->data(Qt::UserRole).toString();
-        if (path.isEmpty())
+        if (path.isEmpty() || isParentDirectoryItem(nameItem))
         {
             continue;
         }
@@ -917,6 +983,7 @@ void FilePanel::populateLocalDirectory(const QString &path)
         }
         nameItem->setData(Qt::UserRole, entry.absoluteFilePath());
         nameItem->setData(Qt::UserRole + 1, entry.isDir());
+        nameItem->setData(ItemKindRole, static_cast<int>(ItemKind::Normal));
         nameItem->setToolTip(entry.absoluteFilePath());
 
         const QStringList values{
@@ -937,6 +1004,24 @@ void FilePanel::populateLocalDirectory(const QString &path)
                 item->setText(values.at(column - 1));
             }
         }
+    }
+
+    if (QDir::cleanPath(dir.absolutePath()).compare(QDir::cleanPath(dir.rootPath()), Qt::CaseInsensitive) != 0)
+    {
+        QDir parentDir(dir);
+        parentDir.cdUp();
+        m_table->insertRow(0);
+        auto *parentItem = new NavigationItem(style()->standardIcon(QStyle::SP_DirIcon), "..");
+        parentItem->setData(Qt::UserRole, QDir::cleanPath(parentDir.absolutePath()));
+        parentItem->setData(Qt::UserRole + 1, true);
+        parentItem->setData(Qt::UserRole + 3, static_cast<qlonglong>(-1));
+        parentItem->setData(ItemKindRole, static_cast<int>(ItemKind::ParentDirectory));
+        parentItem->setToolTip("返回上一级目录");
+        m_table->setItem(0, 0, parentItem);
+        m_table->setItem(0, 1, createItem(""));
+        m_table->setItem(0, 2, createItem("上级目录"));
+        m_table->setItem(0, 3, createItem(""));
+        m_table->setItem(0, 4, createItem(""));
     }
 
     m_table->setSortingEnabled(true);
@@ -1046,12 +1131,30 @@ void FilePanel::populateRemoteItems(const QString &path, const std::vector<FileI
     m_table->setUpdatesEnabled(false);
     const QSignalBlocker tableSignals(m_table);
     m_table->clearContents();
-    m_table->setRowCount(static_cast<int>(displayItems.size()));
+    const bool hasParentDirectory = m_currentPath != "/";
+    const int firstItemRow = hasParentDirectory ? 1 : 0;
+    m_table->setRowCount(static_cast<int>(displayItems.size()) + firstItemRow);
     QHash<QString, QIcon> fileIcons;
 
-    for (int row = 0; row < static_cast<int>(displayItems.size()); ++row)
+    if (hasParentDirectory)
     {
-        const FileItem &entry = displayItems.at(static_cast<std::size_t>(row));
+        auto *parentItem = new NavigationItem(style()->standardIcon(QStyle::SP_DirIcon), "..");
+        parentItem->setData(Qt::UserRole, remoteParentPath(m_currentPath));
+        parentItem->setData(Qt::UserRole + 1, true);
+        parentItem->setData(Qt::UserRole + 3, static_cast<qlonglong>(-1));
+        parentItem->setData(ItemKindRole, static_cast<int>(ItemKind::ParentDirectory));
+        parentItem->setToolTip("返回上一级目录");
+        m_table->setItem(0, 0, parentItem);
+        m_table->setItem(0, 1, createItem(""));
+        m_table->setItem(0, 2, createItem("上级目录"));
+        m_table->setItem(0, 3, createItem(""));
+        m_table->setItem(0, 4, createItem(""));
+    }
+
+    for (int index = 0; index < static_cast<int>(displayItems.size()); ++index)
+    {
+        const int row = index + firstItemRow;
+        const FileItem &entry = displayItems.at(static_cast<std::size_t>(index));
         const bool isDirectory = entry.type == FileItemType::Directory;
         const QString name = QString::fromStdString(entry.name);
         QIcon icon;
@@ -1076,6 +1179,7 @@ void FilePanel::populateRemoteItems(const QString &path, const std::vector<FileI
         QTableWidgetItem *nameItem = createItem(name, icon);
         nameItem->setData(Qt::UserRole, QString::fromStdString(entry.path));
         nameItem->setData(Qt::UserRole + 1, isDirectory);
+        nameItem->setData(ItemKindRole, static_cast<int>(ItemKind::Normal));
         nameItem->setData(Qt::UserRole + 3, static_cast<qlonglong>(entry.size));
         nameItem->setData(FileOwnerRole, QString::fromStdString(entry.owner));
         nameItem->setToolTip(QString::fromStdString(entry.path));
