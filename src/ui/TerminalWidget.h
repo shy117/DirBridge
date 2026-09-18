@@ -30,7 +30,7 @@ public:
     void setSnapshot(dirbridge::terminal::TerminalSnapshotPtr snapshot);
     void setStatus(const QString &message, bool error = false);
     bool hasSelection() const noexcept;
-    QString selectedText() const;
+    void clearSelection();
 
 Q_SIGNALS:
     void keyInput(const dirbridge::terminal::TerminalKeyEvent &event);
@@ -38,6 +38,8 @@ Q_SIGNALS:
     void pasteInput(const QByteArray &utf8);
     void mouseInput(const dirbridge::terminal::TerminalMouseEvent &event);
     void scrollRequested(int lines);
+    void selectionInput(const dirbridge::terminal::TerminalSelectionEvent &event);
+    void copyRequested();
     void resizeRequested(const dirbridge::terminal::TerminalGeometry &geometry);
 
 protected:
@@ -51,6 +53,8 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
+    void focusOutEvent(QFocusEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
 
 private:
     struct CellPoint
@@ -67,6 +71,9 @@ private:
     void emitCurrentGeometry();
     void pasteClipboard();
     void copySelection();
+    void sendSelection(dirbridge::terminal::TerminalSelectionAction action, int lines = 0);
+    void stopSelecting();
+    void updateSelectionScroll();
     CellPoint cellAt(const QPointF &position) const;
     bool isSelected(int column, int row) const;
     dirbridge::terminal::TerminalMouseEvent mouseEvent(
@@ -81,8 +88,11 @@ private:
     bool m_statusError = false;
     bool m_selecting = false;
     bool m_hasSelection = false;
-    CellPoint m_selectionAnchor;
-    CellPoint m_selectionCursor;
+    QPointF m_selectionPosition;
+    QPointF m_selectionStartPosition;
+    QTimer m_selectionScrollTimer;
+    int m_selectionScrollDirection = 0;
+    std::uint64_t m_selectionRequestId = 0;
     int m_cellWidth = 8;
     int m_cellHeight = 16;
     int m_ascent = 12;

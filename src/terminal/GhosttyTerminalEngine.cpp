@@ -147,6 +147,20 @@ struct GhosttyTerminalEngine::Impl
     using MouseEventSetMods = decltype(&ghostty_mouse_event_set_mods);
     using MouseEventSetPosition = decltype(&ghostty_mouse_event_set_position);
 
+    decltype(&ghostty_terminal_grid_ref) gridRef = nullptr;
+    decltype(&ghostty_terminal_grid_ref_track) trackRef = nullptr;
+    decltype(&ghostty_tracked_grid_ref_free) freeRef = nullptr;
+    decltype(&ghostty_tracked_grid_ref_point) refPoint = nullptr;
+    decltype(&ghostty_selection_gesture_new) gestureNew = nullptr;
+    decltype(&ghostty_selection_gesture_free) gestureFree = nullptr;
+    decltype(&ghostty_selection_gesture_reset) gestureReset = nullptr;
+    decltype(&ghostty_selection_gesture_get) gestureGet = nullptr;
+    decltype(&ghostty_selection_gesture_event_new) selectionEventNew = nullptr;
+    decltype(&ghostty_selection_gesture_event_free) selectionEventFree = nullptr;
+    decltype(&ghostty_selection_gesture_event_set) selectionEventSet = nullptr;
+    decltype(&ghostty_selection_gesture_event) gestureEvent = nullptr;
+    decltype(&ghostty_terminal_selection_format_buf) formatSelection = nullptr;
+
     QLibrary library;
     TerminalNew terminalNew = nullptr;
     TerminalFree terminalFree = nullptr;
@@ -207,6 +221,90 @@ struct GhosttyTerminalEngine::Impl
     bool bracketedPaste = false;
     bool mouseButtonPressed = false;
     std::uint64_t generation = 0;
+    std::uint64_t nextSnapshotId = 0;
+    std::uint64_t selectionRequestId = 0;
+    bool selectionDragging = false;
+    std::uint64_t selectionScrollFrame = 0;
+    GhosttySelectionGesture gesture = nullptr;
+    struct SnapshotMapping
+    {
+        std::uint64_t id = 0;
+        std::weak_ptr<const TerminalSnapshot> snapshot;
+        std::vector<GhosttyTrackedGridRef> rows;
+    };
+    std::vector<SnapshotMapping> mappings;
+
+    void discardMappings(bool all = false)
+    {
+        for (auto it = mappings.begin(); it != mappings.end();)
+        {
+            if (all || it->snapshot.expired())
+            {
+                for (auto ref : it->rows)
+                {
+                    if (ref) freeRef(ref);
+                }
+                it = mappings.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+    }
+
+    void cancelSelection(bool clear)
+    {
+        selectionDragging = false;
+        selectionScrollFrame = 0;
+        if (gesture) gestureReset(gesture, terminal);
+        if (clear && terminal) terminalSet(terminal, GHOSTTY_TERMINAL_OPT_SELECTION, nullptr);
+    }
+
+    bool applyGesture(GhosttySelectionGestureEventType type,
+        const GhosttyGridRef &ref, const TerminalSelectionEvent &input)
+    {
+        GhosttySelectionGestureEvent event = nullptr;
+        if (selectionEventNew(nullptr, &event, type) != GHOSTTY_SUCCESS)
+        {
+            error = "终端选区事件创建失败。";
+            return false;
+        }
+        GhosttyResult result = selectionEventSet(event,
+            GHOSTTY_SELECTION_GESTURE_EVENT_OPT_REF, &ref);
+        if (type != GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_RELEASE)
+        {
+            const GhosttySurfacePosition position{input.xPixels, input.yPixels};
+            if (result == GHOSTTY_SUCCESS)
+                result = selectionEventSet(event,
+                    GHOSTTY_SELECTION_GESTURE_EVENT_OPT_POSITION, &position);
+        }
+        if (type == GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_DRAG)
+        {
+            const GhosttySelectionGestureGeometry display{
+                geometry.columns, std::max<std::uint32_t>(1, input.geometry.cellWidthPixels),
+                0, std::max<std::uint32_t>(1,
+                    input.geometry.rows * input.geometry.cellHeightPixels)};
+            if (result == GHOSTTY_SUCCESS)
+                result = selectionEventSet(event,
+                    GHOSTTY_SELECTION_GESTURE_EVENT_OPT_GEOMETRY, &display);
+        }
+        GhosttySelection selection{};
+        selection.size = sizeof(selection);
+        if (result == GHOSTTY_SUCCESS)
+            result = gestureEvent(gesture, terminal, event, &selection);
+        selectionEventFree(event);
+        if (result == GHOSTTY_SUCCESS)
+            result = terminalSet(terminal, GHOSTTY_TERMINAL_OPT_SELECTION, &selection);
+        else if (result == GHOSTTY_NO_VALUE && type == GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_DRAG)
+            result = terminalSet(terminal, GHOSTTY_TERMINAL_OPT_SELECTION, nullptr);
+        if (result != GHOSTTY_SUCCESS && result != GHOSTTY_NO_VALUE)
+        {
+            error = "终端选区更新失败。";
+            return false;
+        }
+        return true;
+    }
 
     template<typename Function>
     bool resolve(const char *name, Function &function)
@@ -268,12 +366,28 @@ struct GhosttyTerminalEngine::Impl
         DIRBRIDGE_RESOLVE(mouseEventClearButton, "ghostty_mouse_event_clear_button");
         DIRBRIDGE_RESOLVE(mouseEventSetMods, "ghostty_mouse_event_set_mods");
         DIRBRIDGE_RESOLVE(mouseEventSetPosition, "ghostty_mouse_event_set_position");
+        DIRBRIDGE_RESOLVE(gridRef, "ghostty_terminal_grid_ref");
+        DIRBRIDGE_RESOLVE(trackRef, "ghostty_terminal_grid_ref_track");
+        DIRBRIDGE_RESOLVE(freeRef, "ghostty_tracked_grid_ref_free");
+        DIRBRIDGE_RESOLVE(refPoint, "ghostty_tracked_grid_ref_point");
+        DIRBRIDGE_RESOLVE(gestureNew, "ghostty_selection_gesture_new");
+        DIRBRIDGE_RESOLVE(gestureFree, "ghostty_selection_gesture_free");
+        DIRBRIDGE_RESOLVE(gestureReset, "ghostty_selection_gesture_reset");
+        DIRBRIDGE_RESOLVE(gestureGet, "ghostty_selection_gesture_get");
+        DIRBRIDGE_RESOLVE(selectionEventNew, "ghostty_selection_gesture_event_new");
+        DIRBRIDGE_RESOLVE(selectionEventFree, "ghostty_selection_gesture_event_free");
+        DIRBRIDGE_RESOLVE(selectionEventSet, "ghostty_selection_gesture_event_set");
+        DIRBRIDGE_RESOLVE(gestureEvent, "ghostty_selection_gesture_event");
+        DIRBRIDGE_RESOLVE(formatSelection, "ghostty_terminal_selection_format_buf");
 #undef DIRBRIDGE_RESOLVE
         return true;
     }
 
     void cleanup()
     {
+        discardMappings(true);
+        if (gesture && gestureFree) gestureFree(gesture, terminal);
+        gesture = nullptr;
         if (mouseEvent && mouseEventFree) mouseEventFree(mouseEvent);
         if (mouseEncoder && mouseEncoderFree) mouseEncoderFree(mouseEncoder);
         if (keyEvent && keyEventFree) keyEventFree(keyEvent);
@@ -360,6 +474,12 @@ bool GhosttyTerminalEngine::initialize(
         return false;
     }
 
+    if (impl_->gestureNew(nullptr, &impl_->gesture) != GHOSTTY_SUCCESS)
+    {
+        setError("终端选区初始化失败。");
+        return false;
+    }
+
     const GhosttyColorRgb foreground{224, 224, 224};
     const GhosttyColorRgb background{30, 30, 30};
     const GhosttyColorRgb cursor{224, 224, 224};
@@ -388,7 +508,36 @@ bool GhosttyTerminalEngine::ingest(const std::uint8_t *bytes, std::size_t size)
     {
         return true;
     }
+    GhosttyTerminalScreen before = GHOSTTY_TERMINAL_SCREEN_PRIMARY;
+    impl_->terminalGet(impl_->terminal, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &before);
+    GhosttySelection oldSelection{};
+    oldSelection.size = sizeof(oldSelection);
+    const bool hadSelection = impl_->terminalGet(impl_->terminal,
+        GHOSTTY_TERMINAL_DATA_SELECTION, &oldSelection) == GHOSTTY_SUCCESS;
     impl_->terminalWrite(impl_->terminal, bytes, size);
+    GhosttyTerminalScreen after = GHOSTTY_TERMINAL_SCREEN_PRIMARY;
+    impl_->terminalGet(impl_->terminal, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &after);
+    GhosttySelection selection{};
+    selection.size = sizeof(selection);
+    if (before != after)
+    {
+        impl_->cancelSelection(true);
+        impl_->discardMappings(true);
+    }
+    else if (hadSelection && impl_->terminalGet(impl_->terminal,
+        GHOSTTY_TERMINAL_DATA_SELECTION, &selection) != GHOSTTY_SUCCESS)
+    {
+        impl_->cancelSelection(false);
+    }
+    if (impl_->selectionDragging)
+    {
+        GhosttyGridRef anchor{};
+        if (impl_->gestureGet(impl_->gesture, impl_->terminal,
+                GHOSTTY_SELECTION_GESTURE_DATA_ANCHOR, &anchor) != GHOSTTY_SUCCESS)
+        {
+            impl_->cancelSelection(false);
+        }
+    }
     impl_->modeTail.append(reinterpret_cast<const char *>(bytes), size);
     const auto enabled = impl_->modeTail.rfind("\x1b[?2004h");
     const auto disabled = impl_->modeTail.rfind("\x1b[?2004l");
@@ -412,6 +561,13 @@ bool GhosttyTerminalEngine::resize(const TerminalGeometry &geometry)
     {
         setError("终端尺寸无效。");
         return false;
+    }
+    // Row references remain meaningful across output, but a changed column
+    // count invalidates the old snapshot's column-to-content mapping.
+    if (geometry.columns != impl_->geometry.columns || geometry.rows != impl_->geometry.rows)
+    {
+        impl_->discardMappings(true);
+        impl_->cancelSelection(false);
     }
     if (impl_->terminalResize(impl_->terminal,
             geometry.columns, geometry.rows,
@@ -438,6 +594,13 @@ TerminalSnapshotPtr GhosttyTerminalEngine::snapshot()
     auto result = std::make_shared<TerminalSnapshot>();
     result->geometry = impl_->geometry;
     result->generation = impl_->generation;
+    result->snapshotId = ++impl_->nextSnapshotId;
+    result->selectionRequestId = impl_->selectionRequestId;
+    result->selectionDragging = impl_->selectionDragging;
+    GhosttySelection selection{};
+    selection.size = sizeof(selection);
+    result->hasSelection = impl_->terminalGet(impl_->terminal,
+        GHOSTTY_TERMINAL_DATA_SELECTION, &selection) == GHOSTTY_SUCCESS;
 
     GhosttyRenderStateColors colors{};
     colors.size = sizeof(colors);
@@ -510,6 +673,16 @@ TerminalSnapshotPtr GhosttyTerminalEngine::snapshot()
             setError("Ghostty VT 单元格迭代器初始化失败。");
             return {};
         }
+        GhosttyRenderStateRowSelection selected{};
+        selected.size = sizeof(selected);
+        TerminalSnapshot::SelectionRange range;
+        if (impl_->rowGet(impl_->rowIterator,
+                GHOSTTY_RENDER_STATE_ROW_DATA_SELECTION, &selected) == GHOSTTY_SUCCESS)
+        {
+            range.first = selected.start_x;
+            range.last = selected.end_x;
+        }
+        result->selectionRows.push_back(range);
         std::vector<TerminalCell> row;
         row.reserve(result->geometry.columns);
         while (impl_->rowCellsNext(impl_->rowCells)
@@ -589,6 +762,21 @@ TerminalSnapshotPtr GhosttyTerminalEngine::snapshot()
     {
         row.resize(result->geometry.columns);
     }
+    result->selectionRows.resize(result->rows.size());
+    impl_->discardMappings();
+    Impl::SnapshotMapping mapping;
+    mapping.id = result->snapshotId;
+    mapping.snapshot = result;
+    for (std::uint32_t row = 0; row < result->rows.size(); ++row)
+    {
+        GhosttyPoint point{};
+        point.tag = GHOSTTY_POINT_TAG_VIEWPORT;
+        point.value.coordinate = {0, row};
+        GhosttyTrackedGridRef ref = nullptr;
+        impl_->trackRef(impl_->terminal, point, &ref);
+        mapping.rows.push_back(ref);
+    }
+    impl_->mappings.push_back(std::move(mapping));
     return result;
 }
 
@@ -741,6 +929,135 @@ bool GhosttyTerminalEngine::scrollLines(int lines)
     viewport.value.delta = lines;
     impl_->terminalScroll(impl_->terminal, viewport);
     ++impl_->generation;
+    return true;
+}
+
+bool GhosttyTerminalEngine::select(const TerminalSelectionEvent &event)
+{
+    impl_->error.clear();
+    if (event.requestId <= impl_->selectionRequestId)
+    {
+        return true;
+    }
+    impl_->selectionRequestId = event.requestId;
+    ++impl_->generation;
+    if (event.action == TerminalSelectionAction::CancelDrag)
+    {
+        impl_->cancelSelection(false);
+        return true;
+    }
+    impl_->discardMappings();
+    const auto mapping = std::find_if(impl_->mappings.begin(), impl_->mappings.end(),
+        [&](const auto &value) { return value.id == event.snapshotId; });
+    if (mapping == impl_->mappings.end() || event.row < 0
+        || event.row >= static_cast<int>(mapping->rows.size())
+        || !mapping->rows[event.row] || event.column < 0
+        || event.column >= impl_->geometry.columns)
+    {
+        impl_->cancelSelection(true);
+        return true;
+    }
+    if (event.action != TerminalSelectionAction::Begin && !impl_->selectionDragging)
+    {
+        return true;
+    }
+    if (event.action != TerminalSelectionAction::Begin)
+    {
+        GhosttyGridRef anchor{};
+        if (impl_->gestureGet(impl_->gesture, impl_->terminal,
+                GHOSTTY_SELECTION_GESTURE_DATA_ANCHOR, &anchor) != GHOSTTY_SUCCESS)
+        {
+            impl_->cancelSelection(true);
+            return true;
+        }
+    }
+    GhosttyPoint point{};
+    point.tag = GHOSTTY_POINT_TAG_SCREEN;
+    if (impl_->refPoint(mapping->rows[event.row], point.tag,
+            &point.value.coordinate) != GHOSTTY_SUCCESS)
+    {
+        impl_->cancelSelection(true);
+        return true;
+    }
+    point.value.coordinate.x = static_cast<std::uint16_t>(event.column);
+    if (event.action == TerminalSelectionAction::Scroll)
+    {
+        // Scrolling and resolving the new endpoint share the manager's lock.
+        // Resolve against the new viewport, even before a new frame is shown.
+        scrollLines(event.scrollLines);
+        impl_->selectionScrollFrame = event.snapshotId;
+    }
+    // Release can arrive before the scheduled frame reflects the last wheel
+    // event. Keep its endpoint in the scrolled viewport, not the old frame.
+    if (event.action != TerminalSelectionAction::Begin
+        && impl_->selectionScrollFrame == event.snapshotId)
+    {
+        point.tag = GHOSTTY_POINT_TAG_VIEWPORT;
+        point.value.coordinate.y = static_cast<std::uint32_t>(event.row);
+    }
+    GhosttyGridRef ref{};
+    if (impl_->gridRef(impl_->terminal, point, &ref) != GHOSTTY_SUCCESS)
+    {
+        impl_->cancelSelection(true);
+        return true;
+    }
+    if (event.action == TerminalSelectionAction::Begin)
+    {
+        impl_->cancelSelection(true);
+        // terminalSet is mutating: resolve borrowed refs again after clearing.
+        if (impl_->gridRef(impl_->terminal, point, &ref) != GHOSTTY_SUCCESS)
+            return true;
+        impl_->selectionDragging = true;
+        if (impl_->applyGesture(GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_PRESS, ref, event))
+            return true;
+    }
+    else
+    {
+        if (impl_->applyGesture(GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_DRAG, ref, event))
+        {
+            if (event.action != TerminalSelectionAction::End) return true;
+            if (impl_->gridRef(impl_->terminal, point, &ref) == GHOSTTY_SUCCESS
+                && impl_->applyGesture(GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_RELEASE, ref, event))
+            {
+                impl_->selectionDragging = false;
+                return true;
+            }
+        }
+    }
+    impl_->cancelSelection(true);
+    return false;
+}
+
+bool GhosttyTerminalEngine::selectionText(std::string &text)
+{
+    impl_->error.clear();
+    GhosttyTerminalSelectionFormatOptions options{};
+    options.size = sizeof(options);
+    options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN;
+    options.unwrap = true;
+    options.trim = true;
+    std::size_t required = 0;
+    const auto result = impl_->formatSelection(impl_->terminal, options, nullptr, 0, &required);
+    if (result == GHOSTTY_NO_VALUE || (result == GHOSTTY_SUCCESS && required == 0))
+    {
+        text.clear();
+        return true;
+    }
+    if (result != GHOSTTY_OUT_OF_SPACE)
+    {
+        setError("读取终端选区失败。");
+        return false;
+    }
+    std::string output(required, '\0');
+    if (impl_->formatSelection(impl_->terminal, options,
+            reinterpret_cast<std::uint8_t *>(output.data()), output.size(), &required)
+        != GHOSTTY_SUCCESS)
+    {
+        setError("读取终端选区失败。");
+        return false;
+    }
+    output.resize(required);
+    text = std::move(output);
     return true;
 }
 

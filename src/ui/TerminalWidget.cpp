@@ -4,6 +4,8 @@
 #include <QClipboard>
 #include <QFontDatabase>
 #include <QFontMetrics>
+#include <QFocusEvent>
+#include <QHideEvent>
 #include <QInputMethodEvent>
 #include <QKeyEvent>
 #include <QMessageBox>
@@ -12,7 +14,6 @@
 #include <QResizeEvent>
 #include <QScrollBar>
 #include <QSignalBlocker>
-#include <QStringList>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -28,6 +29,8 @@ using dirbridge::terminal::TerminalKeyEvent;
 using dirbridge::terminal::TerminalMouseAction;
 using dirbridge::terminal::TerminalMouseButton;
 using dirbridge::terminal::TerminalMouseEvent;
+using dirbridge::terminal::TerminalSelectionAction;
+using dirbridge::terminal::TerminalSelectionEvent;
 
 namespace {
 
@@ -111,6 +114,13 @@ TerminalWidget::TerminalWidget(QWidget *parent)
             Q_EMIT scrollRequested(static_cast<int>(delta));
         }
     });
+    m_selectionScrollTimer.setInterval(50);
+    connect(&m_selectionScrollTimer, &QTimer::timeout, this, [this]() {
+        if (m_selecting && m_selectionScrollDirection != 0)
+        {
+            sendSelection(TerminalSelectionAction::Scroll, m_selectionScrollDirection);
+        }
+    });
     updateMetrics();
     m_resizeTimer.setSingleShot(true);
     m_resizeTimer.setInterval(50);
@@ -121,7 +131,22 @@ TerminalWidget::TerminalWidget(QWidget *parent)
 void TerminalWidget::setSnapshot(
     dirbridge::terminal::TerminalSnapshotPtr snapshot)
 {
+    const bool screenChanged = m_snapshot && snapshot
+        && (m_snapshot->alternateScreen != snapshot->alternateScreen
+            || m_snapshot->geometry.columns != snapshot->geometry.columns
+            || m_snapshot->geometry.rows != snapshot->geometry.rows);
+    if (screenChanged) stopSelecting();
     m_snapshot = std::move(snapshot);
+    if (!m_snapshot || m_snapshot->selectionRequestId >= m_selectionRequestId)
+    {
+        m_hasSelection = m_snapshot && m_snapshot->hasSelection;
+        if (!m_snapshot || !m_snapshot->selectionDragging)
+        {
+            m_selecting = false;
+            m_selectionScrollTimer.stop();
+        }
+    }
+    if (m_selecting) updateSelectionScroll();
     if (m_snapshot && !m_statusError)
     {
         m_status.clear();
@@ -157,42 +182,12 @@ bool TerminalWidget::hasSelection() const noexcept
     return m_hasSelection;
 }
 
-QString TerminalWidget::selectedText() const
+void TerminalWidget::clearSelection()
 {
-    if (!m_snapshot || !m_hasSelection)
-    {
-        return {};
-    }
-    CellPoint first = m_selectionAnchor;
-    CellPoint last = m_selectionCursor;
-    if (first.row > last.row
-        || (first.row == last.row && first.column > last.column))
-    {
-        std::swap(first, last);
-    }
-    QStringList lines;
-    for (int row = first.row; row <= last.row
-        && row < static_cast<int>(m_snapshot->rows.size()); ++row)
-    {
-        const int start = row == first.row ? first.column : 0;
-        const int end = row == last.row
-            ? last.column
-            : static_cast<int>(m_snapshot->rows[row].size()) - 1;
-        QString line;
-        for (int column = start; column <= end
-            && column < static_cast<int>(m_snapshot->rows[row].size()); ++column)
-        {
-            line += QString::fromUtf8(
-                m_snapshot->rows[row][column].text.data(),
-                static_cast<int>(m_snapshot->rows[row][column].text.size()));
-        }
-        while (line.endsWith(' '))
-        {
-            line.chop(1);
-        }
-        lines.push_back(line);
-    }
-    return lines.join('\n');
+    m_selecting = false;
+    m_hasSelection = false;
+    m_selectionScrollTimer.stop();
+    update();
 }
 
 void TerminalWidget::paintEvent(QPaintEvent *)
@@ -412,6 +407,16 @@ void TerminalWidget::keyPressEvent(QKeyEvent *event)
         TerminalKeyEvent terminalEvent;
         terminalEvent.key = key;
         terminalEvent.text = event->text().toUtf8().toStdString();
+        // Qt may have already applied Ctrl. Ghostty expects the printable
+        // letter plus the Ctrl modifier and performs the final encoding.
+        if (control && event->key() >= Qt::Key_A && event->key() <= Qt::Key_Z
+            && terminalEvent.text.size() == 1
+            && static_cast<unsigned char>(terminalEvent.text.front())
+                == event->key() - Qt::Key_A + 1)
+        {
+            terminalEvent.text.assign(1,
+                static_cast<char>('a' + event->key() - Qt::Key_A));
+        }
         terminalEvent.shift = shift;
         terminalEvent.control = control;
         terminalEvent.alt = alt;
@@ -476,10 +481,16 @@ void TerminalWidget::mousePressEvent(QMouseEvent *event)
     }
     if (event->button() == Qt::LeftButton)
     {
-        m_selectionAnchor = cellAt(event->position());
-        m_selectionCursor = m_selectionAnchor;
+        if (!m_snapshot)
+        {
+            event->accept();
+            return;
+        }
+        m_selectionPosition = event->position();
+        m_selectionStartPosition = m_selectionPosition;
         m_selecting = true;
         m_hasSelection = false;
+        sendSelection(TerminalSelectionAction::Begin);
         update();
         event->accept();
         return;
@@ -489,19 +500,28 @@ void TerminalWidget::mousePressEvent(QMouseEvent *event)
 
 void TerminalWidget::mouseMoveEvent(QMouseEvent *event)
 {
+    if (m_selecting)
+    {
+        if (!event->buttons().testFlag(Qt::LeftButton))
+        {
+            stopSelecting();
+        }
+        else
+        {
+            m_selectionPosition = event->position();
+            const auto start = cellAt(m_selectionStartPosition);
+            const auto end = cellAt(m_selectionPosition);
+            m_hasSelection = m_hasSelection || start.column != end.column || start.row != end.row;
+            sendSelection(TerminalSelectionAction::Update);
+            updateSelectionScroll();
+        }
+        event->accept();
+        return;
+    }
     if (m_snapshot && m_snapshot->mouseTracking
         && !event->modifiers().testFlag(Qt::ShiftModifier))
     {
         Q_EMIT mouseInput(mouseEvent(event, TerminalMouseAction::Move));
-        event->accept();
-        return;
-    }
-    if (m_selecting)
-    {
-        m_selectionCursor = cellAt(event->position());
-        m_hasSelection = m_selectionCursor.column != m_selectionAnchor.column
-            || m_selectionCursor.row != m_selectionAnchor.row;
-        update();
         event->accept();
         return;
     }
@@ -515,6 +535,15 @@ void TerminalWidget::mouseReleaseEvent(QMouseEvent *event)
         event->accept();
         return;
     }
+    if (m_selecting && event->button() == Qt::LeftButton)
+    {
+        m_selectionPosition = event->position();
+        m_selecting = false;
+        m_selectionScrollTimer.stop();
+        sendSelection(TerminalSelectionAction::End);
+        event->accept();
+        return;
+    }
     if (m_snapshot && m_snapshot->mouseTracking
         && !event->modifiers().testFlag(Qt::ShiftModifier))
     {
@@ -522,17 +551,73 @@ void TerminalWidget::mouseReleaseEvent(QMouseEvent *event)
         event->accept();
         return;
     }
-    if (m_selecting && event->button() == Qt::LeftButton)
-    {
-        m_selectionCursor = cellAt(event->position());
-        m_hasSelection = m_selectionCursor.column != m_selectionAnchor.column
-            || m_selectionCursor.row != m_selectionAnchor.row;
-        m_selecting = false;
-        update();
-        event->accept();
-        return;
-    }
     QWidget::mouseReleaseEvent(event);
+}
+
+void TerminalWidget::focusOutEvent(QFocusEvent *event)
+{
+    stopSelecting();
+    QWidget::focusOutEvent(event);
+}
+
+void TerminalWidget::hideEvent(QHideEvent *event)
+{
+    stopSelecting();
+    QWidget::hideEvent(event);
+}
+
+void TerminalWidget::stopSelecting()
+{
+    m_selectionScrollTimer.stop();
+    m_selectionScrollDirection = 0;
+    if (m_selecting)
+    {
+        m_selecting = false;
+        sendSelection(TerminalSelectionAction::CancelDrag);
+    }
+}
+
+void TerminalWidget::sendSelection(TerminalSelectionAction action, int lines)
+{
+    if (!m_snapshot) return;
+    const auto point = cellAt(m_selectionPosition);
+    TerminalSelectionEvent event;
+    event.action = action;
+    event.snapshotId = m_snapshot->snapshotId;
+    event.requestId = ++m_selectionRequestId;
+    event.column = point.column;
+    event.row = point.row;
+    event.scrollLines = lines;
+    if (action == TerminalSelectionAction::Scroll && lines != 0) m_hasSelection = true;
+    event.geometry = m_snapshot->geometry;
+    event.geometry.cellWidthPixels = m_cellWidth;
+    event.geometry.cellHeightPixels = m_cellHeight;
+    event.xPixels = m_selectionPosition.x() - m_margin;
+    event.yPixels = m_selectionPosition.y() - m_margin;
+    Q_EMIT selectionInput(event);
+}
+
+void TerminalWidget::updateSelectionScroll()
+{
+    m_selectionScrollDirection = 0;
+    if (m_selecting && m_snapshot && !m_snapshot->alternateScreen)
+    {
+        const double y = m_selectionPosition.y() - m_margin;
+        const int gridHeight = m_snapshot->geometry.rows * m_cellHeight;
+        if (y < m_cellHeight && m_snapshot->scrollOffset > 0)
+            m_selectionScrollDirection = -1;
+        else if (y >= gridHeight - m_cellHeight
+            && m_snapshot->scrollOffset + m_snapshot->scrollLength < m_snapshot->scrollTotal)
+            m_selectionScrollDirection = 1;
+    }
+    if (m_selectionScrollDirection != 0)
+    {
+        if (!m_selectionScrollTimer.isActive()) m_selectionScrollTimer.start();
+    }
+    else
+    {
+        m_selectionScrollTimer.stop();
+    }
 }
 
 void TerminalWidget::wheelEvent(QWheelEvent *event)
@@ -543,7 +628,13 @@ void TerminalWidget::wheelEvent(QWheelEvent *event)
         event->ignore();
         return;
     }
-    if (m_snapshot && m_snapshot->mouseTracking
+    if (m_selecting)
+    {
+        m_selectionPosition = event->position();
+        sendSelection(TerminalSelectionAction::Scroll, -steps * 3);
+        updateSelectionScroll();
+    }
+    else if (m_snapshot && m_snapshot->mouseTracking
         && !event->modifiers().testFlag(Qt::ShiftModifier))
     {
         TerminalMouseEvent terminalEvent;
@@ -698,7 +789,7 @@ void TerminalWidget::copySelection()
 {
     if (m_hasSelection)
     {
-        QApplication::clipboard()->setText(selectedText());
+        Q_EMIT copyRequested();
     }
 }
 
@@ -731,34 +822,10 @@ TerminalWidget::CellPoint TerminalWidget::cellAt(const QPointF &position) const
 
 bool TerminalWidget::isSelected(int column, int row) const
 {
-    if (!m_hasSelection)
-    {
-        return false;
-    }
-    CellPoint first = m_selectionAnchor;
-    CellPoint last = m_selectionCursor;
-    if (first.row > last.row
-        || (first.row == last.row && first.column > last.column))
-    {
-        std::swap(first, last);
-    }
-    if (row < first.row || row > last.row)
-    {
-        return false;
-    }
-    if (first.row == last.row)
-    {
-        return column >= first.column && column <= last.column;
-    }
-    if (row == first.row)
-    {
-        return column >= first.column;
-    }
-    if (row == last.row)
-    {
-        return column <= last.column;
-    }
-    return true;
+    if (!m_hasSelection || !m_snapshot || row < 0
+        || row >= static_cast<int>(m_snapshot->selectionRows.size())) return false;
+    const auto &range = m_snapshot->selectionRows[row];
+    return range.first >= 0 && column >= range.first && column <= range.last;
 }
 
 TerminalMouseEvent TerminalWidget::mouseEvent(

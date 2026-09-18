@@ -49,6 +49,8 @@ public:
         const QString &terminalId,
         const TerminalMouseEvent &event);
     bool scrollLines(const QString &terminalId, int lines);
+    bool select(const QString &terminalId, const TerminalSelectionEvent &event);
+    bool selectionText(const QString &terminalId, QString &text);
     bool resize(
         const QString &terminalId,
         const TerminalGeometry &geometry);

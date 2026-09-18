@@ -30,6 +30,8 @@ public:
     std::vector<std::uint8_t> encodeMouse(
         const TerminalMouseEvent &event) override;
     bool scrollLines(int lines) override;
+    bool select(const TerminalSelectionEvent &event) override;
+    bool selectionText(std::string &text) override;
     std::string lastError() const override;
 
 private:

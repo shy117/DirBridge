@@ -3,6 +3,8 @@
 #include "terminal/SshTerminalManager.h"
 #include "ui/TerminalWidget.h"
 
+#include <QApplication>
+#include <QClipboard>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
@@ -93,6 +95,7 @@ void MainWindow::setupSshTerminalManager()
             {
                 return;
             }
+            found->second.terminal->clearSelection();
             found->second.terminal->setStatus(closeRequested
                     ? "SSH 终端正在关闭…"
                     : QString("SSH 进程已退出（代码 %1）。").arg(exitCode),
@@ -211,6 +214,23 @@ void MainWindow::openSshTerminal(const SiteProfile &profile)
     connect(terminal, &TerminalWidget::mouseInput, this,
         [this, terminalId](const TerminalMouseEvent &event) {
             m_sshTerminalManager->sendMouse(terminalId, event);
+        });
+    connect(terminal, &TerminalWidget::selectionInput, this,
+        [this, terminalId, terminal](const dirbridge::terminal::TerminalSelectionEvent &event) {
+            if (!m_sshTerminalManager->select(terminalId, event))
+                terminal->setStatus(m_sshTerminalManager->lastError(), true);
+        });
+    connect(terminal, &TerminalWidget::copyRequested, this,
+        [this, terminalId, terminal]() {
+            QString text;
+            if (m_sshTerminalManager->selectionText(terminalId, text))
+            {
+                if (!text.isEmpty()) QApplication::clipboard()->setText(text);
+            }
+            else
+            {
+                terminal->setStatus(m_sshTerminalManager->lastError(), true);
+            }
         });
     connect(terminal, &TerminalWidget::scrollRequested, this,
         [this, terminalId](int lines) {

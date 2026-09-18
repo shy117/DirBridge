@@ -80,9 +80,42 @@ struct TerminalSnapshot
     bool alternateScreen = false;
     bool mouseTracking = false;
     std::uint64_t generation = 0;
+    std::uint64_t snapshotId = 0;
+    std::uint64_t selectionRequestId = 0;
+    bool hasSelection = false;
+    bool selectionDragging = false;
+    // Inclusive columns; {-1, -1} denotes an unselected row.
+    struct SelectionRange
+    {
+        int first = -1;
+        int last = -1;
+    };
+    std::vector<SelectionRange> selectionRows;
 };
 
 using TerminalSnapshotPtr = std::shared_ptr<const TerminalSnapshot>;
+
+enum class TerminalSelectionAction
+{
+    Begin,
+    Update,
+    End,
+    CancelDrag,
+    Scroll,
+};
+
+struct TerminalSelectionEvent
+{
+    TerminalSelectionAction action = TerminalSelectionAction::Update;
+    std::uint64_t snapshotId = 0;
+    std::uint64_t requestId = 0;
+    int column = 0;
+    int row = 0;
+    int scrollLines = 0;
+    double xPixels = 0;
+    double yPixels = 0;
+    TerminalGeometry geometry;
+};
 
 enum class TerminalKey
 {

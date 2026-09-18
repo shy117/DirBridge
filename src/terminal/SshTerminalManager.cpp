@@ -341,6 +341,48 @@ bool SshTerminalManager::scrollLines(const QString &terminalId, int lines)
     return true;
 }
 
+bool SshTerminalManager::select(const QString &terminalId,
+    const TerminalSelectionEvent &event)
+{
+    Session *session = findSession(terminalId);
+    if (session == nullptr || session->closeRequested)
+    {
+        if (event.action == TerminalSelectionAction::CancelDrag) return true;
+        setError("SSH 终端会话不存在或正在关闭。");
+        return false;
+    }
+    bool success = false;
+    {
+        const std::lock_guard<std::mutex> lock(session->engineMutex);
+        success = session->engine->select(event);
+        if (!success) setError(fromUtf8(session->engine->lastError()));
+    }
+    ++session->screenRevision;
+    scheduleSnapshot(session);
+    return success;
+}
+
+bool SshTerminalManager::selectionText(const QString &terminalId, QString &text)
+{
+    Session *session = findSession(terminalId);
+    if (session == nullptr || session->closeRequested)
+    {
+        setError("SSH 终端会话不存在或正在关闭。");
+        return false;
+    }
+    std::string selected;
+    {
+        const std::lock_guard<std::mutex> lock(session->engineMutex);
+        if (!session->engine->selectionText(selected))
+        {
+            setError(fromUtf8(session->engine->lastError()));
+            return false;
+        }
+    }
+    text = fromUtf8(selected);
+    return true;
+}
+
 bool SshTerminalManager::resize(
     const QString &terminalId,
     const TerminalGeometry &geometry)

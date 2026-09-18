@@ -27,6 +27,8 @@ public:
     virtual std::vector<std::uint8_t> encodeMouse(
         const TerminalMouseEvent &event) = 0;
     virtual bool scrollLines(int lines) = 0;
+    virtual bool select(const TerminalSelectionEvent &event) = 0;
+    virtual bool selectionText(std::string &text) = 0;
     virtual std::string lastError() const = 0;
 };
 
